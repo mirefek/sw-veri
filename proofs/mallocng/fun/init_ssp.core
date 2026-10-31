@@ -361,3 +361,211 @@ proof
   qed
   show by taut(ci, ca, cb, cc, cd)
 qed
+
+// ----------------------------------------------------------------------
+//  __init_ssp's run
+
+// (the guard's 8 bytes written: within the frame, the thread kept)
+theorem sp.ssp_guard: all g s a v. s in abi.World -> g.stack_chk_guard = c_src_env___stack_chk_fail.__stack_chk_guard -> g.builtin_tls = c_src_env___init_tls.builtin_tls ->
+  a = c_src_env___stack_chk_fail.__stack_chk_guard -> startup_specs.thread_set(s.vm, s.fs_base) -> startup_specs.in_tls(g, s.fs_base) ->
+  (fn_update(s.vm, "bytes", x86_64_linux.store_le(s.vm.bytes, a, 8, v)) in x86_64_linux.Vm &&
+   fn_update(fn_update(s.vm, "bytes", x86_64_linux.store_le(s.vm.bytes, a, 8, v)), "bytes", s.vm.bytes) = s.vm) &&
+  startup_specs.frame(s.vm, fn_update(s.vm, "bytes", x86_64_linux.store_le(s.vm.bytes, a, 8, v)), s.objs, startup_specs.ssp_writes(g)) &&
+  startup_specs.thread_set(fn_update(s.vm, "bytes", x86_64_linux.store_le(s.vm.bytes, a, 8, v)), s.fs_base)
+proof
+  fix g s a v
+  assume hw hgG hgB ha hts hit
+  let FS := s.fs_base
+  let U := fn_update(s.vm, "bytes", x86_64_linux.store_le(s.vm.bytes, a, 8, v))
+  have gdv: c_src_env___stack_chk_fail.__stack_chk_guard = 4228688 by defs(refl({4228688}), c_src_env___stack_chk_fail.__stack_chk_guard)
+  have btv: c_src_env___init_tls.builtin_tls = 4228288 by defs(refl({4228288}), c_src_env___init_tls.builtin_tls)
+  have fsb: FS in bits(64) by simp(expand(hw, abi.World))
+  have it1 it2 := expand(hit, startup_specs.in_tls)
+  have fsr: int_le(4228288, FS) && int_le(int_add(FS, 200), 4228624) by arith(it1, it2, hgB, btv)
+  have sv _ _ sb := apply(ms.world_parts, hw)
+  have uV := apply(ms.wr_any, {s.vm}, {a}, {8}, {v}, sv)
+  have vf: is_fun(s.vm) && "bytes" in dom(s.vm) by simp(sv)
+  have ub: fn_update(U, "bytes", s.vm.bytes) = s.vm := trans(fn_update_twice[f := s.vm, k := "bytes", a := x86_64_linux.store_le(s.vm.bytes, a, 8, v), b := s.vm.bytes],
+    mp(fn_update_same[f := s.vm, k := "bytes"], taut(vf), taut(vf)))
+  have og: all i. i in omega -> int_lt(i, 8) -> int_add(a, i) in startup_specs.ssp_writes(g) || abi.stack_free(s.vm, s.objs, int_add(a, i)) proof
+    fix i
+    assume hi hil
+    have _ b := apply(sp.ssw_g, {g}, {int_add(a, i)}, arith(ha, gdv, hi), arith(hgG, ha, hi), arith(hgG, ha, hi, hil))
+    show by taut(b)
+  qed
+  have fr := apply(sp.fr_store[b := s.vm, U := s.vm, objs := s.objs, W := startup_specs.ssp_writes(g), a := a, n := 8, v := v], apply(sp.fr_self[b := s.vm, objs := s.objs, W := startup_specs.ssp_writes(g)], sv),
+    arith(ha, gdv), simp(), arith(ha, gdv), og)
+  have ut: U.bytes in fn_space(bits(64), bits(8)) by simp(apply(x86.store_typed, {s.vm.bytes}, {a}, {8}, {v}, sb))
+  have l1 := apply(x86.le8_nat, {U}, {FS}, ut)
+  have l2 := apply(x86.le8_nat, {s.vm}, {FS}, sb)
+  have bq: gimple.bytes_at(U, FS, 8) = gimple.bytes_at(s.vm, FS, 8) by mem(ha, gdv, fsr, fsb)
+  have leq: x86_64_linux.le(x86_64_linux.store_le(s.vm.bytes, a, 8, v), FS, 8) = x86_64_linux.le(s.vm.bytes, FS, 8) by simp(l1, l2, bq)
+  have ts := apply(sp.ts_keep, {s.vm}, {x86_64_linux.store_le(s.vm.bytes, a, 8, v)}, {FS}, hts, leq)
+  show by taut(uV, ub, fr, ts)
+qed
+
+theorem sp.ssp_run: all g entropy MC GT s o. s in abi.World -> runs(c_src_env___stack_chk_fail.__init_ssp(entropy, MC, GT), s, o) -> entropy in bits(64) ->
+  g.stack_chk_guard = c_src_env___stack_chk_fail.__stack_chk_guard -> g.builtin_tls = c_src_env___init_tls.builtin_tls ->
+  mp.calls(MC, mallocng_specs.memcpy_spec_fun()) -> mp.calls(GT, c_src_env___stack_chk_fail.__get_tp_fun()) ->
+  startup_specs.init_ssp_pre(s.vm, s.objs, g, s.fs_base, entropy) -> sp.ssp_out(g, s, o)
+proof
+  fix g entropy MC GT s o
+  assume hw hr heb hgG hgB hMC hGT hpre
+  let GD := c_src_env___stack_chk_fail.__stack_chk_guard
+  have pu := apply(g.runs_univ, expand(hr, c_src_env___stack_chk_fail.__init_ssp))
+  have hu: s in univ(1) by simp(pu)
+  have b := apply(g.runs_elim, expand(hr, c_src_env___stack_chk_fail.__init_ssp))
+  obtain x2, hif hK from b
+  have hts hit hglob hent := expand(hpre, startup_specs.init_ssp_pre)
+  have sv pf pd _ := apply(ms.world_parts, hw)
+  have gdb: GD in bits(64) by defs(simp(), c_src_env___stack_chk_fail.__stack_chk_guard)
+  have gdv: GD = 4228688 by defs(refl({4228688}), c_src_env___stack_chk_fail.__stack_chk_guard)
+  have rG0: all x. x in omega -> int_le(GD, x) -> int_lt(x, int_add(GD, 8)) -> x in startup_specs.start_writes(g) proof
+    fix x
+    assume xo h1 h2
+    have a _ := apply(sp.ssw_g, {g}, {x}, xo, arith(hgG, h1), arith(hgG, h2))
+    show := a
+  qed
+  have ugt ugf := apply(sp.glob_usable, {g}, {s.vm}, {s.objs}, {GD}, {8}, hglob, arith(gdv), rG0)
+  // no entropy: the guard from its own address
+  have cZ: entropy = 0 -> sp.ssp_out(g, s, o) proof
+    assume hz
+    have x2e: x2 = ok(pair(s, empty), empty) by taut(hif, hz)
+    have mdG: g.mem_defined(s, GD, 0, 8, true) by simp(gdv, ugt)
+    step h1 from rewrite(x2e, hK) with g.st64_det using conj(hu, gdb, mdG, sv, pf, pd)
+    let U := fn_update(s.vm, "bytes", x86_64_linux.store_le(s.vm.bytes, int_add(GD, 0), 8, bits_mul(64, GD, 1103515245)))
+    have gu1 gu2 gfr gts := apply(sp.ssp_guard, {g}, {s}, {int_add(GD, 0)}, {bits_mul(64, GD, 1103515245)}, hw, hgG, hgB, simp(), hts, hit)
+    have r := apply(sp.ssp_tail, {g}, {GT}, {s}, {U}, hw, hu, gu1, gu2, hgG, hgB, gfr, gts, hit, hglob, hGT, h1)
+    show by taut(r)
+  qed
+  // AT_RANDOM's bytes: the guard copied from them
+  have cN: !(entropy = 0) -> sp.ssp_out(g, s, o) proof
+    assume hn
+    step h0 from hif using conj(hn)
+    obtain oc, hrc hdc from apply(g.bind_open, h0)
+    let OVF := exc_val("stack_overflow", empty)
+    let N8 := bits_of_int(64, 8)
+    let ARGS := seq_concat(seq_concat(seq_one(gimple.arg(64, GD)), seq_one(gimple.arg(64, entropy))), seq_one(gimple.arg(64, N8)))
+    let UM := fn_update(s.vm, "bytes", x86_64_linux.store_le(s.vm.bytes, GD, N8, gimple.bytes_at(s.vm, entropy, N8)))
+    let QM(o2) := abi.ovf_out(s, o2) || (ex r. o2 = ok(fn_update(s, "vm", UM), r) && fst(r) = GD)
+    have n8: N8 = 8 by simp()
+    // (AT_RANDOM's bytes: readable, apart from the guard)
+    have eu ebd ens := mp(hent, hn)
+    have eo: entropy in omega by arith(heb)
+    have hA: all x. x in omega -> int_le(entropy, x) && int_lt(x, int_add(entropy, 8)) -> !(x in startup_specs.start_writes(g)) proof
+      fix x
+      assume xo h
+      have h1 h2 := h
+      have e: int_add(entropy, int_sub(x, entropy)) = x by arith(eo, xo)
+      show := rewrite(e, mp(all_elim(ens, {int_sub(x, entropy)}), arith(h1, xo, eo), arith(h2)))
+    qed
+    have ap := apply(sp.apart[W := startup_specs.start_writes(g), a := entropy, c := int_add(entropy, 8), b := GD, m := 8], hA, rG0, eo, arith(gdv), arith(eo), arith())
+    have hap: int_le(int_add(GD, N8), entropy) || int_le(int_add(entropy, N8), GD) by arith(ap, n8)
+    have eu8: gimple.usable(s.vm, s.objs, entropy, N8, false) := rewrite(sym(n8), eu)
+    have gu8: gimple.usable(s.vm, s.objs, GD, N8, true) := rewrite(sym(n8), ugt)
+    // the call of memcpy (its spec's outcomes)
+    have hq: all regs o2. gc.regs_ok(regs, ARGS) -> runs(MC[regs], s, o2) -> QM(o2) proof
+      fix regs o2
+      assume hro hg
+      have rl rln _ := hro
+      have l6: int_le(seq_len(regs), 6) by arith(rln, (seq_len(ARGS) = 3 by simp()))
+      have hs := mp(all_elim(hMC, {regs}, {s}, {o2}), rl, l6, hw, hg)
+      show := apply(mp.mc_q, {s}, {GD}, {entropy}, {N8}, {regs}, {o2}, hw, hu, gdb, heb, simp(), eu8, gu8, hap, hro, hs)
+    qed
+    have rg := apply(gc.regs_get, apply(gc.regs_cat, apply(gc.regs_cat, apply(gc.regs_one[w := 64, x := GD], simp(), simp(), gdb),
+      apply(gc.regs_one[w := 64, x := entropy], simp(), simp(), heb)), apply(gc.regs_one[w := 64, x := N8], simp(), simp(), simp())))
+    have ci := apply(gc.call0_inv[Q := o2. QM(o2)], {MC}, {ARGS}, {s}, {oc}, rg, hq, hrc)
+    // (an exception of the call: the function's, an overflow)
+    have hX: all Y E. oc = exc(Y, E) -> x2 = exc(pair(Y, empty), pair("raise", E)) proof
+      fix Y E
+      assume he
+      have c1: (ex s1 v. oc = ok(s1, v) && true) -> false proof
+        assume e1
+        obtain s1 v, e2 _ from e1
+        have ne: !(ok(s1, v) = exc(Y, E)) by defs(simp(), ok, exc)
+        show by taut(ne, trans(sym(e2), he))
+      qed
+      have c3: (ex t. oc = diverge(t)) -> false proof
+        assume e1
+        obtain t, e2 from e1
+        have ne: !(diverge(t) = exc(Y, E)) by defs(simp(), diverge, exc)
+        show by taut(ne, trans(sym(e2), he))
+      qed
+      have hd2 := rewrite(he, hdc)
+      show by simp(hd2, c1, c3)
+    qed
+    have ovG: all v ob. v in x86_64_linux.Vm -> ob in abi.Objs -> oc = exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF) -> sp.ssp_out(g, s, o) proof
+      fix v ob
+      assume hv hob e
+      have xe := mp(all_elim(hX, {fn_update(fn_update(s, "vm", v), "objs", ob)}, {OVF}), e)
+      have oe: o = exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF) by simp(rewrite(xe, hK))
+      show by taut((abi.ovf_out(s, o) by ex_intro({v}, {ob}, taut(hv, hob, oe))))
+    qed
+    have od: "objs" in dom(s) by simp(expand(hw, abi.World))
+    have sob: s.objs in abi.Objs by simp(expand(hw, abi.World))
+    have ca: oc = exc(s, OVF) -> sp.ssp_out(g, s, o) proof
+      assume e
+      have se: fn_update(fn_update(s, "vm", s.vm), "objs", s.objs) = s by simp(pf, pd, od)
+      show := mp(all_elim(ovG, {s.vm}, {s.objs}), sv, sob, rewrite(sym(se), e))
+    qed
+    have cc: (ex x e. QM(exc(x, e)) && oc = exc(x, e)) -> sp.ssp_out(g, s, o) proof
+      assume q
+      obtain x e, hq2 he from q
+      have nk: !(ex r. exc(x, e) = ok(fn_update(s, "vm", UM), r) && fst(r) = GD) by defs(simp(), ok, exc)
+      have ov: abi.ovf_out(s, exc(x, e)) by taut(hq2, nk)
+      obtain v ob, hv hob hxe from ov
+      have oe: oc = exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF) by simp(he, hxe)
+      show := mp(all_elim(ovG, {v}, {ob}), hv, hob, oe)
+    qed
+    have cd: (ex t. QM(diverge(t)) && oc = diverge(t)) -> sp.ssp_out(g, s, o) proof
+      assume q
+      obtain t, hq2 _ from q
+      show by defs(simp(hq2), ok, exc, diverge)
+    qed
+    have cb: (ex w4 r. QM(ok(w4, r)) && (oc = ok(gc.back0(w4, s), pair(fst(r), snd(r))) || oc = exc(gc.back0(w4, s), OVF))) -> sp.ssp_out(g, s, o) proof
+      assume q
+      obtain w4 r, hq4 ho4 from q
+      have no: !abi.ovf_out(s, ok(w4, r)) by defs(simp(), ok, exc)
+      have q2: ex r2. ok(w4, r) = ok(fn_update(s, "vm", UM), r2) && fst(r2) = GD by taut(hq4, no)
+      obtain r2, e42 _ from q2
+      have w4e: w4 = fn_update(s, "vm", UM) by simp(e42)
+      have os := apply(gc.objs_same, hw)
+      have bk: gc.back0(w4, s) = fn_update(s, "vm", UM) by simp(w4e, os, pf, od)
+      have uMV := apply(ms.wr_any, {s.vm}, {GD}, {N8}, {gimple.bytes_at(s.vm, entropy, N8)}, sv)
+      have k2: oc = exc(gc.back0(w4, s), OVF) -> sp.ssp_out(g, s, o) proof
+        assume e
+        have se: fn_update(fn_update(s, "vm", UM), "objs", s.objs) = fn_update(s, "vm", UM) by simp(pf, od)
+        show := mp(all_elim(ovG, {UM}, {s.objs}), uMV, sob, rewrite(sym(se), rewrite(bk, e)))
+      qed
+      have k1: oc = ok(gc.back0(w4, s), pair(fst(r), snd(r))) -> sp.ssp_out(g, s, o) proof
+        assume e
+        step h1 from rewrite(bk, rewrite(e, hdc))
+        // the guard: AT_RANDOM's 8 bytes; then the common tail
+        let VE := gimple.bytes_at(s.vm, entropy, 8)
+        let U := fn_update(s.vm, "bytes", x86_64_linux.store_le(s.vm.bytes, GD, 8, VE))
+        have gu1 gu2 gfr gts := apply(sp.ssp_guard, {g}, {s}, {GD}, {VE}, hw, hgG, hgB, refl({GD}), hts, hit)
+        have r := apply(sp.ssp_tail, {g}, {GT}, {s}, {U}, hw, hu, gu1, gu2, hgG, hgB, gfr, gts, hit, hglob, hGT, rewrite(n8, h1))
+        have r1: (ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && x2 = exc(pair(fn_update(fn_update(s, "vm", v), "objs", ob), empty), pair("raise", OVF))) ->
+            sp.ssp_out(g, s, o) proof
+          assume q2
+          obtain v ob, hv hob xe from q2
+          have oe: o = exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF) by simp(rewrite(xe, hK))
+          show by taut((abi.ovf_out(s, o) by ex_intro({v}, {ob}, taut(hv, hob, oe))))
+        qed
+        have r2: (ex V. ((V in x86_64_linux.Vm && startup_specs.frame(s.vm, V, s.objs, startup_specs.ssp_writes(g))) && startup_specs.thread_set(V, s.fs_base)) &&
+            x2 = exc(pair(fn_update(s, "vm", V), empty), pair("ret", empty))) -> sp.ssp_out(g, s, o) proof
+          assume q2
+          obtain V, hV hfr hts2 xe from q2
+          have oe: o = ok(fn_update(s, "vm", V), empty) by simp(rewrite(xe, hK))
+          have x: ex V2. ((V2 in x86_64_linux.Vm && startup_specs.frame(s.vm, V2, s.objs, startup_specs.ssp_writes(g))) && startup_specs.thread_set(V2, s.fs_base)) &&
+            o = ok(fn_update(s, "vm", V2), empty) by ex_intro({V}, taut(hV, hfr, hts2, oe))
+          show by taut(x)
+        qed
+        show by taut(r, r1, r2)
+      qed
+      show by taut(ho4, k1, k2)
+    qed
+    show by taut(ci, ca, cb, cc, cd)
+  qed
+  show by taut(cZ, cN)
+qed
