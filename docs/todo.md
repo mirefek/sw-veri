@@ -21,23 +21,15 @@ copies, crti/crtn's `_init`; gcc's `register_tm_clones` and
 `_start`'s, its own in (d)); all of it linked (step (b),
 proofs/mallocng/machine/link_start.core: `stl.linked`, `_start_c`'s CFG
 function with its callees', the code maps `lnk.FP1`/`lnk.FP0` with main
-`lnk.main()` at t, exit and the a_crash copies undefined).
+`lnk.main()` at t, exit and the a_crash copies undefined); every
+startup function's purpose (step (c), layers/startup_specs.sl):
+`lk.start_impl` (proofs/mallocng/fun/start_main.core), `_start_c`'s
+machine code implementing `start_c_spec_fun(g, P)` -- main entered
+(`at_main`) with libc set up as `__init_libc`'s spec says, or a stack
+overflow -- for the units' globals (`lk.gok`) and the program's
+addresses (`lk.pok`).
 
-The steps left, in order:
-- (c) Purpose specs and C2. The specs of `__init_libc`, `__init_tls`,
-  `__init_ssp` are in layers/startup_specs.sl (a frame of what may be
-  written, plus what malloc needs: the thread set up and `libc.auxv`).
-  The C functions of `__init_libc` (its callees as their specs),
-  `__init_ssp` (memcpy as its spec) and `__init_tls` (static_init_tls:
-  __copy_tls, __init_tp and their system calls as the unit's functions)
-  refine their specs' (proofs/mallocng/fun/init_libc.core `sp.il_fun`,
-  init_ssp.core `sp.ss_fun`, init_tls.core `sp.sit_fun`); linked
-  (init_link.core: `lk.libc_calls`, `__init_libc`'s CFG function with its
-  callees' as its spec; `lk.libc_impl`, its machine code). Left:
-  `__libc_start_init` (`_init`, the
-  init_array), stage2, `__libc_start_main`, `_start_c` -- each CFG
-  function as link_start.core links it (`stl.F`): its refinement to the
-  structured form, then its purpose (main's: raising at main).
+The step left:
 - (d) The top: exec_state to the C world at `_start` (its 5 instructions
   -- `xor rbp, rbp; mov rdi, rsp; lea rsi, [0]; and rsp, -16; call
   _start_c` -- entered as exec leaves the machine, rsp at argc and no
@@ -51,7 +43,12 @@ The steps left, in order:
   It needs from exec (spec/linux/exec.sl): the break within the user
   space (`brk_ok`), the auxiliary vector apart from the data
   (`fresh_ok.auxv_ctx`) and not at null (`auxv_nz`); and the ABI's entry
-  its `brk_start_ok`.
+  its `brk_start_ok`. And `start_c_spec`'s requirement at `_start_c`'s
+  entry: the stack's words (argc under 2^31, argv, envp, the vector:
+  `start_main_pre`, `init_libc_pre`), the program headers readable and
+  not PT_TLS, AT_RANDOM's bytes, the init_array as loaded (`ctors_ok`),
+  startup's globals zero in .bss (`tls_fresh`), none of the stack data
+  in startup's writes.
 
   The internal specs' `holds_in` has `shown` (`mallocng.shown_in`: the
   allocator's bytes the C world's, its reserve's pages valid); the

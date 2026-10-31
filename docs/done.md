@@ -1440,3 +1440,19 @@ item is a short summary of finished work; details are in the files named.
   for every b; the main mode's ABI contract from b true
   (tr.impl_m_main: never stopping at t, a run reaching t is undefined);
   memcpy's composition `mcp.composed_m` for every b.
+- **The startup functions' purposes** (step (c)): specs in
+  layers/startup_specs.sl -- `__init_tls`, `__init_ssp`, `__init_libc` (a
+  frame of startup's writes, the thread set up, libc.auxv), then
+  `__libc_start_init` (the constructors: crtbegin's frame_dummy, nothing),
+  stage2, `__libc_start_main` and `_start_c` (main entered -- the
+  exception `at_main` -- with libc set up, or a stack overflow); each C
+  function refines its spec (proofs/mallocng/fun/init_libc.core,
+  init_ssp.core, init_tls.core, start_main.core: a spec's either-overflow
+  body by its cases, an undefined `havoc` -- no memory to choose --
+  anything), each CFG function its structured form (init_link.core's
+  `refines` lines), all linked: `lk.start_impl`, `_start_c`'s machine
+  code implementing its purpose. The CFG ⊑ structured walk
+  (slc/cli/src/c1/gref.rs, gimple_loop.core): a CFG return in a loop as
+  the structured loop's break and rest, the structured side undefined, a
+  CFG whose one block may go on anywhere (stage2 after exit) by its first
+  trip, a guard with stack objects, comparisons flipped without typing.
