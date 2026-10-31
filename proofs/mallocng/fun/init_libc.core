@@ -1,6 +1,8 @@
-// Prototype: __init_libc's walk of the initial stack (envp, then the
-// auxiliary vector into its aux array), the stack's data the callers'
-// stack objects.
+// __init_libc by its purpose (startup_specs.init_libc_spec): its walk of
+// the initial stack (envp, then the auxiliary vector into its aux array),
+// the program's name, the calls of __init_tls and __init_ssp through their
+// specs. sp.il_probe: the run to its outcomes sp.il_out; sp.il_run: from
+// the spec's precondition; sp.il_fun: the C function refines the spec's.
 
 // (the live objects with the new ones at l, of sizes sz)
 abbrev g.live_with(v, l, sz) := set_select(omega, x7. x7 in v || (ex x8. x8 in omega && ((int_lt(x8, seq_len(sz)) && int_le(app(l, x8), x7)) &&
@@ -2168,4 +2170,201 @@ proof
     show by taut(h, c1, c2, c3)
   qed
   show by defs(apply(tr.runs_intro[r := x0 x1. SB(x0, x1)], {s}, {o}, pu, g0), startup_specs.init_libc_spec)
+qed
+
+// (the spec's C function value: its procedure's outcome o3, any result
+// registers then)
+theorem sp.ilf_intro(g, regs, s, o, o3): regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) -> pair(s, o) in univ(1) ->
+  runs(startup_specs.init_libc_spec(g, bits_of_int(64, regs[0]), bits_of_int(64, regs[1])), s, o3) ->
+  ((ex w r. o3 = ok(w, r) && any_rel(x5. x5 in bits(64), x5. any_rel(x6. x6 in bits(64), x6. o = ok(w, pair(x5, x6))))) ||
+   (ex w e. o3 = exc(w, e) && o = exc(w, e)) || (ex t. o3 = diverge(t) && o = diverge(t))) ->
+  runs(startup_specs.init_libc_spec_fun(g)[regs], s, o)
+proof
+  assume ra pu hs hd
+  let SP := startup_specs.init_libc_spec(g, bits_of_int(64, regs[0]), bits_of_int(64, regs[1]))
+  have bb: bind_rel(SP, s, x3 x4. any_rel(x5. x5 in bits(64), x5. any_rel(x6. x6 in bits(64), x6. o = ok(x3, pair(x5, x6)))), x3 x4. o = exc(x3, x4), x3. o = diverge(x3))
+    by defs(ex_intro({o3}, taut(hs, hd)), bind_rel)
+  rsimp only, startup_specs.init_libc_spec_fun, app_fn_build, ra
+  show := apply(tr.runs_intro[r := x1 x2. !ord_le(2, seq_len(regs)) || bind_rel(SP, x1, x3 x4. any_rel(x5. x5 in bits(64), x5. any_rel(x6. x6 in bits(64), x6. x2 = ok(x3, pair(x5, x6)))),
+    x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))], {s}, {o}, pu, taut(bb))
+qed
+
+// ----------------------------------------------------------------------
+//  __init_libc's C function by its purpose
+
+theorem sp.il_fun: all g G1 G2 G3 G4 G5 regs s o.
+  g.environ = c_src_env___libc_start_main.__environ -> g.hwcap = c_src_env___libc_start_main.__hwcap -> g.sysinfo = c_src_env___libc_start_main.__sysinfo ->
+  g.libc = c_src_env___libc_start_main.__libc -> g.progname = c_src_env___libc_start_main.__progname -> g.progname_full = c_src_env___libc_start_main.__progname_full ->
+  g.empty_str = c_src_env___libc_start_main.str_ -> g.main_tls = c_src_env___init_tls.main_tls -> g.builtin_tls = c_src_env___init_tls.builtin_tls ->
+  g.stack_chk_guard = c_src_env___stack_chk_fail.__stack_chk_guard -> g.default_stacksize = c_src_env___init_tls.__default_stacksize ->
+  mp.calls(G1, startup_specs.init_tls_spec_fun(g)) -> mp.calls(G2, startup_specs.init_ssp_spec_fun(g)) ->
+  regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World ->
+  runs(c_src_env___libc_start_main.__init_libc_fun(G1, G2, G3, G4, G5)[regs], s, o) ->
+  runs(startup_specs.init_libc_spec_fun(g)[regs], s, o)
+proof
+  fix g G1 G2 G3 G4 G5 regs s o
+  assume hgE hgH hgS hgL hgP hgF hgZ hgM hgB hgG hgD hG1 hG2 hr hl hw h
+  have lo: seq_len(regs) in omega by simp(hr)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(hl, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(hr, ol, keep(ord_le))
+  rsimp only, c_src_env___libc_start_main.__init_libc_fun, app_fn_build, ra in h
+  have pu := apply(g.runs_univ, h)
+  have b := apply(g.runs_elim, h)
+  let ENVP := bits_of_int(64, regs[0])
+  let PN := bits_of_int(64, regs[1])
+  let SP := startup_specs.init_libc_spec(g, ENVP, PN)
+  let SF := startup_specs.init_libc_spec_fun(g)
+  let OVF := exc_val("stack_overflow", empty)
+  let LV := s.objs.live
+  let WL(w) := fn_update(w, "objs", fn_update(w.objs, "live", LV))
+  let K(w) := any_rel(x5. x5 in bits(64), x5. any_rel(x6. x6 in bits(64), x6. o = ok(w, pair(x5, x6))))
+  let GO := runs(SF[regs], s, o)
+  have hu: s in univ(1) by simp(pu)
+  // fewer than two registers: the spec's anything
+  have cS: !ord_le(2, seq_len(regs)) -> GO proof
+    assume hn
+    rsimp only, startup_specs.init_libc_spec_fun, app_fn_build, ra
+    show := apply(tr.runs_intro[r := x1 x2. !ord_le(2, seq_len(regs)) || bind_rel(SP, x1, x3 x4. any_rel(x5. x5 in bits(64), x5. any_rel(x6. x6 in bits(64), x6. x2 = ok(x3, pair(x5, x6)))),
+      x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))], {s}, {o}, pu, taut(hn))
+  qed
+  have cT: ord_le(2, seq_len(regs)) -> GO proof
+    assume h2
+    have b2: letin(app(app(s, "objs"), "live"), x3. bind_rel(c_src_env___libc_start_main.__init_libc(ENVP, PN, G1, G2, G3, G4, G5), s,
+        x4 x5. letin(fn_update(x4, "objs", fn_update(app(x4, "objs"), "live", x3)), x6. any_rel(x7. x7 in bits(64), x7. any_rel(x8. x8 in bits(64), x8. o = ok(x6, pair(x7, x8))))),
+        x4 x5. o = exc(x4, x5), x4. o = diverge(x4))) by taut(b, h2)
+    obtain o3, hs3 hk3 from expand(b2, letin, bind_rel)
+    have psu := apply(g.runs_univ, expand(hs3, c_src_env___libc_start_main.__init_libc))
+    // (the code's procedure's outcome o3, the spec's -- the objects
+    // restored --, the same rest)
+    have via: all o3x. runs(SP, s, o3x) ->
+        ((ex w r. o3x = ok(w, r) && K(w)) || (ex w e. o3x = exc(w, e) && o = exc(w, e)) || (ex t. o3x = diverge(t) && o = diverge(t))) -> GO proof
+      fix o3x
+      assume r1 r2
+      show := apply(sp.ilf_intro[g := g, regs := regs, s := s, o := o, o3 := o3x], ra, pu, r1, r2)
+    qed
+    have cok: all w r. o3 = ok(w, r) -> K(WL(w)) proof
+      fix w r
+      assume e
+      show by simp(rewrite(e, hk3), keep(any_rel))
+    qed
+    have cexc: all w e. o3 = exc(w, e) -> o = exc(w, e) proof
+      fix w e
+      assume h3
+      show by simp(rewrite(h3, hk3), keep(any_rel))
+    qed
+    have cdv: all t. o3 = diverge(t) -> o = diverge(t) proof
+      fix t
+      assume h3
+      show by simp(rewrite(h3, hk3), keep(any_rel))
+    qed
+    have pv pf pd _ := apply(ms.world_parts, hw)
+    let D3(x) := ((ex w r. x = ok(w, r) && K(w)) || (ex w e. x = exc(w, e) && o = exc(w, e))) || (ex t. x = diverge(t) && o = diverge(t))
+    let PRE := startup_specs.init_libc_pre(s.vm, s.objs, g, ENVP, PN)
+    // the requirement not met: the spec's anything, its procedure's
+    // outcome the code's, the objects restored
+    have caseN: !PRE -> GO proof
+      assume hn
+      have k1: (ex w r. o3 = ok(w, r)) -> GO proof
+        assume e
+        obtain w r, e3 from e
+        have wu: pair(w, r) in univ(1) by simp(rewrite(e3, psu))
+        have wou := mp(app_univ[u := 1, f := w, k := "objs"], (w in univ(1) by simp(wu)))
+        have lvu := mp(app_univ[u := 1, f := s.objs, k := "live"], mp(app_univ[u := 1, f := s, k := "objs"], hu))
+        have pu3: pair(s, ok(WL(w), r)) in univ(1) by simp(hu, wu, wou, lvu)
+        have rs := apply(sp.ils_run[g := g, envp := ENVP, pn := PN, s := s, o := ok(WL(w), r)], hw, pu3, taut(hn))
+        have d := mp(all_elim(cok, {w}, {r}), e3)
+        have x1: ex w2 r2. ok(WL(w), r) = ok(w2, r2) && K(w2) by ex_intro({WL(w)}, {r}, taut(refl({ok(WL(w), r)}), d))
+        show by taut(mp(all_elim(via, {ok(WL(w), r)}), rs, (D3(ok(WL(w), r)) by taut(x1))))
+      qed
+      have k2: (ex w e. o3 = exc(w, e)) -> GO proof
+        assume e
+        obtain w x, e3 from e
+        have rs := apply(sp.ils_run[g := g, envp := ENVP, pn := PN, s := s, o := o3], hw, psu, taut(hn))
+        have oe := mp(all_elim(cexc, {w}, {x}), e3)
+        have x1: ex w2 e2. o3 = exc(w2, e2) && o = exc(w2, e2) by ex_intro({w}, {x}, taut(e3, oe))
+        show by taut(mp(all_elim(via, {o3}), rs, (D3(o3) by taut(x1))))
+      qed
+      have k3: (ex t. o3 = diverge(t)) -> GO proof
+        assume e
+        obtain t, e3 from e
+        have rs := apply(sp.ils_run[g := g, envp := ENVP, pn := PN, s := s, o := o3], hw, psu, taut(hn))
+        have oe := mp(all_elim(cdv, {t}), e3)
+        have x1: ex t2. o3 = diverge(t2) && o = diverge(t2) by ex_intro({t}, taut(e3, oe))
+        show by taut(mp(all_elim(via, {o3}), rs, (D3(o3) by taut(x1))))
+      qed
+      have ot: (ex w r. o3 = ok(w, r)) || (ex w e. o3 = exc(w, e)) || (ex t. o3 = diverge(t)) proof
+        have c1: (ex x4 x5. o3 = ok(x4, x5) && K(WL(x4))) -> ex w r. o3 = ok(w, r) proof
+          assume q
+          obtain w r, q1 _ from q
+          show by ex_intro({w}, {r}, q1)
+        qed
+        have c2: (ex x4 x5. o3 = exc(x4, x5) && o = exc(x4, x5)) -> ex w e. o3 = exc(w, e) proof
+          assume q
+          obtain w e, q1 _ from q
+          show by ex_intro({w}, {e}, q1)
+        qed
+        have c3: (ex x4. o3 = diverge(x4) && o = diverge(x4)) -> ex t. o3 = diverge(t) proof
+          assume q
+          obtain t, q1 _ from q
+          show by ex_intro({t}, q1)
+        qed
+        show by taut(hk3, c1, c2, c3)
+      qed
+      show by taut(ot, k1, k2, k3)
+    qed
+    // the requirement met: the run's outcomes
+    have caseP: PRE -> GO proof
+      assume hp
+      have eb: ENVP in bits(64) by simp()
+      have pb: PN in bits(64) by simp()
+      have go := mp(all_elim(sp.il_run, {g}, {ENVP}, {PN}, {G1}, {G2}, {G3}, {G4}, {G5}, {s}, {o3}), hw, hs3, eb, pb,
+        hgE, hgH, hgS, hgL, hgP, hgF, hgZ, hgM, hgB, hgG, hgD, hG1, hG2, hp)
+      // (an overflow: the spec's)
+      have p2: sp.ovf_any(s, o3) -> GO proof
+        assume e
+        obtain f v ob, hf hv hob e3 from expand(e, sp.ovf_any)
+        let WO := fn_update(fn_update(fn_update(s, "fs_base", f), "vm", v), "objs", ob)
+        have rs := apply(sp.ils_run[g := g, envp := ENVP, pn := PN, s := s, o := o3], hw, psu, taut(e))
+        have oe := mp(all_elim(cexc, {WO}, {OVF}), e3)
+        have x1: ex w2 e2. o3 = exc(w2, e2) && o = exc(w2, e2) by ex_intro({WO}, {OVF}, taut(e3, oe))
+        show by taut(mp(all_elim(via, {o3}), rs, (D3(o3) by taut(x1))))
+      qed
+      have p1: abi.ovf_out(s, o3) -> GO proof
+        assume e
+        show := mp(p2, apply(sp.ovf_out_any, hw, e))
+      qed
+      // (the frame, libc.auxv, the thread: the objects restored, the
+      // spec's state)
+      have p3: (ex V fs L. ((V in x86_64_linux.Vm && startup_specs.frame(s.vm, V, s.objs, startup_specs.start_writes(g))) &&
+          (all n. n in omega -> startup_specs.env_at(s.vm, s.objs, ENVP, n) -> gimple.bytes_at(V, bits_add(64, g.libc, 8), 8) = int_add(ENVP, int_mul(8, int_add(n, 1)))) &&
+          fs in bits(64) && startup_specs.thread_set(V, fs)) &&
+          o3 = ok(fn_update(fn_update(fn_update(s, "vm", V), "objs", fn_update(s.objs, "live", L)), "fs_base", fs), empty)) -> GO proof
+        assume e
+        obtain V fs L, hV hfr hl8 hfs hts e3 from e
+        let W3 := fn_update(fn_update(fn_update(s, "vm", V), "objs", fn_update(s.objs, "live", L)), "fs_base", fs)
+        let F := fn_update(fn_update(s, "vm", V), "fs_base", fs)
+        have d := mp(all_elim(cok, {W3}, {empty}), e3)
+        have of ol0 := (is_fun(s.objs) && "live" in dom(s.objs) by simp(expand(hw, abi.World, abi.Objs)))
+        have e2: fn_update(fn_update(s.objs, "live", L), "live", LV) = s.objs := trans(fn_update_twice[f := s.objs, k := "live", a := L, b := LV], mp(fn_update_same[f := s.objs, k := "live"], of, ol0))
+        have f1: is_fun(fn_update(s, "vm", V)) := mp(fn_update_fun[f := s, k := "vm", v := V], pf)
+        have f2: "objs" in dom(fn_update(s, "vm", V)) by simp(mp(fn_update_dom[f := s, k := "vm", v := V], pf, pd), expand(hw, abi.World))
+        have e4 := mp(fn_update_same[f := fn_update(s, "vm", V), k := "objs"], f1, f2)
+        have od: "objs" in dom(s) by simp(expand(hw, abi.World))
+        have eqW: WL(W3) = F by simp(e2, e4, pf, od)
+        have vu := apply(x86.vm_univ, hV)
+        have fsu: fs in univ(1) by simp(hfs)
+        have pu3: pair(s, ok(F, empty)) in univ(1) by simp(hu, vu, fsu)
+        have rv: ex V2 fs2. ((V2 in x86_64_linux.Vm && startup_specs.frame(s.vm, V2, s.objs, startup_specs.start_writes(g))) &&
+            (all n. n in omega -> startup_specs.env_at(s.vm, s.objs, ENVP, n) -> gimple.bytes_at(V2, bits_add(64, g.libc, 8), 8) = int_add(ENVP, int_mul(8, int_add(n, 1)))) &&
+            fs2 in bits(64) && startup_specs.thread_set(V2, fs2)) && ok(F, empty) = ok(fn_update(fn_update(s, "vm", V2), "fs_base", fs2), empty)
+          by ex_intro({V}, {fs}, taut(hV, hfr, hl8, hfs, hts, refl({ok(F, empty)})))
+        have rs := apply(sp.ils_run[g := g, envp := ENVP, pn := PN, s := s, o := ok(F, empty)], hw, pu3, taut(rv))
+        have x1: ex w2 r2. ok(F, empty) = ok(w2, r2) && K(w2) by ex_intro({F}, {empty}, taut(refl({ok(F, empty)}), rewrite(eqW, d)))
+        show by taut(mp(all_elim(via, {ok(F, empty)}), rs, (D3(ok(F, empty)) by taut(x1))))
+      qed
+      show by taut(go, p1, p2, p3)
+    qed
+    show by taut(caseN, caseP)
+  qed
+  show by taut(cS, cT)
 qed

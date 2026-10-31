@@ -27,11 +27,11 @@ The steps left, in order:
 - (c) Purpose specs and C2. The specs of `__init_libc`, `__init_tls`,
   `__init_ssp` are in layers/startup_specs.sl (a frame of what may be
   written, plus what malloc needs: the thread set up and `libc.auxv`).
-  `__init_libc`'s GIMPLE run is proven to its outcomes `sp.il_out` under
-  explicit hypotheses (proofs/mallocng/fun/startup_proto.core,
-  `sp.il_probe`); left for it: those hypotheses from `init_libc_pre`, and
-  il_out to the spec's runs. Then `__init_tls`, `__init_ssp` against their
-  specs, `__libc_start_init` (`_init`, the
+  `__init_libc`'s C function refines its spec's, its callees as their
+  specs (proofs/mallocng/fun/init_libc.core, `sp.il_fun`); left for it:
+  the link (`tr.implements_at`, as `grsc.composed`) once its callees are
+  done. Then `__init_tls`, `__init_ssp` against their specs,
+  `__libc_start_init` (`_init`, the
   init_array), stage2, `__libc_start_main`, `_start_c` -- each CFG
   function as link_start.core links it (`stl.F`): its refinement to the
   structured form, then its purpose (main's: raising at main).
