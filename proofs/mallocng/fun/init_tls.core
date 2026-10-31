@@ -1,0 +1,101 @@
+// __init_tls (static_init_tls) by its purpose (startup_specs.init_tls_spec):
+// the program headers walked (none of them PT_TLS: no TLS module), the
+// TLS sizes in libc, the thread's descriptor set up in the static TLS area
+// (__copy_tls), the thread pointer at it (__init_tp).
+
+// ----------------------------------------------------------------------
+//  The system calls
+
+// (arch_prctl(ARCH_SET_FS, p), p in the user space: the thread pointer p)
+theorem sp.sfs_det: all w p. p in bits(64) -> int_lt(p, x86_64_linux.TASK_SIZE) -> g.det(gimple.sys_set_fs(p), w, ok(fn_update(w, "fs_base", p), 0))
+proof
+  fix w p
+  assume hp hl
+  have g0: all o. runs(gimple.sys_set_fs(p), w, o) -> o = ok(fn_update(w, "fs_base", p), 0) proof
+    fix o
+    assume h
+    rsimp only, gimple.sys_set_fs in h
+    have b := apply(g.runs_elim, h)
+    show by simp(b, hl)
+  qed
+  show by defs(g0, g.det)
+qed
+
+// (set_tid_address: a number, the world as it was)
+theorem sp.tid_inv: all w a1 o. runs(gimple.sys_call1(218, a1), w, o) -> ex r. r in bits(64) && o = ok(w, r)
+proof
+  fix w a1 o
+  assume h
+  rsimp only, gimple.sys_call1 in h
+  have b := apply(g.runs_elim, h)
+  have ne: ex t. t in bits(64) && (int_lt(0, t) && int_lt(t, 4194304)) by ex_intro({1}, simp())
+  show by simp(b, ne)
+qed
+
+// __set_thread_area(p) at a call, p in the user space: the thread pointer
+// p, 0 returned
+theorem sp.sta_q: all t p regs o2. t in abi.World -> t in univ(1) -> p in bits(64) -> int_lt(p, x86_64_linux.TASK_SIZE) ->
+  gc.regs_ok(regs, seq_one(gimple.arg(64, p))) -> runs(musl_asm.__set_thread_area_fun()[regs], t, o2) ->
+  ex r. o2 = ok(fn_update(t, "fs_base", p), r) && fst(r) = 0
+proof
+  fix t p regs o2
+  assume hw hu hp hl hro h
+  let ARGS := seq_one(gimple.arg(64, p))
+  let FT := fn_update(t, "fs_base", p)
+  have rl rln _ := hro
+  have an: seq_len(ARGS) = 1 by simp()
+  have rn: seq_len(regs) = 1 := trans(rln, an)
+  have lo: seq_len(regs) in omega by simp(rn)
+  have q0 := apply(gc.reg_at[regs := regs, args := ARGS, i := 0, w := 64, x := p], hro, simp(), simp(an), at({ARGS[0]}), simp(), hp)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, ol, keep(ord_le))
+  rsimp only, musl_asm.__set_thread_area_fun, app_fn_build, ra in h
+  have o1l: ord_le(1, seq_len(regs)) by defs(simp(rn), ord_le)
+  have b := rewrite(q0, apply(g.runs_elim, h))
+  have b2: bind_rel(musl_asm.__set_thread_area(p), t, x3 x4. letin(x4, x5. bind_rel(gimple.result(64, x5), x3, x6 x7. any_rel(x8. x8 in bits(64), x8. o2 = ok(x6, pair(x7, x8))),
+      x6 x7. o2 = exc(x6, x7), x6. o2 = diverge(x6))), x3 x4. o2 = exc(x3, x4), x3. o2 = diverge(x3)) by taut(b, o1l)
+  obtain o3, hs3 hk3 from expand(b2, bind_rel)
+  step x2, e3 from hs3 with sp.sfs_det using conj(hp, hl)
+  have k1: bind_rel(gimple.result(64, 0), FT, x6 x7. any_rel(x8. x8 in bits(64), x8. o2 = ok(x6, pair(x7, x8))), x6 x7. o2 = exc(x6, x7), x6. o2 = diverge(x6))
+    by simp(expand(rewrite(e3, hk3), letin), keep(bind_rel, gimple.result))
+  obtain o4, hr4 hk4 from expand(k1, bind_rel)
+  have ho4 := apply(g.result64_inv, (0 in bits(64) by simp()), hr4)
+  have k2: any_rel(x8. x8 in bits(64), x8. o2 = ok(FT, pair(0, x8))) by simp(rewrite(ho4, hk4), keep(any_rel))
+  obtain y, hy hoy from apply(g.any_e, (ex y. y in bits(64) by ex_intro({0}, simp())), k2)
+  show by ex_intro({pair(0, y)}, taut(hoy, (fst(pair(0, y)) = 0 by simp())))
+qed
+
+// __syscall1(218, a) (set_tid_address) at a call: a number returned, the
+// world as it was
+theorem sp.s1t_q: all t a regs o2. t in abi.World -> t in univ(1) -> a in bits(64) ->
+  gc.regs_ok(regs, seq_concat(seq_one(gimple.arg(64, 218)), seq_one(gimple.arg(64, a)))) -> runs(c_src_env___init_tls.__syscall1_fun()[regs], t, o2) ->
+  ex r. o2 = ok(t, r)
+proof
+  fix t a regs o2
+  assume hw hu ha hro h
+  let ARGS := seq_concat(seq_one(gimple.arg(64, 218)), seq_one(gimple.arg(64, a)))
+  have rl rln _ := hro
+  have an: seq_len(ARGS) = 2 by simp()
+  have rn: seq_len(regs) = 2 := trans(rln, an)
+  have lo: seq_len(regs) in omega by simp(rn)
+  have q0 := apply(gc.reg_at[regs := regs, args := ARGS, i := 0, w := 64, x := 218], hro, simp(), simp(an), at({ARGS[0]}), simp(), simp())
+  have q1 := apply(gc.reg_at[regs := regs, args := ARGS, i := 1, w := 64, x := a], hro, simp(), simp(an), at({ARGS[1]}), simp(), ha)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, ol, keep(ord_le))
+  rsimp only, c_src_env___init_tls.__syscall1_fun, app_fn_build, ra in h
+  have o2l: ord_le(2, seq_len(regs)) by defs(simp(rn), ord_le)
+  have b := rewrite(q1, rewrite(q0, apply(g.runs_elim, h)))
+  have b2: bind_rel(c_src_env___init_tls.__syscall1(218, a), t, x3 x4. letin(x4, x5. bind_rel(gimple.result(64, x5), x3, x6 x7. any_rel(x8. x8 in bits(64), x8. o2 = ok(x6, pair(x7, x8))),
+      x6 x7. o2 = exc(x6, x7), x6. o2 = diverge(x6))), x3 x4. o2 = exc(x3, x4), x3. o2 = diverge(x3)) by taut(b, o2l)
+  obtain o3, hs3 hk3 from expand(b2, bind_rel)
+  step x2 x4 r, hrb e3 from hs3 with sp.tid_inv
+  obtain v, hv er from hrb
+  have o3e: o3 = ok(t, v) by simp(expand(rewrite(er, e3), letin))
+  have k1: bind_rel(gimple.result(64, v), t, x6 x7. any_rel(x8. x8 in bits(64), x8. o2 = ok(x6, pair(x7, x8))), x6 x7. o2 = exc(x6, x7), x6. o2 = diverge(x6))
+    by simp(expand(rewrite(o3e, hk3), letin), keep(bind_rel, gimple.result))
+  obtain o4, hr4 hk4 from expand(k1, bind_rel)
+  have ho4 := apply(g.result64_inv, hv, hr4)
+  have k2: any_rel(x8. x8 in bits(64), x8. o2 = ok(t, pair(v, x8))) by simp(rewrite(ho4, hk4), keep(any_rel))
+  obtain y, hy hoy from apply(g.any_e, (ex y. y in bits(64) by ex_intro({0}, simp())), k2)
+  show by ex_intro({pair(v, y)}, hoy)
+qed
