@@ -27,11 +27,12 @@ The steps left, in order:
 - (c) Purpose specs and C2. The specs of `__init_libc`, `__init_tls`,
   `__init_ssp` are in layers/startup_specs.sl (a frame of what may be
   written, plus what malloc needs: the thread set up and `libc.auxv`).
-  `__init_libc`'s C function refines its spec's, its callees as their
-  specs (proofs/mallocng/fun/init_libc.core, `sp.il_fun`); left for it:
-  the link (`tr.implements_at`, as `grsc.composed`) once its callees are
-  done. Then `__init_tls`, `__init_ssp` against their specs,
-  `__libc_start_init` (`_init`, the
+  The C functions of `__init_libc` (its callees as their specs) and
+  `__init_ssp` (memcpy as its spec) refine their specs'
+  (proofs/mallocng/fun/init_libc.core `sp.il_fun`, init_ssp.core
+  `sp.ss_fun`); left for them: the links (`tr.implements_at`, as
+  `grsc.composed`) once `__init_tls` is done. Then `__init_tls` against
+  its spec, `__libc_start_init` (`_init`, the
   init_array), stage2, `__libc_start_main`, `_start_c` -- each CFG
   function as link_start.core links it (`stl.F`): its refinement to the
   structured form, then its purpose (main's: raising at main).
