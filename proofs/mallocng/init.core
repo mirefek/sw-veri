@@ -1,0 +1,149 @@
+// Startup to main: the claim's open lemma `musl.init` -- from exec's state
+// at `_start`, the run to main's entry reaches it with the empty heap's
+// invariant (proofs/mallocng/model/empty.core) holding.
+
+// ----------------------------------------------------------------------
+//  The claim's run to main as the bridge's run with a stop
+
+// (the claim's loop body: a step until rip = t)
+abbrev ui.U(t, l, o) := (!(fst(l).rip = t) && bind_rel(x86_64_linux.step, fst(l), x5 x6. o = ok(pair(x5, empty), empty), x5 x6. o = exc(pair(x5, empty), pair("raise", x6)), x5. o = diverge(x5))) ||
+  (!!(fst(l).rip = t) && o = exc(pair(fst(l), empty), pair("brk", empty)))
+
+// the stopped run's outcomes when the claim's run gets to t at m: the stop
+// at m, the discipline broken, or the entry's return reached
+def ui.Q(s, m, o) := o = ok(m, exc_val("stop", empty)) || (ex x. o = exc(x, exc_val("disc", empty))) || (ex x. o = ok(x, empty) && tr.at_ret(s, x))
+
+// (the stopped run from l: one of those)
+def ui.Z(s, t, m, l) := ex r2 o2. while_rel(l, x. true, x y. tr.rbs(s, t, x, y), x. fn_update(empty, "os.events", fst(x).os.events), r2) &&
+  !(fst(r2) = 2) && tr.rmap(r2, o2) && ui.Q(s, m, o2)
+
+// (one pass leaving the stopped run: its result)
+theorem ui.z_leave: all s t m l r2 o2. tr.rbs(s, t, l, r2) -> !is_ok(r2) -> !(fst(r2) = 2) -> tr.rmap(r2, o2) -> ui.Q(s, m, o2) -> ui.Z(s, t, m, l)
+proof
+  fix s t m l r2 o2
+  assume hb hn hd hm hq
+  have w := apply(while_leave[l0 := l, c := x. true, b := x y. tr.rbs(s, t, x, y), tr := x. fn_update(empty, "os.events", fst(x).os.events), r := r2], simp(), hb, hn)
+  show by defs(ex_intro({r2}, {o2}, taut(w, hd, hm, hq)), ui.Z)
+qed
+
+// (the discipline broken at x: one of those)
+theorem ui.q_disc: all s m x. ui.Q(s, m, exc(x, exc_val("disc", empty)))
+proof
+  fix s m x
+  have ex: ex y. exc(x, exc_val("disc", empty)) = exc(y, exc_val("disc", empty)) by ex_intro({x}, refl({exc(x, exc_val("disc", empty))}))
+  show by defs(taut(ex), ui.Q)
+qed
+
+theorem ui.exc_nok: all a v. !is_ok(exc(a, v))
+proof
+  fix a v
+  have n: is_ok(exc(a, v)) -> false proof
+    assume h
+    obtain x y, h2 from expand(h, is_ok)
+    show by simp(h2)
+  qed
+  show by taut(n)
+qed
+
+// The claim's run to t from m0 ending at m: a stopped run from m0 (the
+// entry s, its return address not t) ends with the stop at m, the
+// discipline broken, or at the entry's return -- it takes the claim's
+// steps
+theorem ui.until_run: all s t m0 m. runs(claim_malloc.run_until(t), m0, ok(m, empty)) -> !(t = x86_64_linux.le(s.vm.bytes, s.gpr[4], 8)) ->
+  ex o. tr.run_s(s, t, m0, o) && ui.Q(s, m, o)
+proof
+  fix s t m0 m
+  assume hr hnt
+  have e := simp(expand(hr, claim_malloc.run_until))
+  obtain r, hw hm from e
+  // (the last pass: rip = t, at m)
+  have base: all l. ((!true && r = ok(l, empty)) || (true && ui.U(t, l, r) && !is_ok(r))) -> ui.Z(s, t, m, l) proof
+    fix l
+    assume hl
+    have u nr := (ui.U(t, l, r) && !is_ok(r) by taut(hl))
+    have ca: !(fst(l).rip = t) && bind_rel(x86_64_linux.step, fst(l), x5 x6. r = ok(pair(x5, empty), empty), x5 x6. r = exc(pair(x5, empty), pair("raise", x6)), x5. r = diverge(x5)) -> false proof
+      assume h
+      have _ bd := h
+      obtain o, _ oc from expand(bd, bind_rel)
+      have c1: (ex s1 v. o = ok(s1, v) && r = ok(pair(s1, empty), empty)) -> false proof
+        assume h1
+        obtain s1 v, _ er from h1
+        have io: is_ok(r) by defs(ex_intro({pair(s1, empty)}, {empty}, er), is_ok)
+        show by taut(io, nr)
+      qed
+      have c2: (ex s1 x. o = exc(s1, x) && r = exc(pair(s1, empty), pair("raise", x))) -> false proof
+        assume h2
+        obtain s1 x, _ er from h2
+        show by simp(rewrite(er, hm))
+      qed
+      have c3: (ex d. o = diverge(d) && r = diverge(d)) -> false proof
+        assume h3
+        obtain d, _ er from h3
+        show by simp(rewrite(er, hm))
+      qed
+      show by taut(oc, c1, c2, c3)
+    qed
+    have rt er := (fst(l).rip = t && r = exc(pair(fst(l), empty), pair("brk", empty)) by taut(u, ca))
+    have em: m = fst(l) by simp(rewrite(er, hm))
+    have nret: !tr.at_ret(s, fst(l)) proof
+      assume h
+      have q _ := h
+      show by taut(hnt, trans(sym(rt), q))
+    qed
+    have cs1: int_lt(fst(l).gpr[4], abi.sp(s)) -> ui.Z(s, t, m, l) proof
+      assume hlt
+      let r2 := exc(l, pair("ret", exc_val("stop", empty)))
+      have b: tr.rbs(s, t, l, r2) by defs(taut(rt, nret, hlt, refl({r2})), tr.rbs)
+      have rm: tr.rmap(r2, ok(m, exc_val("stop", empty))) by defs(simp(em), tr.rmap)
+      have q: ui.Q(s, m, ok(m, exc_val("stop", empty))) by defs(taut(refl({ok(m, exc_val("stop", empty))})), ui.Q)
+      show := apply(ui.z_leave, b, ui.exc_nok[a := l, v := pair("ret", exc_val("stop", empty))], simp(), rm, q)
+    qed
+    have cs2: !int_lt(fst(l).gpr[4], abi.sp(s)) -> ui.Z(s, t, m, l) proof
+      assume hge
+      let r2 := exc(l, pair("raise", exc_val("disc", empty)))
+      have b: tr.rbs(s, t, l, r2) by defs(taut(nret, hge, refl({r2})), tr.rbs, tr.rbd)
+      have rm: tr.rmap(r2, exc(fst(l), exc_val("disc", empty))) by defs(simp(), tr.rmap)
+      show := apply(ui.z_leave, b, ui.exc_nok[a := l, v := pair("raise", exc_val("disc", empty))], simp(), rm, ui.q_disc[s := s, m := m, x := fst(l)])
+    qed
+    show by taut(cs1, cs2)
+  qed
+  // (a step: the stopped run takes it too, or leaves there)
+  have stp: all l l1. true -> ui.U(t, l, ok(l1, empty)) -> ui.Z(s, t, m, l1) -> ui.Z(s, t, m, l) proof
+    fix l l1
+    assume _ u z1
+    have nb: !(!!(fst(l).rip = t) && ok(l1, empty) = exc(pair(fst(l), empty), pair("brk", empty))) by simp()
+    have rt bd := (!(fst(l).rip = t) && bind_rel(x86_64_linux.step, fst(l), x5 x6. ok(l1, empty) = ok(pair(x5, empty), empty), x5 x6. ok(l1, empty) = exc(pair(x5, empty), pair("raise", x6)), x5. ok(l1, empty) = diverge(x5)) by taut(u, nb))
+    have cs1: !tr.disc_ok(s, fst(l)) -> ui.Z(s, t, m, l) proof
+      assume hnd
+      let r2 := exc(l, pair("raise", exc_val("disc", empty)))
+      have b: tr.rbs(s, t, l, r2) by defs(taut(rt, hnd, refl({r2})), tr.rbs, tr.rbd)
+      have rm: tr.rmap(r2, exc(fst(l), exc_val("disc", empty))) by defs(simp(), tr.rmap)
+      show := apply(ui.z_leave, b, ui.exc_nok[a := l, v := pair("raise", exc_val("disc", empty))], simp(), rm, ui.q_disc[s := s, m := m, x := fst(l)])
+    qed
+    have cs2: tr.disc_ok(s, fst(l)) -> tr.at_ret(s, fst(l)) -> ui.Z(s, t, m, l) proof
+      assume hd hret
+      let r2 := exc(pair(fst(l), empty), pair("brk", empty))
+      have b: tr.rbs(s, t, l, r2) by defs(taut(rt, hd, hret, refl({r2})), tr.rbs, tr.rbd, tr.rb)
+      have rm: tr.rmap(r2, ok(fst(l), empty)) by defs(simp(), tr.rmap)
+      have ex: ex x. ok(fst(l), empty) = ok(x, empty) && tr.at_ret(s, x) by ex_intro({fst(l)}, taut(hret, refl({ok(fst(l), empty)})))
+      have q: ui.Q(s, m, ok(fst(l), empty)) by defs(taut(ex), ui.Q)
+      show := apply(ui.z_leave, b, ui.exc_nok[a := pair(fst(l), empty), v := pair("brk", empty)], simp(), rm, q)
+    qed
+    have cs3: tr.disc_ok(s, fst(l)) -> !tr.at_ret(s, fst(l)) -> ui.Z(s, t, m, l) proof
+      assume hd hnr
+      have b: tr.rbs(s, t, l, ok(l1, empty)) by defs(taut(rt, hd, hnr, bd), tr.rbs, tr.rbd, tr.rb)
+      obtain r1 o1, w1 d1 m1 q1 from expand(z1, ui.Z)
+      have w := apply(while_step[l0 := l, l1 := l1, c := x. true, b := x y. tr.rbs(s, t, x, y), tr := x. fn_update(empty, "os.events", fst(x).os.events), r := r1], simp(), b, w1, d1)
+      show by defs(ex_intro({r1}, {o1}, taut(w, d1, m1, q1)), ui.Z)
+    qed
+    show by taut(cs1, cs2, cs3)
+  qed
+  have nd: !(fst(r) = 2) proof
+    assume h2
+    show by simp(rewrite(h2, hm))
+  qed
+  have z0 := apply(while_run_ind[l0 := pair(m0, empty), c := l. true, b := l o. ui.U(t, l, o), tr := l. fn_update(empty, "os.events", fst(l).os.events), r := r, z := l. ui.Z(s, t, m, l)], base, stp, hw, nd)
+  obtain r2 o2, w2 _ m2 q2 from expand(z0, ui.Z)
+  have rs: tr.run_s(s, t, m0, o2) by defs(ex_intro({r2}, taut(w2, m2)), tr.run_s, tr.rws)
+  show by ex_intro({o2}, taut(rs, q2))
+qed
