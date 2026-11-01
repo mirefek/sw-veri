@@ -4792,3 +4792,97 @@ proof
   have e2: ui.wvm(m.vm).stack_limit = m0.vm.stack_limit by rsimp(ml, vl, sl, fl)
   show := conj(e1, e2)
 qed
+
+// the context's free bytes at main: read-write, not the stack
+theorem ui.free_rw_main: all m0 s lo top argv envp auxv m V fs. ui.MX(m0, s, lo, top, argv, envp, auxv, m, V, fs) -> mallocng.free_rw(ui.C, ui.MV(m))
+proof
+  fix m0 s lo top argv envp auxv m V fs
+  assume h
+  have cx: ui.C.ctx = 4227328 by eval()
+  unfold mallocng.free_rw
+  fix a
+  assume ha hf
+  have b := expand(hf, mallocng.ctx_free)
+  show := apply(ui.mm_rw[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs, a := a], h, ha, arith(b, cx, ha), arith(b, cx, ha))
+qed
+
+// (the data symbols' ranges: their entries)
+theorem ui.da_at: mallocng.data_ranges(ui.C)[0] = pair(ui.C.ctx, mallocng.CTX_SIZE) && mallocng.data_ranges(ui.C)[1] = pair(ui.C.lock, 4) &&
+  mallocng.data_ranges(ui.C)[2] = pair(ui.C.libc, 16)
+proof
+  let P0 := pair(ui.C.ctx, mallocng.CTX_SIZE)
+  let P1 := pair(ui.C.lock, 4)
+  let P2 := pair(ui.C.libc, 16)
+  have d0: mallocng.data_ranges(ui.C)[0] = P0 by defs(at({seq_concat(seq_concat(seq_one(P0), seq_one(P1)), seq_one(P2))[0]}), mallocng.data_ranges)
+  have d1: mallocng.data_ranges(ui.C)[1] = P1 by defs(at({seq_concat(seq_concat(seq_one(P0), seq_one(P1)), seq_one(P2))[1]}), mallocng.data_ranges)
+  have d2: mallocng.data_ranges(ui.C)[2] = P2 by defs(at({seq_concat(seq_concat(seq_one(P0), seq_one(P1)), seq_one(P2))[2]}), mallocng.data_ranges)
+  show by taut(d0, d1, d2)
+qed
+
+// the allocator's memory at main accessible as its code does: its data
+// read-write, no groups yet, the vector readable where the C view has it
+theorem ui.perms_main: all m0 s lo top argv envp auxv m V fs b. ui.MX(m0, s, lo, top, argv, envp, auxv, m, V, fs) ->
+  mallocng.perms_ok(ui.C, ui.A0(m0, argv, envp, auxv), ui.MV(m), b)
+proof
+  fix m0 s lo top argv envp auxv m V fs b
+  assume h
+  have hx _ := expand(h, ui.MX)
+  let A := ui.A0(m0, argv, envp, auxv)
+  let M := ui.MV(m)
+  let DA := mallocng.data_ranges(ui.C)
+  have cx: ui.C.ctx = 4227328 by eval()
+  have ck: ui.C.lock = 4227300 by eval()
+  have cl: ui.C.libc = 4227136 by eval()
+  have cs: mallocng.CTX_SIZE = 928 by defs(eval(), mallocng.CTX_SIZE)
+  have a0 a1 a2 := ui.da_at
+  have k1: all x0 x1. x0 in omega && x1 in omega -> ((int_lt(x0, 3) && int_le(fst(DA[x0]), x1)) && int_lt(x1, int_add(fst(DA[x0]), snd(DA[x0])))) &&
+      !mallocng.ctx_free(ui.C, x1) -> mallocng.m_rw(M, x1) && !(snd(mallocng.pg(M, x1)).kind = 2) proof
+    fix x0 x1
+    assume ho hr
+    have o0 o1 := ho
+    have k3 r1 r2 _ := hr
+    have e0: x0 = 0 -> int_le(4227328, x1) && int_lt(x1, 4228256) proof
+      assume e
+      have q1 := rewrite(a0, rewrite(e, r1))
+      have q2 := rewrite(a0, rewrite(e, r2))
+      show by arith(rsimp(q1), rsimp(q2), cx, cs)
+    qed
+    have e1: x0 = 1 -> int_le(4227300, x1) && int_lt(x1, 4227304) proof
+      assume e
+      have q1 := rewrite(a1, rewrite(e, r1))
+      have q2 := rewrite(a1, rewrite(e, r2))
+      show by arith(rsimp(q1), rsimp(q2), ck)
+    qed
+    have e2: x0 = 2 -> int_le(4227136, x1) && int_lt(x1, 4227152) proof
+      assume e
+      have q1 := rewrite(a2, rewrite(e, r1))
+      have q2 := rewrite(a2, rewrite(e, r2))
+      show by arith(rsimp(q1), rsimp(q2), cl)
+    qed
+    have bd: int_le(4227136, x1) && int_lt(x1, 4228256) by arith(e0, e1, e2, k3, o0, (x0 = 0 || x0 = 1 || x0 = 2 by arith(k3, o0)))
+    show := apply(ui.mm_rw[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs, a := x1], h, o1, arith(bd, o1), arith(bd, o1))
+  qed
+  have {u0 = used} := mp.e_lens[AT := ui.AT(m0, argv, envp), L := auxv]
+  have k2: all x0 x1. x0 in omega && x1 in omega -> (((int_lt(x0, seq_len(A.used)) && int_le(fst(mallocng.group_range(A.metas[A.used[x0]])), x1)) &&
+      int_lt(x1, int_add(fst(mallocng.group_range(A.metas[A.used[x0]])), snd(mallocng.group_range(A.metas[A.used[x0]]))))) && !(x1 in malloc.live_of(b))) &&
+      !mallocng.in_reserved(A, x1) -> mallocng.m_rw(M, x1) && !(snd(mallocng.pg(M, x1)).kind = 2) proof
+    fix x0 x1
+    assume ho hr
+    have o0 _ := ho
+    have k0 .. := hr
+    show by arith(k0, u0, o0)
+  qed
+  have k3: all x0 x1. x0 in omega && x1 in omega -> (int_lt(x0, seq_len(mallocng.auxv_ranges(A))) && int_le(fst(mallocng.auxv_ranges(A)[x0]), x1)) &&
+      int_lt(x1, int_add(fst(mallocng.auxv_ranges(A)[x0]), snd(mallocng.auxv_ranges(A)[x0]))) ->
+      mallocng.m_mapped(M, x1) && !(snd(mallocng.pg(M, x1)).kind = 2) -> snd(mallocng.pg(M, x1)).prot.r proof
+    fix x0 x1
+    assume ho hr hm
+    have o0 o1 := ho
+    have ir: mallocng.in_ranges(x1, mallocng.auxv_ranges(A)) by defs(ex_intro({x0}, taut(o0, hr)), mallocng.in_ranges, mallocng.in_range)
+    have b1 b2 _ := apply(ui.ax_in[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, x := x1], hx, o1, ir)
+    have pn := apply(ui.mm_stkpg[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs, a := x1], h, o1, b1, b2)
+    have _ nn := expand((mallocng.m_mapped(M, x1) by taut(hm)), mallocng.m_mapped)
+    show by taut(nn, pn)
+  qed
+  show by defs(taut(k1, k2, k3), mallocng.perms_ok)
+qed
