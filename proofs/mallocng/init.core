@@ -3509,3 +3509,84 @@ proof
   have fw: ui.FW(AT, L, a) by taut(s0, ng, p1, w1, p2, w2, p3, nr, p4, na, p5, p6, w3, w4, w5)
   show by taut(expand(fw, ui.FW))
 qed
+
+// the vector's address (past argc, argv's and envp's words)
+abbrev ui.AT(m0, argv, envp) := int_add(int_add(int_add(m0.gpr[4], 24), int_mul(8, seq_len(argv))), int_mul(8, seq_len(envp)))
+
+// a byte of the vector's ranges (the vector, AT_RANDOM's last 8 bytes):
+// on exec's stack, libc's data there (the claim's initial_auxv)
+theorem ui.ax_in: all m0 s lo top argv envp auxv x. ui.SX(m0, s, lo, top, argv, envp, auxv) -> x in omega ->
+  mallocng.in_ranges(x, mallocng.auxv_ranges(mp.a0(ui.AT(m0, argv, envp), auxv))) ->
+  int_le(m0.gpr[4], x) && int_lt(x, int_mul(top, x86_64_linux.PAGE)) && claim_malloc.initial_auxv(m0, argv, envp, x)
+proof
+  fix m0 s lo top argv envp auxv x
+  assume hx hxo h
+  have hc hlo hna hne hel hla hsl hao hsd he hu h31 := expand(hx, ui.SX)
+  have hM .. := expand(hc, ui.ctx)
+  have r0 := apply(x86i.rsp_typed, hM)
+  let AT := ui.AT(m0, argv, envp)
+  let A := mp.a0(AT, auxv)
+  have nl: seq_len(auxv) in omega by defs(simp(expand(hla, list_type)), seq_len)
+  have ato: AT in omega by arith(r0, hna, hne)
+  have {ab = abs, au = univ} := apply(mp.a0_type[AT := AT, L := auxv], ato, hla)
+  have {xl = auxv} := apply(mp.front_pieces[c := ui.C, A := A], ui.C_ok, au, ab)
+  have _ _ _ _ _ aa := expand(hsl, x86_64_linux.stack_layout)
+  have _ ib _ _ ir _ := expand(hsd, x86_64_linux.stack_data, x86_64_linux.in_stack, x86_64_linux.aux)
+  have uq := expand(hao, x86_64_linux.auxv_ok).12
+  let P1 := seq_one(pair(A.auxv_at, int_mul(16, seq_len(A.auxv))))
+  let P2 := fn_build(int_sub(seq_len(A.auxv), 0), x0. ite(fst(A.auxv[int_add(0, x0)]) = x86_64_linux.AT_RANDOM, pair(int_add(snd(A.auxv[int_add(0, x0)]), 8), 8), pair(0, 0)))
+  have ea: A.auxv = auxv by rsimp()
+  have et: A.auxv_at = AT by rsimp()
+  have p1l := apply(tr.seq_one_type, (pair(A.auxv_at, int_mul(16, seq_len(A.auxv))) in univ(1) by simp(au)))
+  have al: A.auxv in list_type(cart(omega, omega)) := subst({y. y in list_type(cart(omega, omega))}, sym(ea), hla)
+  have ad: int_sub(seq_len(A.auxv), 0) in omega by arith(al)
+  have avu: all x0. x0 in int_sub(seq_len(A.auxv), 0) -> ite(fst(A.auxv[int_add(0, x0)]) = x86_64_linux.AT_RANDOM, pair(int_add(snd(A.auxv[int_add(0, x0)]), 8), 8), pair(0, 0)) in univ(1) proof
+    fix x0
+    assume hx0
+    show by simp(au)
+  qed
+  have p2l: P2 in list_type(univ(1)) := apply(build_list, ad, avu)
+  have sp := apply(mp.ranges_cat[a := x, xs := P1, ys := P2], p1l, p2l)
+  have h1 := expand(h, mallocng.auxv_ranges)
+  // (the libc data: the claim's set, with exec's vector)
+  have av: x86_64_linux.auxv_at(m0.vm, claim_malloc.auxv_addr(m0, argv, envp), auxv) by defs(aa, claim_malloc.auxv_addr)
+  // the vector's words
+  have c1: mallocng.in_ranges(x, P1) -> int_le(m0.gpr[4], x) && int_lt(x, int_mul(top, x86_64_linux.PAGE)) && claim_malloc.initial_auxv(m0, argv, envp, x) proof
+    assume hp
+    have q0: mallocng.in_range(x, pair(A.auxv_at, int_mul(16, seq_len(A.auxv)))) by taut(mp.ranges_one[a := x, r := pair(A.auxv_at, int_mul(16, seq_len(A.auxv)))], hp)
+    have q1 q2 := rsimp(expand(q0, mallocng.in_range), et, ea)
+    have ia: claim_malloc.initial_auxv(m0, argv, envp, x) by defs(ex_intro({auxv}, taut(hla, av, (int_le(claim_malloc.auxv_addr(m0, argv, envp), x) by defs(q1, claim_malloc.auxv_addr)),
+      (int_lt(x, int_add(claim_malloc.auxv_addr(m0, argv, envp), int_mul(16, seq_len(auxv)))) by defs(q2, claim_malloc.auxv_addr)))), claim_malloc.initial_auxv)
+    show by taut((int_le(m0.gpr[4], x) by arith(q1, r0, hna, hne)), (int_lt(x, int_mul(top, x86_64_linux.PAGE)) by arith(q2, ib, r0, hna, hne, nl)), ia)
+  qed
+  // AT_RANDOM's last 8 bytes
+  have c2: mallocng.in_ranges(x, P2) -> int_le(m0.gpr[4], x) && int_lt(x, int_mul(top, x86_64_linux.PAGE)) && claim_malloc.initial_auxv(m0, argv, envp, x) proof
+    assume hp
+    obtain k, ko kl kr0 from apply(mp.ranges_build_inv[a := x, n := seq_len(A.auxv),
+      r := y. ite(fst(A.auxv[y]) = x86_64_linux.AT_RANDOM, pair(int_add(snd(A.auxv[y]), 8), 8), pair(0, 0))], (seq_len(A.auxv) in omega by arith(al)), hp)
+    have kr := rewrite(ea, kr0)
+    let c := fst(auxv[k]) = x86_64_linux.AT_RANDOM
+    let v := snd(auxv[k])
+    have n0: !c -> false proof
+      assume nc
+      have q := rsimp(expand(rewrite(mp(ite_f[c := c, a := pair(int_add(v, 8), 8), b := pair(0, 0)], nc), kr), mallocng.in_range))
+      show by arith(q, hxo)
+    qed
+    have hcv: c by taut(n0)
+    have q1 q2 := rsimp(expand(rewrite(mp(ite_t[c := c, a := pair(int_add(v, 8), 8), b := pair(0, 0)], hcv), kr), mallocng.in_range))
+    obtain q, hq hk b1 b2 from ir
+    have klo: int_lt(k, seq_len(auxv)) := rewrite(ea, kl)
+    have aiv: startup_specs.aux_is(auxv, x86_64_linux.AT_RANDOM, v) proof
+      have e: ex j. j in omega && ((int_lt(j, seq_len(auxv)) && fst(auxv[j]) = x86_64_linux.AT_RANDOM) && snd(auxv[j]) = v) by ex_intro({k}, taut(ko, klo, hcv, refl({v})))
+      show by defs(taut(e), startup_specs.aux_is)
+    qed
+    have vq := apply(ui.aux_eq[auxv := auxv, key := x86_64_linux.AT_RANDOM, q := q, v := v], uq,
+      (!(x86_64_linux.AT_RANDOM = x86_64_linux.AT_NULL) by defs(eval(), x86_64_linux.AT_RANDOM, x86_64_linux.AT_NULL)), hk, aiv)
+    have x1 x2 := (int_le(q, x) && int_lt(x, int_add(q, 16)) by arith(rewrite(vq, q1), rewrite(vq, q2)))
+    have ia: claim_malloc.initial_auxv(m0, argv, envp, x) by defs(ex_intro({auxv}, taut(hla, av,
+      (ex x1. x1 in omega && ((x86_64_linux.aux(auxv, x86_64_linux.AT_RANDOM, x1) && int_le(x1, x)) && int_lt(x, int_add(x1, 16)))
+       by ex_intro({q}, taut(hq, (x86_64_linux.aux(auxv, x86_64_linux.AT_RANDOM, q) by defs(hk, x86_64_linux.aux)), x1, x2))))), claim_malloc.initial_auxv)
+    show by taut((int_le(m0.gpr[4], x) by arith(x1, b1)), (int_lt(x, int_mul(top, x86_64_linux.PAGE)) by arith(x2, b2, hq)), ia)
+  qed
+  show by taut(sp, h1, c1, c2)
+qed
