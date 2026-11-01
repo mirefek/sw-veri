@@ -4727,3 +4727,68 @@ proof
   have wb2: ui.wvm(m.vm).bytes[x] = m.vm.bytes[x] by rsimp()
   show := trans(rewrite(bi, mv1), trans(wb2, trans(mb, trans(vb, b2))))
 qed
+
+// a byte on the data's pages at main: read-write, not the stack
+theorem ui.mm_rw: all m0 s lo top argv envp auxv m V fs a. ui.MX(m0, s, lo, top, argv, envp, auxv, m, V, fs) -> a in omega ->
+  int_le(1031, int_div(a, x86_64_linux.PAGE)) -> int_le(int_div(a, x86_64_linux.PAGE), 1032) ->
+  mallocng.m_rw(ui.MV(m), a) && !(snd(mallocng.pg(ui.MV(m), a)).kind = 2)
+proof
+  fix m0 s lo top argv envp auxv m V fs a
+  assume h ha h1 h2
+  let PG := fn_update(fn_update(empty, "prot", x86_64_linux.seg_prot(x86_64_linux.segment(musl_malloc.file, 3))), "kind", 0)
+  have p := apply(ui.mm_pg[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs, i := 3, a := a], h, eval(), ha,
+    (ui.TAB(3, int_div(a, x86_64_linux.PAGE)) by arith(h1, h2)))
+  have sn: snd(mallocng.pg(ui.MV(m), a)) = PG := rewrite(sym(p), ui.snd_some[x := PG])
+  have {g3 = s3} := ui.elf
+  have _ f3 _ _ _ _ := expand(g3, ui.segis)
+  have pr: PG.prot.r && PG.prot.w by rsimp(f3, x86_64_linux.seg_prot, (bit(6, 2) by eval()), (bit(6, 1) by eval()))
+  have pk: !(PG.kind = 2) by rsimp()
+  have mm: mallocng.m_mapped(ui.MV(m), a) by defs(taut((int_lt(int_div(a, x86_64_linux.PAGE), int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) by arith(h2)),
+    rewrite(sym(p), ui.some_nn[x := PG])), mallocng.m_mapped)
+  have rw: mallocng.m_rw(ui.MV(m), a) by defs(taut(mm, rewrite(sym(sn), pr)), mallocng.m_rw)
+  show by taut(rw, rewrite(sym(sn), pk))
+qed
+
+// a byte of exec's stack at main: hidden from the C view
+theorem ui.mm_stkpg: all m0 s lo top argv envp auxv m V fs a. ui.MX(m0, s, lo, top, argv, envp, auxv, m, V, fs) -> a in omega ->
+  int_le(m0.gpr[4], a) -> int_lt(a, int_mul(top, x86_64_linux.PAGE)) -> mallocng.pg(ui.MV(m), a) = none
+proof
+  fix m0 s lo top argv envp auxv m V fs a
+  assume h ha h1 h2
+  have hx hat := expand(h, ui.MX)
+  have hc hlo .. := expand(hx, ui.SX)
+  have _ _ _ hs hl .. := expand(hc, ui.ctx)
+  have s1 s2 .. := expand(hs, x86_64_linux.stack_pages)
+  let p := int_div(a, x86_64_linux.PAGE)
+  have po: p in omega by arith(ha)
+  have pl: int_lt(p, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) by arith(h2, s2, ha)
+  have g1 g2 := apply(ui.main_pg[s := s, objs := ui.iobjs(m0.gpr[4], top), m := m, a := m0.gpr[4], V := V, fs := fs, p := p], hat, po, pl)
+  have ws := apply(ui.w_stack[m0 := m0, s := s, lo := lo, top := top, p := p], hc, po, arith(hl, h1, ha), arith(h2, ha))
+  have _ mv2 := apply(ui.mview_at[vm := ui.wvm(m.vm), a := a], ha)
+  show := trans(mv2, trans(g1, trans(apply(ui.app_eq[k := p], g2), ws)))
+qed
+
+// main's stack fields: exec's
+theorem ui.mm_stkf: all m0 s lo top argv envp auxv m V fs. ui.MX(m0, s, lo, top, argv, envp, auxv, m, V, fs) ->
+  ui.wvm(m.vm).stack_top = m0.vm.stack_top && ui.wvm(m.vm).stack_limit = m0.vm.stack_limit
+proof
+  fix m0 s lo top argv envp auxv m V fs
+  assume h
+  have hx ha := expand(h, ui.MX)
+  have hc .. := expand(hx, ui.SX)
+  have _ _ _ _ _ _ _ h5 := expand(hc, ui.ctx)
+  have _ _ _ _ _ _ _ _ _ _ ev := expand(h5, ui.s5)
+  obtain v1, _ _ vf _ ve _ from ev
+  have ft fl _ _ := expand(vf, x86.vm_fields)
+  have _ hfr _ _ _ _ _ hvok := expand(ha, ui.at_main)
+  have f1 _ := expand(hfr, startup_specs.frame)
+  have vt: V.stack_top = s.vm.stack_top := rsimp(apply(ui.app_eq[k := "stack_top"], f1))
+  have vl: V.stack_limit = s.vm.stack_limit := rsimp(apply(ui.app_eq[k := "stack_limit"], f1))
+  have _ wm := expand(hvok, tr.vok)
+  have {mt = top, ml = limit} := expand(wm, tr.wmc)
+  have st: s.vm.stack_top = v1.stack_top by rsimp(ve)
+  have sl: s.vm.stack_limit = v1.stack_limit by rsimp(ve)
+  have e1: ui.wvm(m.vm).stack_top = m0.vm.stack_top by rsimp(mt, vt, st, ft)
+  have e2: ui.wvm(m.vm).stack_limit = m0.vm.stack_limit by rsimp(ml, vl, sl, fl)
+  show := conj(e1, e2)
+qed
