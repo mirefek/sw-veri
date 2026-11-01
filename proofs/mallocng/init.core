@@ -2388,3 +2388,63 @@ proof
   qed
   show by taut(expand(ha, startup_specs.aux_is), c1, c2)
 qed
+
+// exec's vector (past argc, argv's and envp's words): musl's, its pairs
+// read in the view
+theorem ui.auxv_view: all m0 s lo top argv envp auxv A. ui.ctx(m0, s, lo, top) -> seq_len(argv) in omega -> seq_len(envp) in omega ->
+  auxv in list_type(cart(omega, omega)) -> x86_64_linux.stack_layout(m0.vm, m0.gpr[4], argv, envp, auxv) ->
+  x86_64_linux.auxv_ok(musl_malloc.file, m0.vm, m0.os, auxv) -> x86_64_linux.stack_data(m0.vm, m0.gpr[4], int_mul(top, x86_64_linux.PAGE), argv, envp, auxv) ->
+  A = int_add(int_add(int_add(m0.gpr[4], 24), int_mul(8, seq_len(argv))), int_mul(8, seq_len(envp))) ->
+  startup_specs.auxv_list(ui.wvm(s.vm), ui.wob0(m0.gpr[4], top), A, auxv)
+proof
+  fix m0 s lo top argv envp auxv A
+  assume hc hna hne hla hsl hao hsd hA
+  have hM _ _ hs hl _ h16 _ := expand(hc, ui.ctx)
+  have s1 s2 .. := expand(hs, x86_64_linux.stack_pages)
+  have r0 := apply(x86i.rsp_typed, hM)
+  have _ _ _ _ _ aa := expand(hsl, x86_64_linux.stack_layout)
+  have l1 aw al an := expand(aa, x86_64_linux.auxv_at, x86_64_linux.u64_at)
+  have is1 .. := expand(hsd, x86_64_linux.stack_data)
+  have _ ib := expand(is1, x86_64_linux.in_stack)
+  have uq := expand(hao, x86_64_linux.auxv_ok).12
+  have nl: seq_len(auxv) in omega by defs(simp(expand(hla, list_type)), seq_len)
+  let V := ui.wvm(s.vm)
+  have c2: int_lt(int_add(A, int_mul(16, seq_len(auxv))), int_pow(2, 63)) by arith(hA, ib, s2, r0, hna, hne, nl)
+  have c3: all k. k in omega -> int_lt(k, seq_len(auxv)) -> gimple.usable(V, ui.wob0(m0.gpr[4], top), int_add(A, int_mul(16, k)), 16, false) &&
+      gimple.bytes_at(V, bits_of_int(64, int_add(A, int_mul(16, k))), 8) = fst(auxv[k]) &&
+      gimple.bytes_at(V, bits_of_int(64, int_add(int_add(A, int_mul(16, k)), 8)), 8) = snd(auxv[k]) proof
+    fix k
+    assume ko kl
+    let X := int_add(A, int_mul(16, k))
+    have xo: X in omega by arith(hA, r0, hna, hne, ko)
+    have x1: int_le(m0.gpr[4], X) by arith(hA, r0, hna, hne, ko)
+    have x2: int_le(int_add(X, 16), int_mul(top, x86_64_linux.PAGE)) by arith(hA, ib, kl, ko, r0, hna, hne, nl)
+    have us := apply(ui.us_stack[m0 := m0, s := s, lo := lo, top := top, x := X, n := 16, w := false], hc, xo, eval(), x1, x2)
+    have w1 := apply(ui.w_word[m0 := m0, s := s, lo := lo, top := top, a := X], hc, xo, x1, arith(x2))
+    have w2 := apply(ui.w_word[m0 := m0, s := s, lo := lo, top := top, a := int_add(X, 8)], hc, arith(xo), arith(x1, xo), arith(x2, xo))
+    have b1: bits_of_int(64, X) = X := apply(nf.boi_in[n := 64, x := X], eval(), (X in bits(64) by arith(xo, x2, s2)))
+    have b2: bits_of_int(64, int_add(X, 8)) = int_add(X, 8) := apply(nf.boi_in[n := 64, x := int_add(X, 8)], eval(), (int_add(X, 8) in bits(64) by arith(xo, x2, s2)))
+    have a1 a2 := rewrite(sym(hA), mp(all_elim(aw, {k}), ko, kl))
+    have t1 := subst({y. gimple.bytes_at(V, y, 8) = fst(auxv[k])}, sym(b1), trans(w1, a1))
+    have t2 := subst({y. gimple.bytes_at(V, y, 8) = snd(auxv[k])}, sym(b2), trans(w2, a2))
+    show by taut(us, t1, t2)
+  qed
+  have c4: fst(auxv[int_sub(seq_len(auxv), 1)]) = x86_64_linux.AT_NULL by rsimp(al)
+  have c6: all k j. k in omega && j in omega -> (int_lt(k, seq_len(auxv)) && int_lt(j, seq_len(auxv))) && fst(auxv[k]) = fst(auxv[j]) -> k = j proof
+    fix k j
+    assume hkj h
+    have ko jo := hkj
+    have kl jl e := h
+    have d: !(k = j) -> false proof
+      assume ne
+      have u := mp(all_elim(uq, {k}, {j}), hkj, conj(conj(kl, jl), ne))
+      have fk: fst(auxv[k]) = x86_64_linux.AT_NULL by taut(u, e)
+      have fj: fst(auxv[j]) = x86_64_linux.AT_NULL := trans(sym(e), fk)
+      have nk: !int_lt(int_add(k, 1), seq_len(auxv)) by taut(mp(all_elim(an, {k}), ko), fk)
+      have nj: !int_lt(int_add(j, 1), seq_len(auxv)) by taut(mp(all_elim(an, {j}), jo), fj)
+      show by arith(nk, nj, kl, jl, ne, ko, jo)
+    qed
+    show by taut(d)
+  qed
+  show by defs(taut(l1, c2, c3, c4, an, c6), startup_specs.auxv_list)
+qed
