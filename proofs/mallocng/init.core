@@ -1711,3 +1711,90 @@ proof
     rewrite(sym(me), k2), rewrite(sym(me), k3), hv2), ui.at_main)
   show by ex_intro({V}, {fs}, r)
 qed
+
+// ----------------------------------------------------------------------
+//  The world's view at _start_c's entry as exec's memory
+
+// exec's stack [lo, top) with rsp in it, the entry s after _start's steps
+def ui.ctx(m0, s, lo, top) := m0 in x86_64_linux.Machine && lo in omega && top in omega && x86_64_linux.stack_pages(m0.vm, lo, top) &&
+  int_le(int_mul(lo, x86_64_linux.PAGE), m0.gpr[4]) && int_lt(m0.gpr[4], int_mul(top, x86_64_linux.PAGE)) && int_le(16, m0.gpr[4]) && ui.s5(m0, s)
+
+// (the entry's memory: exec's grown, the return address pushed)
+theorem ui.ctx_v1: all m0 s lo top. ui.ctx(m0, s, lo, top) -> ex v1. x86.stk_ext(m0.vm, v1) && abi.vm_grows(m0.vm, v1) &&
+  s.vm = fn_update(v1, "bytes", x86_64_linux.store_le(v1.bytes, bits_sub(64, m0.gpr[4], 8), 8, 4198565))
+proof
+  fix m0 s lo top
+  assume hc
+  have _ _ _ _ _ _ _ h5 := expand(hc, ui.ctx)
+  have _ _ _ _ _ _ _ _ _ _ ev := expand(h5, ui.s5)
+  obtain v1, sk vg _ _ ve from ev
+  show by ex_intro({v1}, taut(sk, vg, ve))
+qed
+
+// a page of exec's stack: hidden in the view
+theorem ui.w_stack: all m0 s lo top p. ui.ctx(m0, s, lo, top) -> p in omega -> int_le(lo, p) -> int_lt(p, top) -> ui.wvm(s.vm).pages[p] = none
+proof
+  fix m0 s lo top p
+  assume hc hp h1 h2
+  have hM _ _ hs _ _ _ _ := expand(hc, ui.ctx)
+  have s1 s2 s3 s4 s5 s6 s7 s8 := expand(hs, x86_64_linux.stack_pages)
+  obtain v1, _ vg ve from apply(ui.ctx_v1, hc)
+  have vg1 _ := expand(vg, abi.vm_grows)
+  let PR := fn_update(fn_update(empty, "prot", fn_update(fn_update(fn_update(empty, "r", true), "w", true), "x", false)), "kind", 2)
+  have ep: m0.vm.pages[p] = some(PR) := mp(all_elim(s5, {p}), hp, conj(h1, h2))
+  have pl: int_lt(p, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) by arith(h2, s2)
+  have mq: x86_64_linux.mapped(m0.vm, p) by defs(rsimp(ep, ui.some_nn[x := PR], pl), x86_64_linux.mapped)
+  have e2: s.vm.pages[p] = some(PR) by rsimp(ve, trans(mp(all_elim(vg1, {p}), hp, mq), ep))
+  have sn: snd(s.vm.pages[p]) = PR := rewrite(sym(e2), ui.snd_some[x := PR])
+  have st: abi.stack_page(s.vm, p) by defs(rsimp(e2, ui.snd_some[x := PR], ui.some_nn[x := PR], pl), abi.stack_page, x86_64_linux.mapped)
+  have a1 _ := apply(ui.wvm_at[vm := s.vm, p := p], sel(conj(hp, pl)))
+  show := mp(a1, st)
+qed
+
+// a mapped page below the stack: the view's as exec's
+theorem ui.w_low: all m0 s lo top p. ui.ctx(m0, s, lo, top) -> p in omega -> int_lt(p, lo) -> x86_64_linux.mapped(m0.vm, p) -> ui.wvm(s.vm).pages[p] = m0.vm.pages[p]
+proof
+  fix m0 s lo top p
+  assume hc hp h1 hm
+  have hM _ _ hs _ _ _ _ := expand(hc, ui.ctx)
+  have s1 s2 s3 s4 s5 s6 s7 s8 := expand(hs, x86_64_linux.stack_pages)
+  obtain v1, _ vg ve from apply(ui.ctx_v1, hc)
+  have vg1 _ := expand(vg, abi.vm_grows)
+  have e2: s.vm.pages[p] = m0.vm.pages[p] by rsimp(ve, mp(all_elim(vg1, {p}), hp, hm))
+  have nk := mp(all_elim(s6, {p}), hp, conj((int_lt(p, lo) || int_le(top, p) by taut(h1)), hm))
+  have ns: !abi.stack_page(s.vm, p) proof
+    assume hs2
+    have _ k := expand(hs2, abi.stack_page)
+    show by taut(nk, rewrite(e2, k))
+  qed
+  have pl: int_lt(p, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) by taut(expand(hm, x86_64_linux.mapped))
+  have _ a2 := apply(ui.wvm_at[vm := s.vm, p := p], sel(conj(hp, pl)))
+  show := trans(mp(a2, ns), e2)
+qed
+
+// a byte on a page exec mapped, not the pushed return address's: the
+// view's as exec's
+theorem ui.w_byte: all m0 s lo top a. ui.ctx(m0, s, lo, top) -> a in bits(64) -> x86_64_linux.mapped(m0.vm, x86_64_linux.page_of(a)) ->
+  !(int_le(int_sub(m0.gpr[4], 8), a) && int_lt(a, m0.gpr[4])) -> ui.wvm(s.vm).bytes[a] = m0.vm.bytes[a]
+proof
+  fix m0 s lo top a
+  assume hc ha hm hn
+  have hM _ _ _ _ _ h16 _ := expand(hc, ui.ctx)
+  obtain v1, _ vg ve from apply(ui.ctx_v1, hc)
+  have _ vg2 := expand(vg, abi.vm_grows)
+  have g0 := apply(x86i.rsp_typed, hM)
+  have so: all i. i in omega -> int_lt(i, 8) -> !(bits_add(64, bits_sub(64, m0.gpr[4], 8), bits_of_int(64, i)) = a) proof
+    fix i
+    assume hi hil
+    have bi: bits_of_int(64, i) = i := apply(nf.boi_in[n := 64, x := i], eval(), (i in bits(64) by arith(hi, hil)))
+    have e1 := apply(x86.add_nowrap[a := int_sub(m0.gpr[4], 8), b := i], arith(g0, h16), hi, arith(g0, hil))
+    have e0: bits_sub(64, m0.gpr[4], 8) = int_sub(m0.gpr[4], 8) by defs(arith(g0, h16), bits_sub, pow2)
+    assume q
+    have q2: int_add(int_sub(m0.gpr[4], 8), i) = a := rewrite(e1, rewrite(bi, rewrite(e0, q)))
+    show by taut(hn, (int_le(int_sub(m0.gpr[4], 8), a) && int_lt(a, m0.gpr[4]) by arith(q2, hi, hil)))
+  qed
+  have st := apply(x86.store_outside[b := v1.bytes, a := bits_sub(64, m0.gpr[4], 8), n := 8, v := 4198565, c := a], ha, so)
+  have e3 := mp(all_elim(vg2, {a}), ha, hm)
+  have e0: bits_sub(64, m0.gpr[4], 8) = int_sub(m0.gpr[4], 8) by defs(arith(g0, h16), bits_sub, pow2)
+  show by rsimp(ve, st, rewrite(e0, st), e3)
+qed
