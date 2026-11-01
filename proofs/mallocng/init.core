@@ -624,3 +624,118 @@ proof
   qed
   show by defs(taut(s7, r2, r3, r4), abi.stack_reserve)
 qed
+
+// ----------------------------------------------------------------------
+//  _start: xor rbp, rbp; mov rdi, rsp; lea rsi, [rip + ..]; and rsp, -16;
+//  call _start_c
+
+// (_start's code: in the text)
+theorem ui.start_code: all vm. abi.code_at(vm, 4198400, text.code) -> abi.code_at(vm, 4198543, _start.code)
+proof
+  fix vm
+  assume hc
+  have vac: all x0. x0 in omega -> x0 in empty -> x86_64_linux.off_stack_space(vm, int_div(x0, x86_64_linux.PAGE), 1) proof
+    fix x
+    assume _ h
+    show by taut(h, empty_mem[x := x])
+  qed
+  have l: abi.loaded(vm, 4198400, text.code, empty) by defs(taut(hc, vac), abi.loaded)
+  have l2 := mp(all_elim(_start.in_text, {vm}, {empty}), l)
+  show by taut(expand(l2, abi.loaded))
+qed
+
+// (a register written, rip and the flags set: a machine)
+theorem ui.reg_m: all m r f g x. m in x86_64_linux.Machine -> m in univ(1) -> r in bits(64) -> x86i.flags_ok(m, f) -> g in x86_64_linux.Reg -> x in bits(64) ->
+  fn_update(fn_update(fn_update(m, "rip", r), "flags", f), "gpr", fn_update(m.gpr, g, x)) in x86_64_linux.Machine &&
+  fn_update(fn_update(fn_update(m, "rip", r), "flags", f), "gpr", fn_update(m.gpr, g, x)) in univ(1)
+proof
+  fix m r f g x
+  assume mM mu hr hf hg hx
+  have pt := apply(x86i.parts, mM)
+  have f1 := expand(hf, x86i.flags_ok)
+  have m2: fn_update(fn_update(fn_update(m, "rip", r), "flags", f), "gpr", fn_update(m.gpr, g, x)) in x86_64_linux.Machine
+    by defs(simp(expand(mM, x86_64_linux.Machine), mu, hr, f1, hg, hx, pt), x86_64_linux.Machine)
+  have m3: fn_update(fn_update(fn_update(m, "rip", r), "flags", f), "gpr", fn_update(m.gpr, g, x)) in univ(1) by simp(mu, hr, f1, hg, hx)
+  show by taut(m2, m3)
+qed
+
+// (... rip and a register only)
+theorem ui.reg_m0: all m r g x. m in x86_64_linux.Machine -> m in univ(1) -> r in bits(64) -> g in x86_64_linux.Reg -> x in bits(64) ->
+  fn_update(fn_update(m, "rip", r), "gpr", fn_update(m.gpr, g, x)) in x86_64_linux.Machine &&
+  fn_update(fn_update(m, "rip", r), "gpr", fn_update(m.gpr, g, x)) in univ(1)
+proof
+  fix m r g x
+  assume mM mu hr hg hx
+  have pt := apply(x86i.parts, mM)
+  have m2: fn_update(fn_update(m, "rip", r), "gpr", fn_update(m.gpr, g, x)) in x86_64_linux.Machine
+    by defs(simp(expand(mM, x86_64_linux.Machine), mu, hr, hg, hx, pt), x86_64_linux.Machine)
+  have m3: fn_update(fn_update(m, "rip", r), "gpr", fn_update(m.gpr, g, x)) in univ(1) by simp(mu, hr, hg, hx)
+  show by taut(m2, m3)
+qed
+
+// (_start's first 4 instructions, registers only, at m4 before the call)
+def ui.s4(m0, m4) := m4 in x86_64_linux.Machine && m4 in univ(1) && m4.vm = m0.vm && m4.rip = 4198560 &&
+  m4.gpr[4] = bits_and(64, m0.gpr[4], bits_sext(8, 64, 240)) && m4.gpr[7] = m0.gpr[4] && m4.flags.df = m0.flags.df &&
+  m4.os = m0.os && m4.fs_base = m0.fs_base && m4.gs_base = m0.gs_base && m4.cpu = m0.cpu
+
+theorem ui.start4: all m0 m. m0 in x86_64_linux.Machine -> m0 in univ(1) -> abi.code_at(m0.vm, 4198400, text.code) -> m0.rip = 4198543 ->
+  ui.UR(4198873, m0, m) -> ex m4. ui.s4(m0, m4) && ui.UR(4198873, m4, m)
+proof
+  fix m0 m
+  assume hM hU hc hr hur
+  have sc := apply(ui.start_code[vm := m0.vm], hc)
+  have g4 := apply(x86i.rsp_typed, hM)
+  // xor rbp, rbp
+  obtain m1 v1, hs1 hu1 from apply(ui.until_step[t := 4198873, m0 := m0, m := m], (!(m0.rip = 4198873) by rsimp(hr)), hur)
+  have eb1 := mp(all_elim(_start.at_40108f, {m0}, {ok(m1, v1)}), hs1, sc, hr)
+  obtain f1, hf1 he1 from mp(all_elim(x86i.xor64_rr, {m0}, {ok(m1, v1)}, {5}, {5}, {3}), hM, hU, eval(), eval(), eb1)
+  let M1 := fn_update(fn_update(fn_update(m0, "rip", bits_add(64, m0.rip, 3)), "flags", f1), "gpr", fn_update(m0.gpr, 5, bits_xor(64, m0.gpr[5], m0.gpr[5])))
+  have q1 _ := apply(ui.ok_inj, he1)
+  have u1: ui.UR(4198873, M1, m) := rewrite(q1, hu1)
+  have T1M T1U := apply(ui.reg_m[m := m0, r := bits_add(64, m0.rip, 3), f := f1, g := 5, x := bits_xor(64, m0.gpr[5], m0.gpr[5])], hM, hU,
+    (bits_add(64, m0.rip, 3) in bits(64) by simp()), hf1, eval(), (bits_xor(64, m0.gpr[5], m0.gpr[5]) in bits(64) by simp()))
+  have r1: M1.rip = 4198546 by rsimp(hr)
+  have v1: M1.vm = m0.vm by rsimp()
+  // mov rdi, rsp
+  obtain m2 v2, hs2 hu2 from apply(ui.until_step[t := 4198873, m0 := M1, m := m], rewrite(sym(r1), (!(4198546 = 4198873) by eval())), u1)
+  have eb2 := mp(all_elim(_start.at_401092, {M1}, {ok(m2, v2)}), hs2, rewrite(sym(v1), sc), r1)
+  have he2 := mp(all_elim(x86i.mov64_rr, {M1}, {ok(m2, v2)}, {4}, {7}, {tag(0, 7)}, {tag(0, 4)}, {3}), T1M, T1U, eval(), eval(), eb2)
+  let M2 := fn_update(fn_update(M1, "rip", bits_add(64, M1.rip, 3)), "gpr", fn_update(M1.gpr, 7, M1.gpr[4]))
+  have q2 _ := apply(ui.ok_inj, he2)
+  have u2: ui.UR(4198873, M2, m) := rewrite(q2, hu2)
+  have g14: M1.gpr[4] = m0.gpr[4] by rsimp()
+  have T2M T2U := apply(ui.reg_m0[m := M1, r := bits_add(64, M1.rip, 3), g := 7, x := M1.gpr[4]], T1M, T1U,
+    (bits_add(64, M1.rip, 3) in bits(64) by simp()), eval(), rewrite(sym(g14), g4))
+  have r2: M2.rip = 4198549 by rsimp(hr)
+  have v2e: M2.vm = m0.vm by rsimp()
+  // lea rsi, [rip + d]
+  let MEM := fn_update(fn_update(fn_update(fn_update(fn_update(empty, "seg", 0), "base", tag(1, empty)), "index", none), "scale", 1), "disp", 18446744073705353060)
+  obtain m3 v3, hs3 hu3 from apply(ui.until_step[t := 4198873, m0 := M2, m := m], rewrite(sym(r2), (!(4198549 = 4198873) by eval())), u2)
+  have eb3 := mp(all_elim(_start.at_401095, {M2}, {ok(m3, v3)}), hs3, rewrite(sym(v2e), sc), r2)
+  have he3 := mp(all_elim(x86i.lea_rip, {M2}, {ok(m3, v3)}, {6}, {18446744073705353060}, {tag(2, MEM)}, {tag(2, MEM)}, {tag(0, 6)}, {7}), T2M, T2U, eval(), eval(), eb3)
+  let X3 := bits_add(64, int_add(bits_add(64, M2.rip, 7), 18446744073705353060), 0)
+  let M3 := fn_update(fn_update(M2, "rip", bits_add(64, M2.rip, 7)), "gpr", fn_update(M2.gpr, 6, X3))
+  have q3 _ := apply(ui.ok_inj, he3)
+  have u3: ui.UR(4198873, M3, m) := rewrite(q3, hu3)
+  have T3M T3U := apply(ui.reg_m0[m := M2, r := bits_add(64, M2.rip, 7), g := 6, x := X3], T2M, T2U,
+    (bits_add(64, M2.rip, 7) in bits(64) by simp()), eval(), (X3 in bits(64) by simp()))
+  have r3: M3.rip = 4198556 by rsimp(hr)
+  have v3e: M3.vm = m0.vm by rsimp()
+  // and rsp, -16
+  obtain m4 v4, hs4 hu4 from apply(ui.until_step[t := 4198873, m0 := M3, m := m], rewrite(sym(r3), (!(4198556 = 4198873) by eval())), u3)
+  have eb4 := mp(all_elim(_start.at_40109c, {M3}, {ok(m4, v4)}), hs4, rewrite(sym(v3e), sc), r3)
+  obtain f4, hf4 he4 from mp(all_elim(x86i.and64_imm8, {M3}, {ok(m4, v4)}, {4}, {tag(0, 4)}, {240}, {4}), T3M, T3U, eval(), eval(), eb4)
+  let M4 := fn_update(fn_update(fn_update(M3, "rip", bits_add(64, M3.rip, 4)), "flags", f4), "gpr", fn_update(M3.gpr, 4, bits_and(64, M3.gpr[4], bits_sext(8, 64, 240))))
+  have q4 _ := apply(ui.ok_inj, he4)
+  have u4: ui.UR(4198873, M4, m) := rewrite(q4, hu4)
+  have g34: M3.gpr[4] = m0.gpr[4] by rsimp()
+  have T4M T4U := apply(ui.reg_m[m := M3, r := bits_add(64, M3.rip, 4), f := f4, g := 4, x := bits_and(64, M3.gpr[4], bits_sext(8, 64, 240))], T3M, T3U,
+    (bits_add(64, M3.rip, 4) in bits(64) by simp()), hf4, eval(), (bits_and(64, M3.gpr[4], bits_sext(8, 64, 240)) in bits(64) by simp()))
+  have _ _ d1 := expand(hf1, x86i.flags_ok)
+  have _ _ d4 := expand(hf4, x86i.flags_ok)
+  have s4: ui.s4(m0, M4) by defs(taut(T4M, T4U, (M4.vm = m0.vm by rsimp()), (M4.rip = 4198560 by rsimp(hr)),
+    (M4.gpr[4] = bits_and(64, m0.gpr[4], bits_sext(8, 64, 240)) by rsimp(g34)), (M4.gpr[7] = m0.gpr[4] by rsimp()),
+    (M4.flags.df = m0.flags.df by rsimp(d4, d1)), (M4.os = m0.os by rsimp()), (M4.fs_base = m0.fs_base by rsimp()),
+    (M4.gs_base = m0.gs_base by rsimp()), (M4.cpu = m0.cpu by rsimp())), ui.s4)
+  show by ex_intro({M4}, taut(s4, u4))
+qed
