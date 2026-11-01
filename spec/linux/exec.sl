@@ -145,7 +145,13 @@ pred stack_pages(vm: Vm, lo: nat, top: nat) =
   vm.stack_limit >= (top - lo) * PAGE &&
   (all p: nat. lo <= p && p < top ->
      vm.pages[p] = some(Page { prot: Prot { r: true, w: true, x: false }, kind: stack })) &&
-  (all p: nat. (p < lo || p >= top) && mapped(vm, p) -> vm.pages[p].value.kind != stack)
+  (all p: nat. (p < lo || p >= top) && mapped(vm, p) -> vm.pages[p].value.kind != stack) &&
+  // the stack's growth room: down to its floor (stack_top less the
+  // limit, RLIMIT_STACK), nothing mapped there nor within the guard gap
+  // below it -- Linux puts mmap_base (and the vDSO mapped from it) below
+  // the stack's rlimit and gap, a non-PIE image far below
+  STACK_GUARD_GAP <= stack_floor(vm) &&
+  (all p: nat. p < lo && mapped(vm, p) -> (p + 1) * PAGE + STACK_GUARD_GAP <= stack_floor(vm))
 
 pred exec_state(f: File, argv: List[List[bits[8]]], envp: List[List[bits[8]]], m: Machine) =
   elf_ok(f) &&
