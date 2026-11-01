@@ -49,15 +49,26 @@ The step left:
   `ui.w_stk`, `ui.w_word`; strings, `ui.cstr_stk`; the vector,
   `ui.auxv_view`, `ui.aux_eq`; envp, `ui.env_view`; globals, `.bss`,
   headers, ctors: `ui.globals`, `ui.tls_fresh`, `ui.phdrs`, `ui.ctors`).
-  Left: `ui.SX` from exec_state at `ui.s5` (lo/top/auxv from exec's
-  existential, `int_lt(1032, lo)` from the image's last page, argv's
-  typing from the claim); the view world typed (`tr.vw(..)` in World,
-  univ(1)); `mp.empty_rep`'s premises from `ui.at_main` and exec's
-  image (the context zero from .bss, the thread block in .bss apart from
-  the allocator's ranges); the owned bound (the statics, the thread
-  descriptor, the auxv); assembling `musl.init` (claim's run →
-  `ui.until_parts` → `ui.start4` → `ui.start_call` → `ui.c_stop` →
-  `ui.main_world` → `mp.empty_rep`), moving claim.core after init.core.
+  The claim's premises to main: `ui.to_main` (exec's stack facts
+  `ui.SX`, main's world `ui.at_main` with the thread at `thread_at`:
+  in builtin_tls). Main's memory: `ui.cv_eq` (the claim's `c_vm` is
+  `ui.wvm`), `ui.main_pg`, `ui.main_byte` (pages and bytes outside
+  startup's writes: the entry view's, hence exec's).
+  Left (d4): `mp.empty_rep`'s premises for `ui.C` (= musl.cfg) and
+  `mp.a0(AT, auxv)` at `empty_heap(m, initial_auxv)`: Cfg; blocks none;
+  `separate(regions(..))` (regions made concrete: data_ranges, ro_ranges
+  of the 8 headers -- segments 0, 1, 2 read-only --, the reserve (0,0);
+  each address in one range at most); the context zero (.bss, apart from
+  startup's exact spans: needs a span-exact `ui.sw_range`); image_ok (ro
+  segments' bytes and last-page protections via `ui.main_byte`/`main_pg`,
+  need_locks and the lock zero); classes/debruijn/counts tables (file
+  bytes vs the layer's tables: a closed list equality by eval, then
+  pointwise); fresh_ok (libc.auxv word from `ui.at_main`, the vector on
+  the stack via `tr.vok`'s live bytes, apart from the fixed ranges);
+  perms_ok, free_rw (data pages rw); brk ≤ TASK_SIZE; fp_mapped (fixed
+  ranges mapped, the vector in the stack space); the descriptor's bytes
+  apart from fp_ranges (in builtin_tls); aux_live. Then the owned bound
+  and assembling `musl.init`, moving claim.core after init.core.
 
   The auxiliary vector is on the initial stack: in the claim's heap (the C
   view, `c_vm`: stack pages hidden) live stack objects (`rep.aux`), in the
