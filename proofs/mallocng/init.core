@@ -3291,3 +3291,221 @@ proof
   have dm: abi.in_domain(V, abi.wob(objs, tr.cbm(false, m.fs_base)), x) by defs(taut(mV, kV, cb), abi.in_domain)
   show := trans(mp(all_elim(wb, {x}), hx, dm), vb)
 qed
+
+// ----------------------------------------------------------------------
+//  The allocator's ranges in the empty state
+
+// (the file: bytes; the configuration a Cfg)
+theorem ui.bytes_list: all c b. c = bytes_seq(b) -> (all i. i in bytes_len(b) -> bytes_at(b, i) in bits(8)) -> bytes_len(b) in omega ->
+  c in list_type(bits(8))
+proof
+  fix c b
+  assume e h hn
+  show := rewrite(sym(e), apply(tr.bytes_list, {b}, {bits(8)}, h, hn))
+qed
+
+theorem ui.file_list: musl_malloc.file in list_type(bits(8))
+proof
+  show := mp(apply(ui.bytes_list, unfold(musl_malloc.file)), eval(), eval())
+qed
+
+theorem ui.file_bytes: musl_malloc.file in seq_type(bits(8)) && musl_malloc.file in univ(1)
+proof
+  have s: musl_malloc.file in seq_type(bits(8)) by simp(unsel(expand(ui.file_list, list_type)))
+  have u := mp(univ_trans[u := 1, a := musl_malloc.file, b := list_type(bits(8))], mp(mp.list_univ[t := bits(8)], bits_univ[n := 8]), ui.file_list)
+  show by taut(s, u)
+qed
+
+theorem ui.C_ok: ui.C in mallocng.Cfg
+proof
+  show by defs(simp(ui.file_bytes), mallocng.Cfg)
+qed
+
+// the read-only loads' bytes: the first page's, the text's, the
+// read-only data's
+abbrev ui.RO(a) := (int_le(4194304, a) && int_lt(a, 4194816)) || (int_le(4198400, a) && int_lt(a, 4216671)) || (int_le(4218880, a) && int_lt(a, 4219184))
+// the allocator's data symbols: the context, the lock, libc's 16 bytes
+abbrev ui.DATA(a) := (int_le(4227328, a) && int_lt(a, 4228256)) || (int_le(4227300, a) && int_lt(a, 4227304)) || (int_le(4227136, a) && int_lt(a, 4227152))
+
+// (a byte of a header's read-only range: of a read-only load)
+theorem ui.ro_in: all a k. a in omega -> k in omega ->
+  mallocng.in_range(a, ite(x86_64_linux.is_load(musl_malloc.file, k) && !bit(x86_64_linux.segment(musl_malloc.file, k).flags, 1),
+    pair(x86_64_linux.segment(musl_malloc.file, k).vaddr, x86_64_linux.segment(musl_malloc.file, k).memsz), pair(0, 0))) -> ui.RO(a)
+proof
+  fix a k
+  assume ha hk hr
+  let F := musl_malloc.file
+  let c := x86_64_linux.is_load(F, k) && !bit(x86_64_linux.segment(F, k).flags, 1)
+  let P := pair(x86_64_linux.segment(F, k).vaddr, x86_64_linux.segment(F, k).memsz)
+  have c0: !c -> ui.RO(a) proof
+    assume nc
+    have e := mp(ite_f[c := c, a := P, b := pair(0, 0)], nc)
+    have r0 := rsimp(expand(rewrite(e, hr), mallocng.in_range))
+    show by arith(r0, ha)
+  qed
+  have c1: c -> ui.RO(a) proof
+    assume hc
+    have hl hnb := hc
+    have e := mp(ite_t[c := c, a := P, b := pair(0, 0)], hc)
+    have b1 b2 := rsimp(expand(rewrite(e, hr), mallocng.in_range))
+    have kk := apply(ui.loads[j := k], hk, hl)
+    have {g0 = s0, g1 = s1, g2 = s2, g3 = s3} := ui.elf
+    have _ _ _ v0 _ m0 := expand(g0, ui.segis)
+    have _ _ _ v1 _ m1 := expand(g1, ui.segis)
+    have _ _ _ v2 _ m2 := expand(g2, ui.segis)
+    have _ f3 _ _ _ _ := expand(g3, ui.segis)
+    have d0: k = 0 -> ui.RO(a) proof
+      assume e0
+      show by arith(rewrite(e0, b1), rewrite(e0, b2), v0, m0)
+    qed
+    have d1: k = 1 -> ui.RO(a) proof
+      assume e0
+      show by arith(rewrite(e0, b1), rewrite(e0, b2), v1, m1)
+    qed
+    have d2: k = 2 -> ui.RO(a) proof
+      assume e0
+      show by arith(rewrite(e0, b1), rewrite(e0, b2), v2, m2)
+    qed
+    have d3: k = 3 -> ui.RO(a) proof
+      assume e0
+      show by taut(rewrite(f3, rewrite(e0, hnb)), (bit(6, 1) by eval()))
+    qed
+    show by taut(kk, d0, d1, d2, d3)
+  qed
+  show by taut(c0, c1)
+qed
+
+// a byte of the empty state's ranges: of a read-only load, a data
+// symbol, or the auxiliary vector
+def ui.FW(AT, L, a) := ui.RO(a) || ui.DATA(a) || mallocng.in_ranges(a, mallocng.auxv_ranges(mp.a0(AT, L)))
+
+theorem ui.fp_where: all AT L a. AT in omega -> L in list_type(cart(omega, omega)) -> a in omega ->
+  mallocng.in_ranges(a, mallocng.fp_ranges(ui.C, mp.a0(AT, L))) ->
+  ui.RO(a) || ui.DATA(a) || mallocng.in_ranges(a, mallocng.auxv_ranges(mp.a0(AT, L)))
+proof
+  fix AT L a
+  assume hat hl ha h
+  let A := mp.a0(AT, L)
+  let F := musl_malloc.file
+  have {ab = abs, au = univ} := apply(mp.a0_type[AT := AT, L := L], hat, hl)
+  have {fr = front, ar = areas, rs = reserve, cl = classes, db = debruijn, gr = groups} := apply(mp.fp_pieces[c := ui.C, A := A], ui.C_ok, au, ab)
+  let RO := mallocng.ro_ranges(ui.C.file)
+  let DA := mallocng.data_ranges(ui.C)
+  let AX := mallocng.auxv_ranges(A)
+  let AR := fn_build(int_sub(seq_len(A.areas), 0), x0. pair(A.areas[int_add(0, x0)], 4096))
+  let RS := seq_one(pair(A.reserve, int_mul(4096, A.reserve_cnt)))
+  let SC := seq_one(pair(ui.C.sct, int_mul(2, 48)))
+  let DB := seq_one(pair(ui.C.dbj, 32))
+  let GR := fn_build(int_sub(seq_len(A.used), 0), x0. mallocng.group_range(A.metas[A.used[int_add(0, x0)]]))
+  have {rd = rodata, xl = auxv} := apply(mp.front_pieces[c := ui.C, A := A], ui.C_ok, au, ab)
+  have ro := apply(mp.ro_list, (ui.C.file in seq_type(bits(8)) by simp(ui.file_bytes)))
+  have cf: ui.C.ctx in omega && ui.C.lock in omega && ui.C.libc in omega by simp(ui.C_ok)
+  have o1 := apply(tr.seq_one_type, (pair(ui.C.ctx, mallocng.CTX_SIZE) in univ(1) by simp(cf)))
+  have o2 := apply(tr.seq_one_type, (pair(ui.C.lock, 4) in univ(1) by simp(cf)))
+  have o3 := apply(tr.seq_one_type, (pair(ui.C.libc, 16) in univ(1) by simp(cf)))
+  have dl: DA in list_type(univ(1)) by defs(apply(tr.concat_list, apply(tr.concat_list, o1, o2), o3), mallocng.data_ranges)
+  have t1 := apply(tr.concat_list, fr, ar)
+  have t2 := apply(tr.concat_list, t1, rs)
+  have t3 := apply(tr.concat_list, t2, cl)
+  have t4 := apply(tr.concat_list, t3, db)
+  have h0 := expand(h, mallocng.fp_ranges, mallocng.fixed_ranges)
+  have s0: mallocng.in_ranges(a, seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(RO, DA), AX), AR), RS), SC), DB)) || mallocng.in_ranges(a, GR)
+    by taut(apply(mp.ranges_cat[a := a, xs := seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(RO, DA), AX), AR), RS), SC), DB), ys := GR], t4, gr), h0)
+  // (no groups, no areas, no reserve)
+  have {u0 = used, r0 = areas} := mp.e_lens[AT := AT, L := L]
+  have ng: !mallocng.in_ranges(a, GR) proof
+    assume hg
+    obtain k, ko kl _ from apply(mp.ranges_build_inv[a := a, n := seq_len(A.used), r := x0. mallocng.group_range(A.metas[A.used[x0]])], (seq_len(A.used) in omega by arith(u0)), hg)
+    show by arith(ko, kl, u0)
+  qed
+  have na: !mallocng.in_ranges(a, AR) proof
+    assume hg
+    obtain k, ko kl _ from apply(mp.ranges_build_inv[a := a, n := seq_len(A.areas), r := x0. pair(A.areas[x0], 4096)], (seq_len(A.areas) in omega by arith(r0)), hg)
+    show by arith(ko, kl, r0)
+  qed
+  // (the reserve: none)
+  have nr: !mallocng.in_ranges(a, RS) proof
+    assume hg
+    have q0: mallocng.in_range(a, pair(A.reserve, int_mul(4096, A.reserve_cnt))) by taut(mp.ranges_one[a := a, r := pair(A.reserve, int_mul(4096, A.reserve_cnt))], hg)
+    have q := rsimp(expand(q0, mallocng.in_range))
+    show by arith(q, ha)
+  qed
+  // (the class table, the de Bruijn table: in the read-only data)
+  have ys: mallocng.in_ranges(a, SC) -> ui.RO(a) proof
+    assume hg
+    have q0: mallocng.in_range(a, pair(ui.C.sct, int_mul(2, 48))) by taut(mp.ranges_one[a := a, r := pair(ui.C.sct, int_mul(2, 48))], hg)
+    have q1 q2 := rsimp(expand(q0, mallocng.in_range))
+    show by arith(q1, q2, (ui.C.sct = 4218912 by eval()))
+  qed
+  have yd: mallocng.in_ranges(a, DB) -> ui.RO(a) proof
+    assume hg
+    have q0: mallocng.in_range(a, pair(ui.C.dbj, 32)) by taut(mp.ranges_one[a := a, r := pair(ui.C.dbj, 32)], hg)
+    have q1 q2 := rsimp(expand(q0, mallocng.in_range))
+    show by arith(q1, q2, (ui.C.dbj = 4219040 by eval()))
+  qed
+  // (the data symbols)
+  have yda: mallocng.in_ranges(a, DA) -> ui.DATA(a) proof
+    assume hg
+    let D1 := seq_one(pair(ui.C.ctx, mallocng.CTX_SIZE))
+    let D2 := seq_one(pair(ui.C.lock, 4))
+    let D3 := seq_one(pair(ui.C.libc, 16))
+    have h1 := expand(hg, mallocng.data_ranges)
+    have o12 := apply(tr.concat_list, o1, o2)
+    have k1: mallocng.in_ranges(a, seq_concat(D1, D2)) || mallocng.in_ranges(a, D3) by taut(apply(mp.ranges_cat[a := a, xs := seq_concat(D1, D2), ys := D3], o12, o3), h1)
+    have e1: mallocng.in_ranges(a, D1) -> ui.DATA(a) proof
+      assume h
+      have q1 q2 := rsimp(expand((mallocng.in_range(a, pair(ui.C.ctx, mallocng.CTX_SIZE)) by taut(mp.ranges_one[a := a, r := pair(ui.C.ctx, mallocng.CTX_SIZE)], h)), mallocng.in_range))
+      show by arith(q1, q2, (ui.C.ctx = 4227328 by eval()), (mallocng.CTX_SIZE = 928 by defs(eval(), mallocng.CTX_SIZE)))
+    qed
+    have e2: mallocng.in_ranges(a, D2) -> ui.DATA(a) proof
+      assume h
+      have q1 q2 := rsimp(expand((mallocng.in_range(a, pair(ui.C.lock, 4)) by taut(mp.ranges_one[a := a, r := pair(ui.C.lock, 4)], h)), mallocng.in_range))
+      show by arith(q1, q2, (ui.C.lock = 4227300 by eval()))
+    qed
+    have e3: mallocng.in_ranges(a, D3) -> ui.DATA(a) proof
+      assume h
+      have q1 q2 := rsimp(expand((mallocng.in_range(a, pair(ui.C.libc, 16)) by taut(mp.ranges_one[a := a, r := pair(ui.C.libc, 16)], h)), mallocng.in_range))
+      show by arith(q1, q2, (ui.C.libc = 4227136 by eval()))
+    qed
+    show by taut(k1, apply(mp.ranges_cat[a := a, xs := D1, ys := D2], o1, o2), e1, e2, e3)
+  qed
+  // (the read-only loads)
+  have yro: mallocng.in_ranges(a, RO) -> ui.RO(a) proof
+    assume hg
+    have fe: ui.C.file = musl_malloc.file by rsimp()
+    have h1 := expand(rewrite(fe, hg), mallocng.ro_ranges)
+    have {pn = phnum} := ui.elf
+    obtain k, ko _ kr from apply(mp.ranges_build_inv[a := a, n := x86_64_linux.phnum(F),
+      r := y. ite(x86_64_linux.is_load(F, y) && !bit(x86_64_linux.segment(F, y).flags, 1), pair(x86_64_linux.segment(F, y).vaddr, x86_64_linux.segment(F, y).memsz), pair(0, 0))],
+      (x86_64_linux.phnum(F) in omega by arith(pn)), h1)
+    show := apply(ui.ro_in[a := a, k := k], ha, ko, kr)
+  qed
+  have p1 := apply(mp.ranges_cat[a := a, xs := seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(RO, DA), AX), AR), RS), SC), ys := DB], t3, db)
+  have p2 := apply(mp.ranges_cat[a := a, xs := seq_concat(seq_concat(seq_concat(seq_concat(RO, DA), AX), AR), RS), ys := SC], t2, cl)
+  have p3 := apply(mp.ranges_cat[a := a, xs := seq_concat(seq_concat(seq_concat(RO, DA), AX), AR), ys := RS], t1, rs)
+  have p4 := apply(mp.ranges_cat[a := a, xs := seq_concat(seq_concat(RO, DA), AX), ys := AR], fr, ar)
+  have p5 := apply(mp.ranges_cat[a := a, xs := seq_concat(RO, DA), ys := AX], rd, xl)
+  have p6 := apply(mp.ranges_cat[a := a, xs := RO, ys := DA], ro, dl)
+  have w1: mallocng.in_ranges(a, DB) -> ui.FW(AT, L, a) proof
+    assume h2
+    show by defs(taut(mp(yd, h2)), ui.FW)
+  qed
+  have w2: mallocng.in_ranges(a, SC) -> ui.FW(AT, L, a) proof
+    assume h2
+    show by defs(taut(mp(ys, h2)), ui.FW)
+  qed
+  have w3: mallocng.in_ranges(a, RO) -> ui.FW(AT, L, a) proof
+    assume h2
+    show by defs(taut(mp(yro, h2)), ui.FW)
+  qed
+  have w4: mallocng.in_ranges(a, DA) -> ui.FW(AT, L, a) proof
+    assume h2
+    show by defs(taut(mp(yda, h2)), ui.FW)
+  qed
+  have w5: mallocng.in_ranges(a, AX) -> ui.FW(AT, L, a) proof
+    assume h2
+    show by defs(taut(h2), ui.FW)
+  qed
+  have fw: ui.FW(AT, L, a) by taut(s0, ng, p1, w1, p2, w2, p3, nr, p4, na, p5, p6, w3, w4, w5)
+  show by taut(expand(fw, ui.FW))
+qed
