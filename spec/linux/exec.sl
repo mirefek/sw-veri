@@ -125,6 +125,12 @@ pred stack_data(vm: Vm, sp: nat, top: nat, argv: List[List[bits[8]]], envp: List
   (ex q: nat. aux(auxv, AT_RANDOM, q) && in_stack(sp, top, q, 16)) &&
   (ex q: nat, s: List[bits[8]]. aux(auxv, AT_EXECFN, q) && cstring(vm, q, s) && in_stack(sp, top, q, len(s) + 1))
 
+// the program headers' address in the image: the first load segment's
+// load address (its vaddr less its offset) plus e_phoff
+pred phdr_at(f: File, q: nat) =
+  ex i: nat. is_load(f, i) && (all j: nat. j < i -> !is_load(f, j)) &&
+    q = segment(f, i).vaddr - segment(f, i).offset + phoff(f)
+
 pred auxv_ok(f: File, vm: Vm, os: Os, auxv: List[(nat, nat)]) =
   aux(auxv, AT_PAGESZ, PAGE) && aux(auxv, AT_ENTRY, entry_of(f)) &&
   aux(auxv, AT_PHENT, 56) && aux(auxv, AT_PHNUM, phnum(f)) &&
@@ -132,7 +138,9 @@ pred auxv_ok(f: File, vm: Vm, os: Os, auxv: List[(nat, nat)]) =
   aux(auxv, AT_SECURE, if os.secure { 1 } else { 0 }) &&
   aux(auxv, AT_UID, uint(os.creds.uid)) && aux(auxv, AT_EUID, uint(os.creds.euid)) &&
   aux(auxv, AT_GID, uint(os.creds.gid)) && aux(auxv, AT_EGID, uint(os.creds.egid)) &&
-  (ex q: nat. aux(auxv, AT_PHDR, q) && readable(vm, q, 56 * phnum(f)) &&
+  // (AT_PHDR: the headers as the image maps them -- Linux's load_addr +
+  // e_phoff, load_addr the first load's vaddr less its offset)
+  (ex q: nat. aux(auxv, AT_PHDR, q) && phdr_at(f, q) && readable(vm, q, 56 * phnum(f)) &&
      (all i: nat. i < 56 * phnum(f) -> vm.bytes[bits[64](q + i)] = f[phoff(f) + i])) &&
   (ex q: nat. aux(auxv, AT_RANDOM, q) && readable(vm, q, 16)) &&
   (all k: nat, j: nat. k < len(auxv) && j < len(auxv) && k != j -> auxv[k][0] != auxv[j][0] || auxv[k][0] = AT_NULL)
@@ -167,6 +175,8 @@ pred exec_state(f: File, argv: List[List[bits[8]]], envp: List[List[bits[8]]], m
      // was not started with the SVr4 personality MMAP_PAGE_ZERO, which maps it)
      (!covered(f, 0) -> !mapped(m.vm, 0)) &&
      lo * PAGE <= uint(m.gpr[rsp]) && uint(m.gpr[rsp]) < top * PAGE &&
+     // (execve takes at most MAX_ARG_STRINGS = 2^31 - 1 of each)
+     len(argv) < 2^31 && len(envp) < 2^31 &&
      stack_layout(m.vm, uint(m.gpr[rsp]), argv, envp, auxv) && auxv_ok(f, m.vm, m.os, auxv) &&
      stack_data(m.vm, uint(m.gpr[rsp]), top * PAGE, argv, envp, auxv)) &&
   // brk: page aligned, somewhere above the image (randomized), empty, in
