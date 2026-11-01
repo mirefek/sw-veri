@@ -3989,3 +3989,51 @@ proof
   have sR := apply(ui.sep_class[rs := R, f := a. ui.F(a)], rt, H)
   show := rewrite(sym(peq), sR)
 qed
+
+// (memory as the invariant sees it: the byte, the page)
+theorem ui.mview_at: all vm a. a in omega -> mallocng.b8(mallocng.mview(vm, mallocng.all_bytes()), a) = vm.bytes[bits_of_int(64, a)] &&
+  mallocng.pg(mallocng.mview(vm, mallocng.all_bytes()), a) = vm.pages[int_div(a, x86_64_linux.PAGE)]
+proof
+  fix vm a
+  assume ha
+  let X := pair(vm.bytes[bits_of_int(64, a)], vm.pages[int_div(a, x86_64_linux.PAGE)])
+  have ab: a in mallocng.all_bytes() by defs(sel(conj(ha, (true by taut()))), mallocng.all_bytes)
+  have e1 := mp(app_fn_build[d := omega, v := x0. ite(x0 in mallocng.all_bytes(), some(pair(vm.bytes[bits_of_int(64, x0)], vm.pages[int_div(x0, x86_64_linux.PAGE)])), none), a := a], ha)
+  have e2 := trans(e1, mp(ite_t[c := a in mallocng.all_bytes(), a := some(X), b := none], ab))
+  have e3: mallocng.mview(vm, mallocng.all_bytes())[a] = some(X) by defs(e2, mallocng.mview)
+  have s := rewrite(sym(e3), ui.snd_some[x := X])
+  show by defs(rsimp(s), mallocng.b8, mallocng.pg)
+qed
+
+// the memory at main as the invariant sees it
+abbrev ui.MV(m) := mallocng.mview(ui.wvm(m.vm), mallocng.all_bytes())
+
+// a byte on the image's pages (below its globals' end), not startup's
+// write: at main exec's, its page exec's
+theorem ui.mm_img: all m0 s lo top argv envp auxv m V fs a. ui.MX(m0, s, lo, top, argv, envp, auxv, m, V, fs) -> a in omega -> int_lt(a, 4228696) ->
+  ui.img_page(int_div(a, x86_64_linux.PAGE), false) -> !(a in startup_specs.start_writes(ui.G)) ->
+  mallocng.b8(ui.MV(m), a) = m0.vm.bytes[a] && mallocng.pg(ui.MV(m), a) = m0.vm.pages[int_div(a, x86_64_linux.PAGE)]
+proof
+  fix m0 s lo top argv envp auxv m V fs a
+  assume h ha hlt hpg hw
+  have hx hat := expand(h, ui.MX)
+  have hc hlo .. := expand(hx, ui.SX)
+  have he := expand(hx, ui.SX).10
+  have _ _ _ _ hl .. := expand(hc, ui.ctx)
+  let p := int_div(a, x86_64_linux.PAGE)
+  have ab: a in bits(64) by arith(ha, hlt)
+  have bi: bits_of_int(64, a) = a := apply(nf.boi_in[n := 64, x := a], eval(), ab)
+  have po: p in omega by arith(ha)
+  have mw kd _ _ ew := apply(ui.w_img[argv := argv, envp := envp, m0 := m0, s := s, lo := lo, top := top, p := p, w := false], he, hc, hlo, po, hpg)
+  have mq := apply(ui.mapped_eq[v1 := ui.wvm(s.vm), v2 := m0.vm, p := p], ew, mw)
+  have pq: x86_64_linux.page_of(a) = p by defs(rsimp(ab), x86_64_linux.page_of)
+  have b1 := apply(ui.main_byte[s := s, objs := ui.iobjs(m0.gpr[4], top), m := m, a := m0.gpr[4], V := V, fs := fs, x := a], hat, ab, mw, kd, hw)
+  have b2 := apply(ui.w_byte[m0 := m0, s := s, lo := lo, top := top, a := a], hc, ab, rewrite(sym(pq), mq), (!(int_le(int_sub(m0.gpr[4], 8), a) && int_lt(a, m0.gpr[4])) by arith(hl, hlo, hlt)))
+  have pl: int_lt(p, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) by arith(ha, hlt)
+  have g1 g2 := apply(ui.main_pg[s := s, objs := ui.iobjs(m0.gpr[4], top), m := m, a := m0.gpr[4], V := V, fs := fs, p := p], hat, po, pl)
+  have mv1 mv2 := apply(ui.mview_at[vm := ui.wvm(m.vm), a := a], ha)
+  have wb: ui.wvm(m.vm).bytes[a] = m.vm.bytes[a] by rsimp()
+  have r1: mallocng.b8(ui.MV(m), a) = m0.vm.bytes[a] := trans(rewrite(bi, mv1), trans(wb, trans(b1, b2)))
+  have r2: mallocng.pg(ui.MV(m), a) = m0.vm.pages[p] := trans(mv2, trans(g1, trans(apply(ui.app_eq[k := p], g2), ew)))
+  show := conj(r1, r2)
+qed
