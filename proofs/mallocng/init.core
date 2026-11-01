@@ -4299,3 +4299,65 @@ proof
   have fe: ui.C.file = F by rsimp()
   show by defs(taut(rewrite(sym(fe), ro), z2, z3), mallocng.image_ok)
 qed
+
+// a byte of the read-only data at main: the file's, its page the load's
+theorem ui.ro2_byte: all m0 s lo top argv envp auxv m V fs x. ui.MX(m0, s, lo, top, argv, envp, auxv, m, V, fs) -> x in omega ->
+  int_le(4218880, x) -> int_lt(x, 4219184) ->
+  mallocng.b8(ui.MV(m), x) = musl_malloc.file[int_add(24576, int_sub(x, 4218880))] &&
+  mallocng.pg(ui.MV(m), x) = some(fn_update(fn_update(empty, "prot", x86_64_linux.seg_prot(x86_64_linux.segment(musl_malloc.file, 2))), "kind", 0))
+proof
+  fix m0 s lo top argv envp auxv m V fs x
+  assume h hx h1 h2
+  have hx0 _ := expand(h, ui.MX)
+  have he := expand(hx0, ui.SX).10
+  have nw: !(x in startup_specs.start_writes(ui.G)) proof
+    assume hw
+    have _ b _ := apply(ui.sw_range[x := x], hw)
+    show by arith(b, h2)
+  qed
+  have b1 p1 := apply(ui.mm_any[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs, i := 2, a := x], h, eval(), hx,
+    (ui.TAB(2, int_div(x, x86_64_linux.PAGE)) by arith(hx, h1, h2)), arith(h2), nw)
+  have {g2 = s2} := ui.elf
+  have dat _ := apply(ui.seg_bytes[argv := argv, envp := envp, m0 := m0, j := 2, ty := 1, fl := 4, of := 24576, va := 4218880, fs := 304, ms := 304], he, eval(), eval(), g2)
+  have d := mp(all_elim(dat, {x}), hx, h1, arith(h2))
+  have bi: bits_of_int(64, x) = x := apply(nf.boi_in[n := 64, x := x], eval(), (x in bits(64) by arith(hx, h2)))
+  show := conj(trans(b1, rewrite(bi, d)), p1)
+qed
+
+// n bytes of the read-only data at main: their number the file's
+theorem ui.ro2_rd: all m0 s lo top argv envp auxv m V fs a n. ui.MX(m0, s, lo, top, argv, envp, auxv, m, V, fs) -> a in omega -> n in omega ->
+  int_le(4218880, a) -> int_le(int_add(a, n), 4219184) ->
+  mallocng.rd(ui.MV(m), a, n) = x86_64_linux.le_at(musl_malloc.file, int_add(24576, int_sub(a, 4218880)), n)
+proof
+  fix m0 s lo top argv envp auxv m V fs a n
+  assume h ha hn h1 h2
+  have pw: all i. i in omega -> int_le(0, i) -> int_lt(i, n) ->
+      int_mul(mallocng.b8(ui.MV(m), int_add(a, i)), int_pow(256, i)) = int_mul(musl_malloc.file[int_add(int_add(24576, int_sub(a, 4218880)), i)], int_pow(256, i)) proof
+    fix i
+    assume i1 _ i2
+    have b _ := apply(ui.ro2_byte[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs, x := int_add(a, i)], h,
+      arith(ha, i1), arith(h1, i1, ha), arith(h2, i2, ha, i1))
+    have ix: int_add(24576, int_sub(int_add(a, i), 4218880)) = int_add(int_add(24576, int_sub(a, 4218880)), i) by arith(ha, i1, h1)
+    show by rsimp(rewrite(ix, b))
+  qed
+  have ext := mp(int_sum_ext[a := 0, b := n, f := i. int_mul(mallocng.b8(ui.MV(m), int_add(a, i)), int_pow(256, i)),
+    g := i. int_mul(musl_malloc.file[int_add(int_add(24576, int_sub(a, 4218880)), i)], int_pow(256, i))], eval(), hn, pw)
+  show by defs(ext, mallocng.rd, x86_64_linux.le_at)
+qed
+
+// (a table in the file: its entries, by evaluating the file's literal)
+theorem ui.le_tab(n, off, w, x. T): all F B. F = bytes_seq(B) -> bytes_len(B) in omega -> n in omega -> off in omega -> w in omega ->
+  (all i. i in omega -> int_lt(i, n) -> int_le(int_add(int_add(off, int_mul(w, i)), w), bytes_len(B))) ->
+  fn_build(n, i. ui.le_b(B, int_add(off, int_mul(w, i)), w)) = fn_build(n, i. T(i)) ->
+  all i. i in omega -> int_lt(i, n) -> x86_64_linux.le_at(F, int_add(off, int_mul(w, i)), w) = T(i)
+proof
+  fix F B
+  assume e hb hn ho hw hl ht
+  fix i
+  assume hi hil
+  have im := mp(nat_lt_mem[k := i, n := n], hi, hn, hil)
+  have a1 := mp(app_fn_build[d := n, v := j. ui.le_b(B, int_add(off, int_mul(w, j)), w), a := i], im)
+  have a2 := mp(app_fn_build[d := n, v := j. T(j), a := i], im)
+  have v := trans(sym(a1), trans(apply(ui.app_eq[k := i], ht), a2))
+  show := apply(ui.le_val[F := F, B := B, off := int_add(off, int_mul(w, i)), n := w, v := T(i)], e, arith(ho, hw, hi), hw, hb, mp(all_elim(hl, {i}), hi, hil), v)
+qed
