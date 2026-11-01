@@ -1456,3 +1456,13 @@ item is a short summary of finished work; details are in the files named.
   the structured loop's break and rest, the structured side undefined, a
   CFG whose one block may go on anywhere (stage2 after exit) by its first
   trip, a guard with stack objects, comparisons flipped without typing.
+- **The auxiliary vector as stack objects**: the auxv lives on the
+  initial stack, which the C world sees only as live stack objects. The
+  claim's heap is the C view (`c_vm`: stack pages hidden); malloc.sl's
+  `owned_mapped` allows owned live stack objects, `frame` keeps them live;
+  mallocng's `fp_mapped` exempts the auxv's bytes (in the stack's space,
+  which no unfixed mmap gives), `aux_live` (in `shown_in`, `rep`) has
+  them live before the first allocation, `fresh_ok.auxv_apart` apart from
+  the fixed ranges, `perms_ok` readable where on a world page;
+  `freed_back` keeps the initialization; `start_writes` without
+  `need_locks`; exec's `brk_start` in the user space.

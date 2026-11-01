@@ -40,6 +40,11 @@ The step left:
   apart from the allocator's ranges) and `owned` within the statics, the
   thread descriptor and the auxv.
 
+  The auxiliary vector is on the initial stack: in the claim's heap (the C
+  view, `c_vm`: stack pages hidden) live stack objects (`rep.aux`), in the
+  stack's space (`fp_mapped.low`), apart from the allocator's fixed ranges
+  (`fresh_ok.auxv_apart`) -- to show at main from exec's stack_data.
+
   It needs from exec (spec/linux/exec.sl): the break within the user
   space (`brk_ok`), the auxiliary vector apart from the data
   (`fresh_ok.auxv_ctx`) and not at null (`auxv_nz`); and the ABI's entry
