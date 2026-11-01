@@ -233,3 +233,105 @@ proof
   qed
   show by taut(u, c1, c2)
 qed
+
+// ----------------------------------------------------------------------
+//  The program's file: its numbers read from its bytes
+
+// (a little-endian number of the file's bytes: of its literal's)
+def ui.le_b(B, off, n) := int_sum(0, n, x0. int_mul(bytes_at(B, int_add(off, x0)), int_pow(256, x0)))
+
+theorem ui.le_file: all F B off n. F = bytes_seq(B) -> off in omega -> n in omega -> bytes_len(B) in omega -> int_le(int_add(off, n), bytes_len(B)) ->
+  x86_64_linux.le_at(F, off, n) = ui.le_b(B, off, n)
+proof
+  fix F B off n
+  assume e ho hn hb hl
+  have pw: all i. i in omega -> int_le(0, i) -> int_lt(i, n) -> int_mul(F[int_add(off, i)], int_pow(256, i)) = int_mul(bytes_at(B, int_add(off, i)), int_pow(256, i)) proof
+    fix i
+    assume hi _ hil
+    have m := mp(nat_lt_mem[k := int_add(off, i), n := bytes_len(B)], arith(ho, hi), hb, arith(hil, hl, ho, hi))
+    have a := mp(app_fn_build[d := bytes_len(B), v := x. bytes_at(B, x), a := int_add(off, i)], m)
+    have ab: F[int_add(off, i)] = bytes_at(B, int_add(off, i)) := rewrite(sym(e), (bytes_seq(B)[int_add(off, i)] = bytes_at(B, int_add(off, i)) by defs(a, bytes_seq)))
+    show by simp(ab)
+  qed
+  have s := apply(int_sum_ext[a := 0, b := n, f := i. int_mul(F[int_add(off, i)], int_pow(256, i)), g := i. int_mul(bytes_at(B, int_add(off, i)), int_pow(256, i))], simp(), hn, pw)
+  show by defs(s, x86_64_linux.le_at, ui.le_b)
+qed
+
+// (... its value, by evaluation)
+theorem ui.le_val: all F B off n v. F = bytes_seq(B) -> off in omega -> n in omega -> bytes_len(B) in omega -> int_le(int_add(off, n), bytes_len(B)) ->
+  ui.le_b(B, off, n) = v -> x86_64_linux.le_at(F, off, n) = v
+proof
+  fix F B off n v
+  assume e ho hn hb hl hv
+  show := trans(apply(ui.le_file, e, ho, hn, hb, hl), hv)
+qed
+
+// (program header i: its type and its segment, the values read)
+theorem ui.seg_val: all F B i ty fl of va fs ms. F = bytes_seq(B) -> i in omega -> bytes_len(B) in omega -> int_le(int_add(int_add(64, int_mul(56, i)), 48), bytes_len(B)) ->
+  ui.le_b(B, 32, 8) = 64 -> ui.le_b(B, int_add(64, int_mul(56, i)), 4) = ty -> ui.le_b(B, int_add(int_add(64, int_mul(56, i)), 4), 4) = fl ->
+  ui.le_b(B, int_add(int_add(64, int_mul(56, i)), 8), 8) = of -> ui.le_b(B, int_add(int_add(64, int_mul(56, i)), 16), 8) = va ->
+  ui.le_b(B, int_add(int_add(64, int_mul(56, i)), 32), 8) = fs -> ui.le_b(B, int_add(int_add(64, int_mul(56, i)), 40), 8) = ms ->
+  type: x86_64_linux.le_at(F, x86_64_linux.ph(F, i), 4) = ty && flags: x86_64_linux.segment(F, i).flags = fl && offset: x86_64_linux.segment(F, i).offset = of &&
+  vaddr: x86_64_linux.segment(F, i).vaddr = va && filesz: x86_64_linux.segment(F, i).filesz = fs && memsz: x86_64_linux.segment(F, i).memsz = ms
+proof
+  fix F B i ty fl of va fs ms
+  assume e hi hb hl h0 h1 h2 h3 h4 h5 h6
+  let P := int_add(64, int_mul(56, i))
+  have po := apply(ui.le_val[F := F, B := B, off := 32, n := 8, v := 64], e, simp(), simp(), hb, arith(hl, hi), h0)
+  have pp: x86_64_linux.ph(F, i) = P by defs(simp(po), x86_64_linux.ph, x86_64_linux.phoff)
+  have q1 := apply(ui.le_val[F := F, B := B, off := P, n := 4, v := ty], e, arith(hi), simp(), hb, arith(hl, hi), h1)
+  have q2 := apply(ui.le_val[F := F, B := B, off := int_add(P, 4), n := 4, v := fl], e, arith(hi), simp(), hb, arith(hl, hi), h2)
+  have q3 := apply(ui.le_val[F := F, B := B, off := int_add(P, 8), n := 8, v := of], e, arith(hi), simp(), hb, arith(hl, hi), h3)
+  have q4 := apply(ui.le_val[F := F, B := B, off := int_add(P, 16), n := 8, v := va], e, arith(hi), simp(), hb, arith(hl, hi), h4)
+  have q5 := apply(ui.le_val[F := F, B := B, off := int_add(P, 32), n := 8, v := fs], e, arith(hi), simp(), hb, arith(hl, hi), h5)
+  have q6 := apply(ui.le_val[F := F, B := B, off := int_add(P, 40), n := 8, v := ms], e, arith(hi), simp(), hb, arith(hl, hi), h6)
+  have k1: x86_64_linux.le_at(F, x86_64_linux.ph(F, i), 4) = ty := rewrite(sym(pp), q1)
+  have k2: x86_64_linux.segment(F, i).flags = fl by defs(simp(pp, q2), x86_64_linux.segment)
+  have k3: x86_64_linux.segment(F, i).offset = of by defs(simp(pp, q3), x86_64_linux.segment)
+  have k4: x86_64_linux.segment(F, i).vaddr = va by defs(simp(pp, q4), x86_64_linux.segment)
+  have k5: x86_64_linux.segment(F, i).filesz = fs by defs(simp(pp, q5), x86_64_linux.segment)
+  have k6: x86_64_linux.segment(F, i).memsz = ms by defs(simp(pp, q6), x86_64_linux.segment)
+  show by taut(k1, k2, k3, k4, k5, k6)
+qed
+
+// program header i of F: its type, its segment
+def ui.segis(F, i, ty, fl, of, va, fs, ms) := x86_64_linux.le_at(F, x86_64_linux.ph(F, i), 4) = ty && x86_64_linux.segment(F, i).flags = fl &&
+  x86_64_linux.segment(F, i).offset = of && x86_64_linux.segment(F, i).vaddr = va && x86_64_linux.segment(F, i).filesz = fs && x86_64_linux.segment(F, i).memsz = ms
+
+// The program's headers (readelf -l): its 4 loads -- the first page, the
+// text, the read-only data, the data and .bss -- and 4 others
+theorem ui.elf: phnum: x86_64_linux.phnum(musl_malloc.file) = 8 &&
+  s0: ui.segis(musl_malloc.file, 0, 1, 4, 0, 4194304, 512, 512) && s1: ui.segis(musl_malloc.file, 1, 1, 5, 4096, 4198400, 18271, 18271) &&
+  s2: ui.segis(musl_malloc.file, 2, 1, 4, 24576, 4218880, 304, 304) && s3: ui.segis(musl_malloc.file, 3, 1, 6, 28616, 4227016, 72, 1680) &&
+  s4: ui.segis(musl_malloc.file, 4, 4, 4, 24832, 4219136, 48, 48) && s5: ui.segis(musl_malloc.file, 5, 1685382483, 4, 24832, 4219136, 48, 48) &&
+  s6: ui.segis(musl_malloc.file, 6, 1685382481, 6, 0, 0, 0, 0) && s7: ui.segis(musl_malloc.file, 7, 1685382482, 4, 28616, 4227016, 56, 56)
+proof
+  let F := musl_malloc.file
+  have pn := apply(ui.le_val[F := F, off := 56, n := 2, v := 8], unfold(musl_malloc.file), simp(), simp(), eval(), eval(), eval())
+  have pp: x86_64_linux.phnum(F) = 8 by defs(pn, x86_64_linux.phnum)
+  have k0 := apply(ui.seg_val[F := F, i := 0, ty := 1, fl := 4, of := 0, va := 4194304, fs := 512, ms := 512], unfold(musl_malloc.file), simp(), eval(), eval(),
+    eval(), eval(), eval(), eval(), eval(), eval(), eval())
+  have k1 := apply(ui.seg_val[F := F, i := 1, ty := 1, fl := 5, of := 4096, va := 4198400, fs := 18271, ms := 18271], unfold(musl_malloc.file), simp(), eval(), eval(),
+    eval(), eval(), eval(), eval(), eval(), eval(), eval())
+  have k2 := apply(ui.seg_val[F := F, i := 2, ty := 1, fl := 4, of := 24576, va := 4218880, fs := 304, ms := 304], unfold(musl_malloc.file), simp(), eval(), eval(),
+    eval(), eval(), eval(), eval(), eval(), eval(), eval())
+  have k3 := apply(ui.seg_val[F := F, i := 3, ty := 1, fl := 6, of := 28616, va := 4227016, fs := 72, ms := 1680], unfold(musl_malloc.file), simp(), eval(), eval(),
+    eval(), eval(), eval(), eval(), eval(), eval(), eval())
+  have k4 := apply(ui.seg_val[F := F, i := 4, ty := 4, fl := 4, of := 24832, va := 4219136, fs := 48, ms := 48], unfold(musl_malloc.file), simp(), eval(), eval(),
+    eval(), eval(), eval(), eval(), eval(), eval(), eval())
+  have k5 := apply(ui.seg_val[F := F, i := 5, ty := 1685382483, fl := 4, of := 24832, va := 4219136, fs := 48, ms := 48], unfold(musl_malloc.file), simp(), eval(), eval(),
+    eval(), eval(), eval(), eval(), eval(), eval(), eval())
+  have k6 := apply(ui.seg_val[F := F, i := 6, ty := 1685382481, fl := 6, of := 0, va := 0, fs := 0, ms := 0], unfold(musl_malloc.file), simp(), eval(), eval(),
+    eval(), eval(), eval(), eval(), eval(), eval(), eval())
+  have k7 := apply(ui.seg_val[F := F, i := 7, ty := 1685382482, fl := 4, of := 28616, va := 4227016, fs := 56, ms := 56], unfold(musl_malloc.file), simp(), eval(), eval(),
+    eval(), eval(), eval(), eval(), eval(), eval(), eval())
+  have g0: ui.segis(F, 0, 1, 4, 0, 4194304, 512, 512) by defs(k0, ui.segis)
+  have g1: ui.segis(F, 1, 1, 5, 4096, 4198400, 18271, 18271) by defs(k1, ui.segis)
+  have g2: ui.segis(F, 2, 1, 4, 24576, 4218880, 304, 304) by defs(k2, ui.segis)
+  have g3: ui.segis(F, 3, 1, 6, 28616, 4227016, 72, 1680) by defs(k3, ui.segis)
+  have g4: ui.segis(F, 4, 4, 4, 24832, 4219136, 48, 48) by defs(k4, ui.segis)
+  have g5: ui.segis(F, 5, 1685382483, 4, 24832, 4219136, 48, 48) by defs(k5, ui.segis)
+  have g6: ui.segis(F, 6, 1685382481, 6, 0, 0, 0, 0) by defs(k6, ui.segis)
+  have g7: ui.segis(F, 7, 1685382482, 4, 28616, 4227016, 56, 56) by defs(k7, ui.segis)
+  show by taut(pp, g0, g1, g2, g3, g4, g5, g6, g7)
+qed
