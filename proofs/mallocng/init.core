@@ -739,3 +739,126 @@ proof
     (M4.gs_base = m0.gs_base by rsimp()), (M4.cpu = m0.cpu by rsimp())), ui.s4)
   show by ex_intro({M4}, taut(s4, u4))
 qed
+
+// (and rsp, -16 on an aligned rsp: rsp)
+theorem ui.and16: all x. x in bits(64) -> int_mod(x, 16) = 0 -> bits_and(64, x, bits_sext(8, 64, 240)) = x
+proof
+  fix x
+  assume hx hm
+  have se: bits_sext(8, 64, 240) = bits_not(64, 15) by eval()
+  have m2: bits_and(64, x, bits_not(64, 15)) = int_mul(int_div(x, 16), 16) by bitwise({64}, hx)
+  show := trans(rewrite(sym(se), m2), (int_mul(int_div(x, 16), 16) = x by arith(hm, hx)))
+qed
+
+// (a touch: the memory changed only)
+theorem ui.vm_only: all P m1. (m1 = P || (ex V. m1 = fn_update(P, "vm", V))) ->
+  m1.rip = P.rip && m1.gpr = P.gpr && m1.os = P.os && m1.fs_base = P.fs_base && m1.gs_base = P.gs_base && m1.cpu = P.cpu && m1.flags = P.flags
+proof
+  fix P m1
+  assume h
+  have c1: m1 = P -> m1.rip = P.rip && m1.gpr = P.gpr && m1.os = P.os && m1.fs_base = P.fs_base && m1.gs_base = P.gs_base && m1.cpu = P.cpu && m1.flags = P.flags proof
+    assume e
+    show by rsimp(e)
+  qed
+  have c2: (ex V. m1 = fn_update(P, "vm", V)) -> m1.rip = P.rip && m1.gpr = P.gpr && m1.os = P.os && m1.fs_base = P.fs_base && m1.gs_base = P.gs_base && m1.cpu = P.cpu && m1.flags = P.flags proof
+    assume e
+    obtain V, ev from e
+    show by rsimp(ev)
+  qed
+  show by taut(h, c1, c2)
+qed
+
+// (the call's state: the return address stored, rsp lowered, rip the
+// callee's -- a machine)
+theorem ui.call_m: all m1 a w r. m1 in x86_64_linux.Machine -> m1 in univ(1) -> a in bits(64) -> w in bits(64) -> r in bits(64) ->
+  fn_update(fn_update(fn_update(m1, "vm", fn_update(m1.vm, "bytes", x86_64_linux.store_le(m1.vm.bytes, a, 8, w))), "gpr", fn_update(m1.gpr, 4, a)), "rip", r) in x86_64_linux.Machine &&
+  fn_update(fn_update(fn_update(m1, "vm", fn_update(m1.vm, "bytes", x86_64_linux.store_le(m1.vm.bytes, a, 8, w))), "gpr", fn_update(m1.gpr, 4, a)), "rip", r) in univ(1)
+proof
+  fix m1 a w r
+  assume mM mu ha hw hr
+  have pt := apply(x86i.parts, mM)
+  have _ _ _ pv := pt
+  have bt: m1.vm.bytes in fn_space(bits(64), bits(8)) by taut(unsel(expand(pv, x86_64_linux.Vm)))
+  have st := apply(x86.store_typed[b := m1.vm.bytes, a := a, n := 8, v := w], bt)
+  have su := mp(fn_space_univ[u := 1, a := bits(64), b := bits(8), f := x86_64_linux.store_le(m1.vm.bytes, a, 8, w)], bits_univ[n := 64], bits_univ[n := 8], st)
+  have vu: fn_update(m1.vm, "bytes", x86_64_linux.store_le(m1.vm.bytes, a, 8, w)) in univ(1) by simp(mu, su)
+  have vv := apply(tr.vm_bytes, pv, st, vu)
+  have m2: fn_update(fn_update(fn_update(m1, "vm", fn_update(m1.vm, "bytes", x86_64_linux.store_le(m1.vm.bytes, a, 8, w))), "gpr", fn_update(m1.gpr, 4, a)), "rip", r) in x86_64_linux.Machine
+    by defs(simp(expand(mM, x86_64_linux.Machine), mu, vv, ha, hr, pt), x86_64_linux.Machine)
+  have m3: fn_update(fn_update(fn_update(m1, "vm", fn_update(m1.vm, "bytes", x86_64_linux.store_le(m1.vm.bytes, a, 8, w))), "gpr", fn_update(m1.gpr, 4, a)), "rip", r) in univ(1)
+    by simp(mu, vu, ha, hr)
+  show by taut(m2, m3)
+qed
+
+// at _start_c's entry, after the call: the return address pushed on
+// exec's stack (grown if need be), rdi exec's rsp
+def ui.s5(m0, s) := s in x86_64_linux.Machine && s in univ(1) && s.rip = 4198565 && s.gpr[4] = bits_sub(64, m0.gpr[4], 8) && s.gpr[7] = m0.gpr[4] &&
+  s.flags.df = m0.flags.df && s.os = m0.os && s.fs_base = m0.fs_base && s.gs_base = m0.gs_base && s.cpu = m0.cpu &&
+  (ex v1. x86.stk_ext(m0.vm, v1) && abi.vm_grows(m0.vm, v1) && (all j. j in omega -> int_lt(j, 8) -> x86_64_linux.can_access(v1, bits_add(64, bits_sub(64, m0.gpr[4], 8), bits_of_int(64, j)), 1)) &&
+    s.vm = fn_update(v1, "bytes", x86_64_linux.store_le(v1.bytes, bits_sub(64, m0.gpr[4], 8), 8, 4198565)))
+
+theorem ui.start_call: all m0 m4 m. m0 in x86_64_linux.Machine -> ui.s4(m0, m4) -> int_mod(m0.gpr[4], 16) = 0 -> int_le(16, m0.gpr[4]) -> int_lt(m0.gpr[4], 140737488355328) ->
+  abi.code_at(m0.vm, 4198400, text.code) -> ui.UR(4198873, m4, m) -> ex s. ui.s5(m0, s) && ui.UR(4198873, s, m)
+proof
+  fix m0 m4 m
+  assume hM0 h4 hal hlo hhi hc hur
+  have hM hU hv hr hsp hdi hdf hos hfs hgs hcpu := expand(h4, ui.s4)
+  have g0 := apply(x86i.rsp_typed, hM0)
+  have e4: m4.gpr[4] = m0.gpr[4] := trans(hsp, apply(ui.and16, g0, hal))
+  have sc := rewrite(sym(hv), apply(ui.start_code[vm := m0.vm], hc))
+  obtain m5 v5, hs5 hu5 from apply(ui.until_step[t := 4198873, m0 := m4, m := m], rewrite(sym(hr), (!(4198560 = 4198873) by eval())), hur)
+  have eb := mp(all_elim(_start.at_4010a0, {m4}, {ok(m5, v5)}), hs5, sc, hr)
+  have cl := mp(all_elim(x86i.call_rel32, {m4}, {ok(m5, v5)}, {0}, {5}), hM, hU, (0 in bits(32) by eval()),
+    rewrite(sym(e4), (int_le(8, m0.gpr[4]) by arith(hlo))), rewrite(sym(e4), hhi), eb)
+  let P := fn_update(m4, "rip", bits_add(64, m4.rip, bits_of_int(64, 5)))
+  let A := bits_sub(64, m4.gpr[4], 8)
+  have c2: (ex x e. runs(x86_64_linux.touch_range(A, 8, 1), P, exc(x, e)) && ok(m5, v5) = exc(x, e)) -> false proof
+    assume h
+    obtain x e, _ q from h
+    show := rsimp(q)
+  qed
+  have c3: (ex t. runs(x86_64_linux.touch_range(A, 8, 1), P, diverge(t)) && ok(m5, v5) = diverge(t)) -> false proof
+    assume h
+    obtain t, _ q from h
+    show := rsimp(q)
+  qed
+  obtain m1 e1, ht he from (ex m1 e1. runs(x86_64_linux.touch_range(A, 8, 1), P, ok(m1, e1)) &&
+    ok(m5, v5) = ok(fn_update(fn_update(fn_update(m1, "vm", fn_update(m1.vm, "bytes", x86_64_linux.store_le(m1.vm.bytes, A, 8, bits_add(64, m4.rip, bits_of_int(64, 5))))),
+      "gpr", fn_update(m1.gpr, 4, A)), "rip", bits_add(64, m1.rip, bits_sext(32, 64, 0))), empty) by taut(cl, c2, c3))
+  let S := fn_update(fn_update(fn_update(m1, "vm", fn_update(m1.vm, "bytes", x86_64_linux.store_le(m1.vm.bytes, A, 8, bits_add(64, m4.rip, bits_of_int(64, 5))))),
+      "gpr", fn_update(m1.gpr, 4, A)), "rip", bits_add(64, m1.rip, bits_sext(32, 64, 0)))
+  have q5 _ := apply(ui.ok_inj, he)
+  have u5: ui.UR(4198873, S, m) := rewrite(q5, hu5)
+  // (the touch: m1 is P with its memory grown)
+  have pt := apply(x86i.parts, hM)
+  have pr: bits_add(64, m4.rip, bits_of_int(64, 5)) = 4198565 by rsimp(hr)
+  have PM: P in x86_64_linux.Machine by defs(simp(expand(hM, x86_64_linux.Machine), hU, pt, pr), x86_64_linux.Machine)
+  have PU: P in univ(1) by simp(hU, pr)
+  have M1M M1U := apply(x86.touch_range_typed, PM, PU, ht)
+  have _ vo := apply(x86.touch_range_vm, ht)
+  have mr mg mos mfs mgs mcpu mfl := apply(ui.vm_only, vo)
+  have sk := apply(x86.touch_range_stk, ht)
+  have vg := apply(x86.touch_range_frame, (8 in omega by eval()), ht)
+  have ac := apply(x86.touch_range_acc, ht)
+  have pv: P.vm = m0.vm by rsimp(hv)
+  have ab: A in bits(64) by simp()
+  have SM SU := apply(ui.call_m[m1 := m1, a := A, w := bits_add(64, m4.rip, bits_of_int(64, 5)), r := bits_add(64, m1.rip, bits_sext(32, 64, 0))], M1M, M1U, ab,
+    rewrite(sym(pr), (4198565 in bits(64) by eval())), (bits_add(64, m1.rip, bits_sext(32, 64, 0)) in bits(64) by simp()))
+  have ae: A = bits_sub(64, m0.gpr[4], 8) by rsimp(e4)
+  have k1: S.rip = 4198565 by rsimp(mr, hr, (bits_sext(32, 64, 0) = 0 by eval()))
+  have k2: S.gpr[4] = bits_sub(64, m0.gpr[4], 8) by rsimp(ae)
+  have k3: S.gpr[7] = m0.gpr[4] by rsimp(mg, hdi)
+  have k4: S.flags.df = m0.flags.df by rsimp(mfl, hdf)
+  have k5: S.os = m0.os by rsimp(mos, hos)
+  have k6: S.fs_base = m0.fs_base by rsimp(mfs, hfs)
+  have k7: S.gs_base = m0.gs_base by rsimp(mgs, hgs)
+  have k8: S.cpu = m0.cpu by rsimp(mcpu, hcpu)
+  have w1: x86.stk_ext(m0.vm, m1.vm) := rewrite(pv, sk)
+  have w2: abi.vm_grows(m0.vm, m1.vm) := rewrite(pv, vg)
+  have w3: all j. j in omega -> int_lt(j, 8) -> x86_64_linux.can_access(m1.vm, bits_add(64, bits_sub(64, m0.gpr[4], 8), bits_of_int(64, j)), 1) := rewrite(ae, ac)
+  have w4: S.vm = fn_update(m1.vm, "bytes", x86_64_linux.store_le(m1.vm.bytes, bits_sub(64, m0.gpr[4], 8), 8, 4198565)) by rsimp(ae, hr)
+  have ev: ex v1. x86.stk_ext(m0.vm, v1) && abi.vm_grows(m0.vm, v1) && (all j. j in omega -> int_lt(j, 8) -> x86_64_linux.can_access(v1, bits_add(64, bits_sub(64, m0.gpr[4], 8), bits_of_int(64, j)), 1)) &&
+    S.vm = fn_update(v1, "bytes", x86_64_linux.store_le(v1.bytes, bits_sub(64, m0.gpr[4], 8), 8, 4198565)) by ex_intro({m1.vm}, taut(w1, w2, w3, w4))
+  have s5: ui.s5(m0, S) by defs(taut(SM, SU, k1, k2, k3, k4, k5, k6, k7, k8, ev), ui.s5)
+  show by ex_intro({S}, taut(s5, u5))
+qed
