@@ -55,6 +55,15 @@ proof
   show := apply(pair_inj[a := a, b := b, c := c, d := d], e2)
 qed
 
+// (an exception: its state and value)
+theorem ui.exc_inj: all a b c d. exc(a, b) = exc(c, d) -> a = c && b = d
+proof
+  fix a b c d
+  assume e
+  have _ e2 := apply(pair_inj[a := 1, b := pair(a, b), c := 1, d := pair(c, d)], (pair(1, pair(a, b)) = pair(1, pair(c, d)) by defs(e, exc, tag)))
+  show := apply(pair_inj[a := a, b := b, c := c, d := d], e2)
+qed
+
 theorem ui.exc_nok: all a v. !is_ok(exc(a, v))
 proof
   fix a v
@@ -1232,9 +1241,9 @@ qed
 theorem ui.main_exists: all g t E n. t in abi.World -> g.builtin_tls in bits(64) -> g.libc in bits(64) -> int_lt(int_add(g.libc, 56), 9223372036854775808) ->
   int_lt(int_add(g.builtin_tls, 336), 9223372036854775808) -> (int_le(int_add(g.builtin_tls, 336), int_add(g.libc, 8)) || int_le(int_add(g.libc, 16), g.builtin_tls)) ->
   startup_specs.globals_ok(t.vm, t.objs, g) -> n in omega -> startup_specs.env_at(t.vm, t.objs, E, n) -> E in bits(64) ->
-  ex V. V in x86_64_linux.Vm && (startup_specs.frame(t.vm, V, t.objs, startup_specs.start_writes(g)) &&
-    (all x4. x4 in omega -> startup_specs.env_at(t.vm, t.objs, E, x4) -> gimple.bytes_at(V, bits_add(64, g.libc, 8), 8) = int_add(E, int_mul(8, int_add(x4, 1))))) &&
-    (ex x4. x4 in bits(64) && startup_specs.thread_set(V, x4))
+  ex V. V in x86_64_linux.Vm && ((startup_specs.frame(t.vm, V, t.objs, startup_specs.start_writes(g)) &&
+    (all x4. x4 in omega -> startup_specs.env_at(t.vm, t.objs, E, x4) -> gimple.bytes_at(V, int_add(g.libc, 8), 8) = int_add(E, int_mul(8, int_add(x4, 1))))) &&
+    (ex x4. x4 in bits(64) && startup_specs.thread_set(V, x4)))
 proof
   fix g t E n
   assume hw hb hl hl2 hb2 hdis hg hn he hE
@@ -1273,15 +1282,138 @@ proof
   have l8b := apply(x86.le8_nat[vm := V2, a := a], b2)
   have bv: gimple.bytes_at(V2, a, 8) = val := trans(sym(l8b), trans((x86_64_linux.le(V2.bytes, a, 8) = x86_64_linux.le(x86_64_linux.store_le(V0.bytes, a, 8, val), a, 8) by rsimp()),
     trans(l8, apply(nf.boi_in[n := 64, x := val], eval(), vb))))
-  have ea: all x4. x4 in omega -> startup_specs.env_at(t.vm, t.objs, E, x4) -> gimple.bytes_at(V2, bits_add(64, g.libc, 8), 8) = int_add(E, int_mul(8, int_add(x4, 1))) proof
+  have ea: all x4. x4 in omega -> startup_specs.env_at(t.vm, t.objs, E, x4) -> gimple.bytes_at(V2, int_add(g.libc, 8), 8) = int_add(E, int_mul(8, int_add(x4, 1))) proof
     fix x4
     assume h4 he4
     have q := apply(sp.env_unique[vm := t.vm, o := t.objs, e := E, n1 := n, n2 := x4], hn, h4, he, he4)
-    show := rewrite(q, bv)
+    have bc: gimple.bytes_at(V2, int_add(g.libc, 8), 8) = gimple.bytes_at(V2, a, 8) by rsimp(ae)
+    show := rewrite(q, trans(bc, bv))
   qed
   // (the thread: apart from libc)
   have i1 i2 := expand(hit, startup_specs.in_tls)
   have ts2 := apply(ui.ts_store[V := V0, fs := fs0, a := a, v := val], hts, hf0, ab, arith(i2, hb2), arith(ae, hl2), arith(hdis, ae, i1, i2))
   have et: ex x4. x4 in bits(64) && startup_specs.thread_set(V2, x4) by ex_intro({fs0}, taut(hf0, ts2))
   show by ex_intro({V2}, taut(V2v, fr2, ea, et))
+qed
+
+// _start_c's precondition (its spec's require)
+abbrev ui.c_pre(vm, objs, g, P, sp) := !(sp = 0) && int_lt(int_add(sp, 16), int_pow(2, 63)) && gimple.usable(vm, objs, sp, 8, false) &&
+  startup_specs.start_main_pre(vm, objs, g, P, gimple.bytes_at(vm, sp, 8), bits_add(64, sp, 8))
+
+// _start_c's spec's runs from t (its precondition holding): a stack
+// overflow, or main entered with startup's effect
+theorem ui.c_q: all g P sp t o. t in abi.World -> t in univ(1) -> g.builtin_tls in bits(64) -> g.libc in bits(64) -> int_lt(int_add(g.libc, 56), 9223372036854775808) ->
+  int_lt(int_add(g.builtin_tls, 336), 9223372036854775808) -> (int_le(int_add(g.builtin_tls, 336), int_add(g.libc, 8)) || int_le(int_add(g.libc, 16), g.builtin_tls)) ->
+  sp in bits(64) -> ui.c_pre(t.vm, t.objs, g, P, sp) -> runs(startup_specs.start_c_spec_fun(g, P)[seq_one(sp)], t, o) ->
+  sp.ovf_any(t, o) || (ex V fs. V in x86_64_linux.Vm && startup_specs.frame(t.vm, V, t.objs, startup_specs.start_writes(g)) &&
+    (all x4. x4 in omega -> startup_specs.env_at(t.vm, t.objs, bits_add(64, sp, int_mul(8, int_add(gimple.bytes_at(t.vm, sp, 8), 2))), x4) ->
+       gimple.bytes_at(V, int_add(g.libc, 8), 8) = int_add(bits_add(64, sp, int_mul(8, int_add(gimple.bytes_at(t.vm, sp, 8), 2))), int_mul(8, int_add(x4, 1)))) &&
+    fs in bits(64) && startup_specs.thread_set(V, fs) && o = exc(fn_update(fn_update(t, "vm", V), "fs_base", fs), exc_val("at_main", empty)))
+proof
+  fix g P sp t o
+  assume hw htu hb hl hl2 hb2 hdis hsp hpre h
+  have sl := apply(tr.seq_one_type[x := sp, t := bits(64)], hsp)
+  have ol: ord_le(seq_len(seq_one(sp)), 6) by defs(arith((seq_len(seq_one(sp)) = 1 by simp())), ord_le)
+  have ra: seq_one(sp) in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by sel(conj(sl, ol))
+  rsimp only, startup_specs.start_c_spec_fun, app_fn_build, ra in h
+  have b := apply(g.runs_elim, h)
+  have q0: bits_of_int(64, seq_one(sp)[0]) = sp by simp(apply(nf.boi_in[n := 64, x := sp], eval(), hsp))
+  have o1l: ord_le(1, seq_len(seq_one(sp))) by defs(arith((seq_len(seq_one(sp)) = 1 by simp())), ord_le)
+  have b2: bind_rel(startup_specs.start_c_spec(g, P, sp), t, x0 x1. any_rel(x2. x2 in bits(64), x2. any_rel(x3. x3 in bits(64), x3. o = ok(x0, pair(x2, x3)))),
+    x0 x1. o = exc(x0, x1), x0. o = diverge(x0)) by taut(rewrite(q0, b), o1l)
+  obtain o3, hs3 hk3 from expand(b2, bind_rel)
+  rsimp only, startup_specs.start_c_spec in hs3
+  obtain x0, hbr hout from apply(or_resolve, apply(g.runs_elim, hs3), hpre)
+  let OVF := exc_val("stack_overflow", empty)
+  have k1: case 1 of hbr proof
+    assume e
+    rsimp only, startup_specs.overflow_start, abi.overflow in e
+    have pv _ _ _ := apply(ms.world_parts, hw)
+    have vv: ex x. x in x86_64_linux.Vm by ex_intro({t.vm}, simp(pv))
+    have fv: ex x. x in bits(64) by ex_intro({0}, simp())
+    have l: ex f v ob. ((f in bits(64) && v in x86_64_linux.Vm) && ob in abi.Objs) &&
+      x0 = exc(pair(fn_update(fn_update(fn_update(t, "fs_base", f), "vm", v), "objs", ob), empty), pair("raise", OVF)) by simp(e, vv, fv, ct.objs_ne)
+    obtain f v ob, hf hv hob hx from l
+    let T := fn_update(fn_update(fn_update(t, "fs_base", f), "vm", v), "objs", ob)
+    have oe: o3 = exc(T, OVF) by simp(rewrite(hx, hout))
+    have o2e: o = exc(T, OVF) by simp(rewrite(oe, hk3))
+    have x: sp.ovf_any(t, o) by defs(ex_intro({f}, {v}, {ob}, taut(hf, hv, hob, o2e)), sp.ovf_any)
+    show by taut(x)
+  qed
+  have k2: case 2 of hbr proof
+    assume e
+    rsimp only, startup_specs.to_main in e
+    obtain o4, hs4 hk4 from expand(e, bind_rel)
+    have hl1 := apply(g.letin_e, apply(g.runs_elim, hs4))
+    rsimp in hl1
+    // (the precondition's envp: n words)
+    have _ hsp16 _ hsm := hpre
+    have m1 m2 m3 m4 hil hct := expand(hsm, startup_specs.start_main_pre)
+    obtain n auxv, hn _ hrest from expand(hil, startup_specs.init_libc_pre)
+    have hen _ _ hgl _ _ _ _ _ _ _ _ := hrest
+    let E := bits_add(64, sp, int_mul(8, int_add(gimple.bytes_at(t.vm, sp, 8), 2)))
+    let C := gimple.bytes_at(t.vm, sp, 8)
+    have _ _ _ tvb := apply(ms.world_parts, hw)
+    have co _ := apply(g.bytes_bound[vm := t.vm, a := sp, n := 8], tvb, eval())
+    have e1 := apply(x86.add_nowrap[a := sp, b := 8], arith(hsp), eval(), arith(hsp16, hsp))
+    have e2 := apply(x86.add_nowrap[a := bits_add(64, sp, 8), b := int_mul(8, int_add(C, 1))], arith(e1, hsp), arith(co), arith(m3, e1, hsp, co))
+    have e3 := apply(x86.add_nowrap[a := sp, b := int_mul(8, int_add(C, 2))], arith(hsp), arith(co), arith(m3, e1, hsp, co))
+    have ee: bits_add(64, bits_add(64, sp, 8), int_mul(8, int_add(C, 1))) = E := trans(e2, trans((int_add(bits_add(64, sp, 8), int_mul(8, int_add(C, 1))) = int_add(sp, int_mul(8, int_add(C, 2))) by arith(e1, co, hsp)), sym(e3)))
+    have hen2 := rewrite(ee, hen)
+    have Eb: E in bits(64) by simp()
+    have ex1 := apply(ui.main_exists[g := g, t := t, E := E, n := n], hw, hb, hl, hl2, hb2, hdis, hgl, hn, hen2, Eb)
+    obtain V, hV hcv hk from apply(g.any_e, ex1, hl1)
+    have hfr hea hth := hcv
+    have hk1 := apply(g.letin_e, hk)
+    rsimp in hk1
+    obtain fs, hfb hts hk2 from apply(g.any_e, hth, hk1)
+    have xe := apply(g.letin_e, hk2)
+    let T := fn_update(fn_update(t, "vm", V), "fs_base", fs)
+    let AM := exc_val("at_main", empty)
+    obtain x, hr hc from xe
+    rsimp only, startup_specs.main_entered in hr
+    have xr: x = exc(T, AM) := apply(g.runs_elim, hr)
+    have c1: (ex x1 x2. x = ok(x1, x2) && o4 = ok(x1, empty)) -> false proof
+      assume hh
+      obtain x1 x2, q _ from hh
+      show := rsimp(trans(sym(xr), q))
+    qed
+    have c2: (ex x1 x2. x = exc(x1, x2) && o4 = exc(x1, x2)) -> o4 = exc(T, AM) proof
+      assume hh
+      obtain x1 x2, q1 q2 from hh
+      show := trans(q2, trans(sym(q1), xr))
+    qed
+    have c3: (ex x1. x = diverge(x1) && o4 = diverge(x1)) -> false proof
+      assume hh
+      obtain x1, q _ from hh
+      show := rsimp(trans(sym(xr), q))
+    qed
+    have o4e: o4 = exc(T, AM) by taut(hc, c1, c2, c3)
+    have d1: (ex s1 v. o4 = ok(s1, v) && x0 = ok(pair(s1, empty), empty)) -> false proof
+      assume hh
+      obtain s1 v, q _ from hh
+      show := rsimp(trans(sym(o4e), q))
+    qed
+    have d2: (ex s1 e1. o4 = exc(s1, e1) && x0 = exc(pair(s1, empty), pair("raise", e1))) -> x0 = exc(pair(T, empty), pair("raise", AM)) proof
+      assume hh
+      obtain s1 e1, q1 q2 from hh
+      have i1 i2 := apply(ui.exc_inj, trans(sym(q1), o4e))
+      show := rewrite(i1, rewrite(i2, q2))
+    qed
+    have d3: (ex d. o4 = diverge(d) && x0 = diverge(d)) -> false proof
+      assume hh
+      obtain d, q _ from hh
+      show := rsimp(trans(sym(o4e), q))
+    qed
+    have x0e: x0 = exc(pair(T, empty), pair("raise", AM)) by taut(hk4, d1, d2, d3)
+    have oe: o3 = exc(T, AM) by simp(rewrite(x0e, hout))
+    have o2e: o = exc(T, AM) by simp(rewrite(oe, hk3))
+    have r: ex V fs. V in x86_64_linux.Vm && startup_specs.frame(t.vm, V, t.objs, startup_specs.start_writes(g)) &&
+      (all x4. x4 in omega -> startup_specs.env_at(t.vm, t.objs, bits_add(64, sp, int_mul(8, int_add(gimple.bytes_at(t.vm, sp, 8), 2))), x4) ->
+         gimple.bytes_at(V, int_add(g.libc, 8), 8) = int_add(bits_add(64, sp, int_mul(8, int_add(gimple.bytes_at(t.vm, sp, 8), 2))), int_mul(8, int_add(x4, 1)))) &&
+      fs in bits(64) && startup_specs.thread_set(V, fs) && o = exc(fn_update(fn_update(t, "vm", V), "fs_base", fs), exc_val("at_main", empty))
+      by ex_intro({V}, {fs}, taut(hV, hfr, hea, hfb, hts, o2e))
+    show by taut(r)
+  qed
+  show by taut(hbr, k1, k2)
 qed
