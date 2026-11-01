@@ -30,7 +30,16 @@ overflow -- for the units' globals (`lk.gok`) and the program's
 addresses (`lk.pok`).
 
 The step left:
-- (d) The top: exec_state to the C world at `_start` (its 5 instructions
+- (d) The top (proofs/mallocng/init.core; done: the empty heap's `rep`
+  from memory facts, `mp.empty_rep`; the claim's run as a stopped run,
+  `ui.until_run`, `ui.until_step`; the ELF's headers, `ui.elf`). Left:
+  the text loaded at exec (`code_at` from `image_loaded` by `ui.elf`, the
+  text's bytes the file's by evaluation); `_start`'s steps
+  (`ui.until_step` with its decode facts; the call's push may grow the
+  stack); `lk.start_impl` at `_start_c` (its outcome by `ui.until_run`:
+  no undefined behaviour, the spec never returns, so the stop at main);
+  `mp.empty_rep`'s premises from the spec's world at main and exec's
+  image; the owned bound. Exec to the C world at `_start` (its 5 instructions
   -- `xor rbp, rbp; mov rdi, rsp; lea rsi, [0]; and rsp, -16; call
   _start_c` -- entered as exec leaves the machine, rsp at argc and no
   return address: no ABI contract, so here; its decode facts in the steps

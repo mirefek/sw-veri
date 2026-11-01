@@ -1466,3 +1466,18 @@ item is a short summary of finished work; details are in the files named.
   the fixed ranges, `perms_ok` readable where on a world page;
   `freed_back` keeps the initialization; `start_writes` without
   `need_locks`; exec's `brk_start` in the user space.
+- **The empty heap's invariant** (proofs/mallocng/model/empty.core):
+  startup's abstract state `mp.a0(AT, L)` (no area, group or block; the
+  auxv at AT, its entries L) represents a heap without blocks
+  (`mp.empty_rep`) given memory's facts on all bytes -- the image, size
+  classes and de Bruijn table, the context zero, the auxv entries
+  (`fresh_ok`), the permissions and mappings, the thread's descriptor
+  apart; each clause on the held view as on all bytes (the regions'
+  bytes held but the context's free counters).
+- **Toward `musl.init`** (proofs/mallocng/init.core, after start_main.core):
+  the claim's `run_until(main)` unfolded (`ui.UR`) and peeled a step at a
+  time (`ui.until_step`); a run reaching main gives a stopped bridge run
+  taking the same steps (`ui.until_run`: the stop at main, the discipline
+  broken, or the entry's return); the program's file read by evaluation
+  (`ui.le_file`: `le_at` of `bytes_seq(B)` by `B`'s bytes; `ui.elf`: its
+  8 program headers).
