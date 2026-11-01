@@ -892,6 +892,80 @@ proof
     abi.stack_reserve, abi.stack_page, x86_64_linux.mapped, x86_64_linux.stack_floor)
 qed
 
+// (the push's page: exec's stack, or a page the stack grew by -- nothing
+// else is mapped near the stack)
+theorem ui.push_page: all vm v1 lo top a. vm in x86_64_linux.Vm -> lo in omega -> top in omega -> x86_64_linux.stack_pages(vm, lo, top) -> x86.stk_ext(vm, v1) ->
+  a in omega -> int_le(int_mul(lo, x86_64_linux.PAGE), int_add(a, 8)) -> int_lt(a, int_mul(top, x86_64_linux.PAGE)) ->
+  x86_64_linux.mapped(v1, int_div(a, x86_64_linux.PAGE)) -> abi.stack_page(v1, int_div(a, x86_64_linux.PAGE))
+proof
+  fix vm v1 lo top a
+  assume hv hlo htop hs hx ha h1 h2 hm
+  have s1 s2 s3 s4 s5 s6 s7 s8 := expand(hs, x86_64_linux.stack_pages)
+  have x1 _ := expand(hx, x86.stk_ext)
+  let p := int_div(a, x86_64_linux.PAGE)
+  have po: p in omega by arith(ha)
+  have c1: v1.pages[p] = vm.pages[p] -> abi.stack_page(v1, p) proof
+    assume e
+    have m1 m2 := expand(hm, x86_64_linux.mapped)
+    have mv: x86_64_linux.mapped(vm, p) by defs(taut(m1, rewrite(e, m2)), x86_64_linux.mapped)
+    have fl: x86_64_linux.stack_floor(vm) = int_sub(vm.stack_top, vm.stack_limit) by defs(refl({int_sub(vm.stack_top, vm.stack_limit)}), x86_64_linux.stack_floor)
+    have nlo: !int_lt(p, lo) proof
+      assume hl
+      have g := mp(all_elim(s8, {p}), po, conj(hl, mv))
+      show by arith(g, fl, s3, s4, h1, ha)
+    qed
+    have ep := mp(all_elim(s5, {p}), po, conj((int_le(lo, p) by arith(nlo, po, hlo)), (int_lt(p, top) by arith(h2, ha))))
+    have q := rewrite(sym(ep), ui.snd_some[x := fn_update(fn_update(empty, "prot", fn_update(fn_update(fn_update(empty, "r", true), "w", true), "x", false)), "kind", 2)])
+    have pk: snd(vm.pages[p]).kind = 2 by rsimp(q)
+    show by defs(taut(hm, rewrite(sym(e), pk)), abi.stack_page)
+  qed
+  show by taut(mp(all_elim(x1, {p}), po), c1)
+qed
+
+// the ABI's entry at _start_c (the startup mode, aligned): rsp at the
+// pushed return address on a stack page, the reserve, df clear, rdi exec's
+// rsp -- the argument --, the break's start sound
+theorem ui.entry_eok: all m0 s lo top. m0 in x86_64_linux.Machine -> lo in omega -> top in omega -> x86_64_linux.stack_pages(m0.vm, lo, top) ->
+  int_le(int_mul(lo, x86_64_linux.PAGE), m0.gpr[4]) -> int_lt(m0.gpr[4], int_mul(top, x86_64_linux.PAGE)) -> int_mod(m0.gpr[4], 16) = 0 -> int_le(16, m0.gpr[4]) ->
+  !m0.flags.df -> int_le(x86_64_linux.PAGE, m0.vm.brk_start) -> ui.s5(m0, s) -> tr.eok(false, false, s, seq_one(m0.gpr[4]))
+proof
+  fix m0 s lo top
+  assume hM hlo htop hs h1 h2 hal h16 hdf hbs h5
+  have _ _ _ hsp hdi hd _ _ _ _ ev := expand(h5, ui.s5)
+  obtain v1, sk vg vf ac ve from ev
+  have pt := apply(x86i.parts, hM)
+  have _ _ _ hv := pt
+  have g0 := apply(x86i.rsp_typed, hM)
+  let A := bits_sub(64, m0.gpr[4], 8)
+  have ae: A = int_sub(m0.gpr[4], 8) by rsimp(h16)
+  have ao: A in omega by arith(ae, h16)
+  have a0 := mp(all_elim(ac, {0}), eval(), eval())
+  have a0e: bits_add(64, A, bits_of_int(64, 0)) = A by rsimp(ae, (int_add(int_sub(m0.gpr[4], 8), 0) = int_sub(m0.gpr[4], 8) by arith(h16)))
+  have ca: x86_64_linux.can_access(v1, A, 1) := rewrite(a0e, a0)
+  have mp1: x86_64_linux.mapped(v1, int_div(A, x86_64_linux.PAGE)) by taut(expand(ca, x86_64_linux.can_access, x86_64_linux.page_of))
+  have sp := apply(ui.push_page[vm := m0.vm, v1 := v1, lo := lo, top := top, a := A], hv, hlo, htop, hs, sk, ao, arith(ae, h1), arith(ae, h2), mp1)
+  let B := x86_64_linux.store_le(v1.bytes, A, 8, 4198565)
+  have e1: abi.stack_page(s.vm, int_div(s.gpr[4], x86_64_linux.PAGE)) := rewrite(sym(hsp), rewrite(sym(ve), apply(ui.sp_bytes[B := B], sp)))
+  have e2: x86_64_linux.can_access(s.vm, s.gpr[4], 1) := rewrite(sym(hsp), rewrite(sym(ve), apply(ui.ca_bytes[B := B], ca)))
+  have rs := apply(ui.exec_reserve, hv, hlo, htop, hs)
+  have _ sr := expand(sk, x86.stk_ext)
+  have e3: abi.stack_reserve(s.vm) := rewrite(sym(ve), apply(ui.rsv_bytes[B := B], mp(sr, rs)))
+  have e4: !s.flags.df := rewrite(sym(hd), hdf)
+  have e5: all x0. x0 in omega -> int_lt(x0, seq_len(seq_one(m0.gpr[4]))) -> s.gpr[abi.ARG_REGS[x0]] = seq_one(m0.gpr[4])[x0] proof
+    fix x
+    assume hx hxl
+    have z: x = 0 by arith(hx, (seq_len(seq_one(m0.gpr[4])) = 1 by simp()), hxl)
+    have r0 _ _ _ _ _ := tr.argregs
+    have q: s.gpr[abi.ARG_REGS[0]] = seq_one(m0.gpr[4])[0] := trans(rewrite(sym(r0), hdi), (m0.gpr[4] = seq_one(m0.gpr[4])[0] by simp()))
+    show := rewrite(sym(z), q)
+  qed
+  have e6: int_mod(s.gpr[4], 8) = 0 := rewrite(sym(hsp), (int_mod(A, 8) = 0 by arith(ae, hal, h16)))
+  have _ _ fb _ := expand(vf, x86.vm_fields)
+  have e7: abi.brk_start_ok(s.vm) by defs(rsimp(ve, fb, hbs), abi.brk_start_ok)
+  have e9: int_mod(bits_add(64, s.gpr[4], 8), 16) = 0 := rewrite(sym(hsp), (int_mod(bits_add(64, A, 8), 16) = 0 by arith(ae, hal, h16, g0)))
+  show by defs(taut(e1, e2, e3, e4, e5, e6, e7, e9), tr.eok)
+qed
+
 // the program loaded at _start_c's entry: the text as exec loaded it, the
 // push on the stack
 theorem ui.entry_loaded: all m0 s. ui.s5(m0, s) -> abi.code_at(m0.vm, 4198400, text.code) -> abi.loaded(s.vm, 4198400, text.code, empty)
