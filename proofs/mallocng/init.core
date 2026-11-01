@@ -1417,3 +1417,155 @@ proof
   qed
   show by taut(hbr, k1, k2)
 qed
+
+// (a spec that only overflows or enters main: the bridge's outcome for a
+// run the claim's run gives -- the stop at m)
+theorem ui.mtv_stop: all s V P W o m. (all o2. runs(P, W, o2) -> (ex x. o2 = exc(x, exc_val("stack_overflow", empty))) || (ex x. o2 = exc(x, exc_val("at_main", empty)))) ->
+  tr.mtv(false, s, V, P, W, o, true) -> ui.Q(s, m, o) -> tr.stv(false, P, W, ok(m, exc_val("stop", empty)))
+proof
+  fix s V P W o m
+  assume hP hm hq
+  let OVF := exc_val("stack_overflow", empty)
+  let AM := exc_val("at_main", empty)
+  let ST := exc_val("stop", empty)
+  // (no undefined behaviour: P raises nothing else)
+  have nub: !tr.ub(s, V, P, W) proof
+    assume hu
+    obtain e x, _ n1 n2 _ hr from expand(hu, tr.ub)
+    have c1: (ex y. exc(x, e) = exc(y, OVF)) -> false proof
+      assume hh
+      obtain y, q from hh
+      have _ q2 := apply(ui.exc_inj, q)
+      show by taut(q2, n1)
+    qed
+    have c2: (ex y. exc(x, e) = exc(y, AM)) -> false proof
+      assume hh
+      obtain y, q from hh
+      have _ q2 := apply(ui.exc_inj, q)
+      show by taut(q2, n2)
+    qed
+    show by taut(mp(all_elim(hP, {exc(x, e)}), hr), c1, c2)
+  qed
+  // (no return: P has no normal outcome)
+  have nret: all m1. !tr.rtv(false, s, V, P, W, m1) proof
+    fix m1
+    assume hr
+    have _ _ ew .. := expand(hr, tr.rtv)
+    obtain w2, hw2 .. from ew
+    have c1: (ex y. ok(w2, pair(m1.gpr[0], m1.gpr[2])) = exc(y, OVF)) -> false proof
+      assume hh
+      obtain y, q from hh
+      show := rsimp(q)
+    qed
+    have c2: (ex y. ok(w2, pair(m1.gpr[0], m1.gpr[2])) = exc(y, AM)) -> false proof
+      assume hh
+      obtain y, q from hh
+      show := rsimp(q)
+    qed
+    show by taut(mp(all_elim(hP, {ok(w2, pair(m1.gpr[0], m1.gpr[2]))}), hw2), c1, c2)
+  qed
+  have mt := expand(hm, tr.mtv)
+  // (the cases of the claim's run)
+  have q1: o = ok(m, ST) -> tr.stv(false, P, W, ok(m, ST)) proof
+    assume e
+    have ncr: !tr.crash(s, P, W, o) proof
+      assume hc
+      obtain m2 a k, oe _ _ _ _ _ from expand(hc, tr.crash)
+      have z1: !(ok(m, ST) = exc(m2, exc_val("segv", pair(a, k)))) proof
+        assume q
+        show := rsimp(q)
+      qed
+      have z2: !(ok(m, ST) = exc(m2, exc_val("stack_fault", empty))) proof
+        assume q
+        show := rsimp(q)
+      qed
+      show by taut(rewrite(e, oe), z1, z2)
+    qed
+    have ndv: !tr.div(P, W, o) proof
+      assume hd
+      have dq _ := expand(hd, tr.div)
+      obtain t2, q from dq
+      show := rsimp(trans(sym(e), q))
+    qed
+    have nr2: !(ex m1. o = ok(m1, empty) && tr.rtv(false, s, V, P, W, m1)) proof
+      assume hh
+      obtain m1, q hr from hh
+      show by taut(hr, all_elim(nret, {m1}))
+    qed
+    show := rewrite(e, (tr.stv(false, P, W, o) by taut(mt, nub, ncr, ndv, nr2)))
+  qed
+  have q2: (ex x. o = exc(x, exc_val("disc", empty))) -> false proof
+    assume hh
+    obtain x, e from hh
+    have ncr: !tr.crash(s, P, W, o) proof
+      assume hc
+      obtain m2 a k, oe _ _ _ _ _ from expand(hc, tr.crash)
+      have z1: !(exc(x, exc_val("disc", empty)) = exc(m2, exc_val("segv", pair(a, k)))) proof
+        assume q
+        have _ q2 := apply(ui.exc_inj, q)
+        have u _ := apply(pair_inj[a := "disc", b := empty, c := "segv", d := pair(a, k)], (pair("disc", empty) = pair("segv", pair(a, k)) by defs(q2, exc_val)))
+        show by taut(u, (!("disc" = "segv") by eval()))
+      qed
+      have z2: !(exc(x, exc_val("disc", empty)) = exc(m2, exc_val("stack_fault", empty))) proof
+        assume q
+        have _ q2 := apply(ui.exc_inj, q)
+        have u _ := apply(pair_inj[a := "disc", b := empty, c := "stack_fault", d := empty], (pair("disc", empty) = pair("stack_fault", empty) by defs(q2, exc_val)))
+        show by taut(u, (!("disc" = "stack_fault") by eval()))
+      qed
+      show by taut(rewrite(e, oe), z1, z2)
+    qed
+    have ndv: !tr.div(P, W, o) proof
+      assume hd
+      have dq _ := expand(hd, tr.div)
+      obtain t2, q from dq
+      show := rsimp(trans(sym(e), q))
+    qed
+    have nr2: !(ex m1. o = ok(m1, empty) && tr.rtv(false, s, V, P, W, m1)) proof
+      assume hh
+      obtain m1, q _ from hh
+      show := rsimp(trans(sym(e), q))
+    qed
+    have nst: !tr.stv(false, P, W, o) proof
+      assume hh
+      obtain m3 w v2 mem2, q _ _ _ _ from expand(hh, tr.stv)
+      show := rsimp(trans(sym(e), q))
+    qed
+    show by taut(mt, nub, ncr, ndv, nr2, nst)
+  qed
+  have q3: (ex x. o = ok(x, empty) && tr.at_ret(s, x)) -> false proof
+    assume hh
+    obtain x, e _ from hh
+    have ncr: !tr.crash(s, P, W, o) proof
+      assume hc
+      obtain m2 a k, oe _ _ _ _ _ from expand(hc, tr.crash)
+      have z1: !(ok(x, empty) = exc(m2, exc_val("segv", pair(a, k)))) proof
+        assume q
+        show := rsimp(q)
+      qed
+      have z2: !(ok(x, empty) = exc(m2, exc_val("stack_fault", empty))) proof
+        assume q
+        show := rsimp(q)
+      qed
+      show by taut(rewrite(e, oe), z1, z2)
+    qed
+    have ndv: !tr.div(P, W, o) proof
+      assume hd
+      have dq _ := expand(hd, tr.div)
+      obtain t2, q from dq
+      show := rsimp(trans(sym(e), q))
+    qed
+    have nr2: !(ex m1. o = ok(m1, empty) && tr.rtv(false, s, V, P, W, m1)) proof
+      assume h2
+      obtain m1, _ hr from h2
+      show by taut(hr, all_elim(nret, {m1}))
+    qed
+    have nst: !tr.stv(false, P, W, o) proof
+      assume h2
+      obtain m3 w v2 mem2, q _ _ _ _ from expand(h2, tr.stv)
+      have _ q2 := apply(ui.ok_inj, trans(sym(e), q))
+      show by taut(q2, tr.stop_ne)
+    qed
+    show by taut(mt, nub, ncr, ndv, nr2, nst)
+  qed
+  show by taut(expand(hq, ui.Q), q1, q2, q3)
+qed
