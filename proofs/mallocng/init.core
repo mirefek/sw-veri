@@ -9,6 +9,18 @@
 abbrev ui.U(t, l, o) := (!(fst(l).rip = t) && bind_rel(x86_64_linux.step, fst(l), x5 x6. o = ok(pair(x5, empty), empty), x5 x6. o = exc(pair(x5, empty), pair("raise", x6)), x5. o = diverge(x5))) ||
   (!!(fst(l).rip = t) && o = exc(pair(fst(l), empty), pair("brk", empty)))
 
+// the claim's run to t from m0 ending at m, unfolded
+def ui.UR(t, m0, m) := ex x0. while_rel(pair(m0, empty), l. true, l o. ui.U(t, l, o), l. fn_update(empty, "os.events", fst(l).os.events), x0) &&
+  (((fst(x0) = 0 || (fst(x0) = 1 && fst(out_value(x0)) = "brk")) && m = fst(out_state(x0))) ||
+   ((fst(x0) = 1 && fst(out_value(x0)) = "ret") && (m = fst(out_state(x0)) && empty = snd(out_value(x0)))))
+
+theorem ui.until_parts: all t m0 m. runs(claim_malloc.run_until(t), m0, ok(m, empty)) -> ui.UR(t, m0, m)
+proof
+  fix t m0 m
+  assume hr
+  show by defs(simp(expand(hr, claim_malloc.run_until)), ui.UR)
+qed
+
 // the stopped run's outcomes when the claim's run gets to t at m: the stop
 // at m, the discipline broken, or the entry's return reached
 def ui.Q(s, m, o) := o = ok(m, exc_val("stop", empty)) || (ex x. o = exc(x, exc_val("disc", empty))) || (ex x. o = ok(x, empty) && tr.at_ret(s, x))
@@ -49,13 +61,12 @@ qed
 // entry s, its return address not t) ends with the stop at m, the
 // discipline broken, or at the entry's return -- it takes the claim's
 // steps
-theorem ui.until_run: all s t m0 m. runs(claim_malloc.run_until(t), m0, ok(m, empty)) -> !(t = x86_64_linux.le(s.vm.bytes, s.gpr[4], 8)) ->
+theorem ui.until_run: all s t m0 m. ui.UR(t, m0, m) -> !(t = x86_64_linux.le(s.vm.bytes, s.gpr[4], 8)) ->
   ex o. tr.run_s(s, t, m0, o) && ui.Q(s, m, o)
 proof
   fix s t m0 m
   assume hr hnt
-  have e := simp(expand(hr, claim_malloc.run_until))
-  obtain r, hw hm from e
+  obtain r, hw hm from expand(hr, ui.UR)
   // (the last pass: rip = t, at m)
   have base: all l. ((!true && r = ok(l, empty)) || (true && ui.U(t, l, r) && !is_ok(r))) -> ui.Z(s, t, m, l) proof
     fix l
@@ -146,4 +157,79 @@ proof
   obtain r2 o2, w2 _ m2 q2 from expand(z0, ui.Z)
   have rs: tr.run_s(s, t, m0, o2) by defs(ex_intro({r2}, taut(w2, m2)), tr.run_s, tr.rws)
   show by ex_intro({o2}, taut(rs, q2))
+qed
+
+// The claim's run to t from m0 (not at t) ending at m: its first step
+// ends normally, at m1, and the run from m1 ends at m
+theorem ui.until_step: all t m0 m. !(m0.rip = t) -> ui.UR(t, m0, m) ->
+  ex m1 v. runs(x86_64_linux.step(), m0, ok(m1, v)) && ui.UR(t, m1, m)
+proof
+  fix t m0 m
+  assume hnt hr
+  obtain r, hw hm from expand(hr, ui.UR)
+  have nd: !(fst(r) = 2) proof
+    assume h2
+    show by simp(rewrite(h2, hm))
+  qed
+  have u := apply(while_unroll[l0 := pair(m0, empty), c := l. true, b := l o. ui.U(t, l, o), tr := l. fn_update(empty, "os.events", fst(l).os.events), r := r], hw)
+  // (the first pass leaving: no step ending so)
+  have c1: ui.U(t, pair(m0, empty), r) -> !is_ok(r) -> false proof
+    assume hu nr
+    have nb: !(!!(fst(pair(m0, empty)).rip = t) && r = exc(pair(fst(pair(m0, empty)), empty), pair("brk", empty))) by simp(hnt)
+    have bd := (bind_rel(x86_64_linux.step, fst(pair(m0, empty)), x5 x6. r = ok(pair(x5, empty), empty), x5 x6. r = exc(pair(x5, empty), pair("raise", x6)), x5. r = diverge(x5)) by taut(hu, nb))
+    obtain o, _ oc from expand(bd, bind_rel)
+    have k1: (ex s1 v. o = ok(s1, v) && r = ok(pair(s1, empty), empty)) -> false proof
+      assume h1
+      obtain s1 v, _ er from h1
+      have io: is_ok(r) by defs(ex_intro({pair(s1, empty)}, {empty}, er), is_ok)
+      show by taut(io, nr)
+    qed
+    have k2: (ex s1 x. o = exc(s1, x) && r = exc(pair(s1, empty), pair("raise", x))) -> false proof
+      assume h2
+      obtain s1 x, _ er from h2
+      show by simp(rewrite(er, hm))
+    qed
+    have k3: (ex d. o = diverge(d) && r = diverge(d)) -> false proof
+      assume h3
+      obtain d, _ er from h3
+      show by simp(rewrite(er, hm))
+    qed
+    show by taut(oc, k1, k2, k3)
+  qed
+  have c2: (ex l1. ui.U(t, pair(m0, empty), ok(l1, empty)) && (ex r1. while_rel(l1, l. true, l o. ui.U(t, l, o), l. fn_update(empty, "os.events", fst(l).os.events), r1) &&
+      fst(r1) = fst(r) && (!(fst(r) = 2) -> r1 = r))) ->
+      ex m1 v. runs(x86_64_linux.step(), m0, ok(m1, v)) && ui.UR(t, m1, m) proof
+    assume h
+    obtain l1, hu ex1 from h
+    obtain r1, w1 _ e1 from ex1
+    have er: r1 = r := mp(e1, nd)
+    have nb: !(!!(fst(pair(m0, empty)).rip = t) && ok(l1, empty) = exc(pair(fst(pair(m0, empty)), empty), pair("brk", empty))) by simp()
+    have bd := (bind_rel(x86_64_linux.step, fst(pair(m0, empty)), x5 x6. ok(l1, empty) = ok(pair(x5, empty), empty), x5 x6. ok(l1, empty) = exc(pair(x5, empty), pair("raise", x6)), x5. ok(l1, empty) = diverge(x5)) by taut(hu, nb))
+    obtain o, ho oc from expand(bd, bind_rel)
+    have k1: (ex s1 v. o = ok(s1, v) && ok(l1, empty) = ok(pair(s1, empty), empty)) -> ex m1 v. runs(x86_64_linux.step(), m0, ok(m1, v)) && ui.UR(t, m1, m) proof
+      assume h1
+      obtain s1 v, eo el from h1
+      have l1e: l1 = pair(s1, empty) by simp(el)
+      have fp: fst(pair(m0, empty)) = m0 by simp()
+      have rs: runs(x86_64_linux.step(), m0, ok(s1, v)) := rewrite(fp, rewrite(eo, ho))
+      have w2 := rewrite(l1e, rewrite(er, w1))
+      have g: ex x0. while_rel(pair(s1, empty), l. true, l o. ui.U(t, l, o), l. fn_update(empty, "os.events", fst(l).os.events), x0) &&
+          (((fst(x0) = 0 || (fst(x0) = 1 && fst(out_value(x0)) = "brk")) && m = fst(out_state(x0))) ||
+           ((fst(x0) = 1 && fst(out_value(x0)) = "ret") && (m = fst(out_state(x0)) && empty = snd(out_value(x0))))) by ex_intro({r}, taut(w2, hm))
+      have ru: ui.UR(t, s1, m) by defs(g, ui.UR)
+      show by ex_intro({s1}, {v}, taut(rs, ru))
+    qed
+    have k2: (ex s1 x. o = exc(s1, x) && ok(l1, empty) = exc(pair(s1, empty), pair("raise", x))) -> false proof
+      assume h2
+      obtain s1 x, _ el from h2
+      show by simp(el)
+    qed
+    have k3: (ex d. o = diverge(d) && ok(l1, empty) = diverge(d)) -> false proof
+      assume h3
+      obtain d, _ el from h3
+      show by simp(el)
+    qed
+    show by taut(oc, k1, k2, k3)
+  qed
+  show by taut(u, c1, c2)
 qed
