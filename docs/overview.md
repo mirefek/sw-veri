@@ -42,8 +42,7 @@ ex inv owned. Laws(inv, owned) && Init(inv, owned)
 
 The chain checks the claim of the -O0 binary (`@claim`, first after the
 libraries; the elaborated layers after it leave out what it defines) and
-proves it in proofs/mallocng/claim.core; `kernel-check` prints the open
-lemmas it rests on.
+proves it in proofs/mallocng/claim.core, from no open lemma.
 
 `Init` (`init_at_main` in layers/claim_malloc.sl) is about the runs that
 reach `main`:
@@ -53,7 +52,7 @@ reach `main`:
   musl's data symbols), the thread descriptor up to errno (`fs_base ..
   +0x34`), and the auxiliary vector and AT_RANDOM bytes.
 If the model could not reach `main` at all, `Init` would hold vacuously;
-the startup proof (docs/todo.md §5) has to show that it does.
+that some run does is still to show (docs/todo.md §1).
 
 ## The levels
 

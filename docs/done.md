@@ -1481,3 +1481,25 @@ item is a short summary of finished work; details are in the files named.
   broken, or the entry's return); the program's file read by evaluation
   (`ui.le_file`: `le_at` of `bytes_seq(B)` by `B`'s bytes; `ui.elf`: its
   8 program headers).
+- **`musl.init`: startup to main** (proofs/mallocng/init.core; claim.core
+  now last in the chain, the claim `musl_malloc` closed). `_start`'s
+  steps to `_start_c`'s entry (`ui.s5`); `_start_c`'s precondition in
+  the world's view from exec's state (`ui.cpre`, exec's stack facts
+  bundled as `ui.SX`); the claim's run to main as the spec's world entering
+  it (`ui.to_main`, `ui.at_main`; the thread at `thread_at`, a layer
+  change in startup_specs.sl). At main, for the binary's config `ui.C`
+  and the empty state `mp.a0(AT, auxv)` -- `mp.empty_rep`'s premises:
+  the regions separate; the context, lock and need_locks zero (.bss
+  outside startup's exact writes, `ui.sw_exact`); the image's bytes and
+  page protections (`ui.image_main`); the size-class, count and de Bruijn
+  tables (file bytes as literals checked by a mismatch count,
+  `ui.tchk_ok` / `ui.le_tab`; `ui.tables_main`); `fresh_ok` (libc's
+  vector pointer from `at_main`, `ui.mm_libc`; the vector's words exec's,
+  `ui.mm_word`; above the image, `ui.fx_low`); `perms_ok`, `free_rw`
+  (the data pages read-write, `ui.mm_rw`; the stack hidden in the C view,
+  `ui.mm_stkpg`); `fp_mapped` (image pages, `ui.mm_map`; the vector in
+  the stack's space, `ui.mm_iss`); the break; the descriptor's words
+  apart (`ui.fs_apart`); `aux_live`. Assembled: `ui.rep_main`; the owned
+  bytes the static ones or libc's stack data (`ui.owned_main`, by
+  `abs_unique` on the empty heap typed, `ui.heap_typed`);
+  `ui.init_main`, the claim's `init_at_main`.

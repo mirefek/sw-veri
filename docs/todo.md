@@ -3,91 +3,14 @@
 The current plans, in order. When an item is done it is deleted here and
 summarized in docs/done.md.
 
-## 1. Next: Init -- startup to main
+## 1. Next: a run reaching main
 
-malloc and free are verified end to end: the claim `musl_malloc` is
-proven in the chain (proofs/mallocng/claim.core) from one open lemma,
-`musl.init`: musl's `_start` … `__libc_start_main` reaches `main` with
-the invariant holding for the empty heap. The binary as linked (gcc's
-crtbegin included). Done so far (docs/done.md, Init): the startup units'
-readable GIMPLE, the stop mode (runs stopping at main's entry), the
-startup mode (no thread pointer, no canary yet), memset, frames with
-several stack objects, calls with a stack argument in either mode; C1 of
-`_start_c`, `__libc_start_main`, `libc_start_main_stage2`,
-`__libc_start_init`, `__init_libc`, `__init_ssp`, all of __init_tls.c
-(`__init_tls` is `static_init_tls`), `__set_thread_area`, the units' leaf
-copies, crti/crtn's `_init`; gcc's `register_tm_clones` and
-`frame_dummy`'s contract (step (a): the C1 of all the path's code but
-`_start`'s, its own in (d)); all of it linked (step (b),
-proofs/mallocng/machine/link_start.core: `stl.linked`, `_start_c`'s CFG
-function with its callees', the code maps `lnk.FP1`/`lnk.FP0` with main
-`lnk.main()` at t, exit and the a_crash copies undefined); every
-startup function's purpose (step (c), layers/startup_specs.sl):
-`lk.start_impl` (proofs/mallocng/fun/start_main.core), `_start_c`'s
-machine code implementing `start_c_spec_fun(g, P)` -- main entered
-(`at_main`) with libc set up as `__init_libc`'s spec says, or a stack
-overflow -- for the units' globals (`lk.gok`) and the program's
-addresses (`lk.pok`).
-
-The step left:
-- (d) The top (proofs/mallocng/init.core; done: the empty heap's `rep`
-  from memory facts, `mp.empty_rep`; the claim's run as a stopped run,
-  `ui.until_run`, `ui.until_step`; the ELF's headers, `ui.elf`; the text
-  loaded at exec, `ui.text_code`; exec's stack reserve, `ui.exec_reserve`
-  (from exec.sl's growth-room clause); `_start`'s 5 steps, `ui.start4`,
-  `ui.start_call` -- the state `ui.s5` at `_start_c`'s entry; the
-  bridge's entry facts there: `ui.entry_loaded`, `ui.entry_eok`,
-  `ui.entry_objs` -- exec's stack data the callers' objects, `ui.iobjs`
-  --, the world's view `ui.wvm` with `ui.wvm_vok`; `_start_c`'s spec's
-  runs under its precondition, `ui.c_q`: an overflow or main entered with
-  startup's effect, to_main's havoc satisfiable by `ui.main_exists`;
-  `lk.start_impl` applied, the claim's run stopping at main as the spec's
-  world entering it, `ui.c_stop`, `ui.main_world` / `ui.at_main`; the
-  precondition `ui.c_pre` in the world's view from exec's state,
-  `ui.cpre`, given exec's stack facts bundled as `ui.SX` -- the image's
-  pages and bytes in the view, `ui.w_img`, `ui.img_read`; the stack's,
-  `ui.w_stk`, `ui.w_word`; strings, `ui.cstr_stk`; the vector,
-  `ui.auxv_view`, `ui.aux_eq`; envp, `ui.env_view`; globals, `.bss`,
-  headers, ctors: `ui.globals`, `ui.tls_fresh`, `ui.phdrs`, `ui.ctors`).
-  The claim's premises to main: `ui.to_main` (exec's stack facts
-  `ui.SX`, main's world `ui.at_main` with the thread at `thread_at`:
-  in builtin_tls). Main's memory: `ui.cv_eq` (the claim's `c_vm` is
-  `ui.wvm`), `ui.main_pg`, `ui.main_byte` (pages and bytes outside
-  startup's writes: the entry view's, hence exec's).
-  Left (d4): `mp.empty_rep`'s premises for `ui.C` (= musl.cfg) and
-  `mp.a0(AT, auxv)` at `empty_heap(m, initial_auxv)`: Cfg; blocks none;
-  `separate(regions(..))` (regions made concrete: data_ranges, ro_ranges
-  of the 8 headers -- segments 0, 1, 2 read-only --, the reserve (0,0);
-  each address in one range at most); the context zero (.bss, apart from
-  startup's exact spans: needs a span-exact `ui.sw_range`); image_ok (ro
-  segments' bytes and last-page protections via `ui.main_byte`/`main_pg`,
-  need_locks and the lock zero); classes/debruijn/counts tables (file
-  bytes vs the layer's tables: a closed list equality by eval, then
-  pointwise); fresh_ok (libc.auxv word from `ui.at_main`, the vector on
-  the stack via `tr.vok`'s live bytes, apart from the fixed ranges);
-  perms_ok, free_rw (data pages rw); brk ≤ TASK_SIZE; fp_mapped (fixed
-  ranges mapped, the vector in the stack space); the descriptor's bytes
-  apart from fp_ranges (in builtin_tls); aux_live. Then the owned bound
-  and assembling `musl.init`, moving claim.core after init.core.
-
-  The auxiliary vector is on the initial stack: in the claim's heap (the C
-  view, `c_vm`: stack pages hidden) live stack objects (`rep.aux`), in the
-  stack's space (`fp_mapped.low`), apart from the allocator's fixed ranges
-  (`fresh_ok.auxv_apart`) -- to show at main from exec's stack_data.
-
-  It needs from exec (spec/linux/exec.sl): the break within the user
-  space (`brk_ok`), the auxiliary vector apart from the data
-  (`fresh_ok.auxv_ctx`) and not at null (`auxv_nz`); and the ABI's entry
-  its `brk_start_ok`.
-
-  The internal specs' `holds_in` has `shown` (`mallocng.shown_in`: the
-  allocator's bytes the C world's, its reserve's pages valid); the
-  claim's `rep` does not (the `frame` law says nothing of the world's
-  bytes). The top-level proof (rep to holds_in at each allocator call)
-  establishes it as it does `tls_apart`: the thread block (the canary at
-  fs + 40) apart from the allocator's ranges (its bytes, the live
-  blocks) -- at the empty heap, from the context, the tables and the
-  auxiliary vector; after, the allocator maps only fresh pages.
+The claim `musl_malloc` is proven (proofs/mallocng/claim.core, no open
+lemma). Its `Init` is about the runs that reach `main`: it would hold
+vacuously if none did. Left: a witness that some unprivileged exec state
+reaches `main` (`_start_c`'s spec has main entered -- `at_main` -- or a
+stack overflow; `ui.main_exists` shows to_main's havoc satisfiable, not
+that the machine run gets there).
 
 ## 2. The engine, when a function needs it
 
