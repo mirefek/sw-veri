@@ -5252,6 +5252,14 @@ proof
   show := rewrite(sym(trans(es, fu)), u)
 qed
 
+// (the loads' read-only bytes and the data symbols: the claim's static bytes)
+theorem ui.st_in: all a. a in omega -> ui.RO(a) || ui.DATA(a) -> a in musl_malloc.static
+proof
+  fix a
+  assume ha h
+  show by defs(simp(ha, h), musl_malloc.static, int_range)
+qed
+
 // the allocator's invariant at main: the empty state, libc's vector exec's
 theorem ui.rep_main: all m0 s lo top argv envp auxv m V fs. ui.MX(m0, s, lo, top, argv, envp, auxv, m, V, fs) ->
   mallocng.rep(ui.C, ui.A0(m0, argv, envp, auxv), claim_malloc.empty_heap(m, ui.OB(m0, argv, envp)))
@@ -5310,4 +5318,64 @@ proof
   have al2: mallocng.aux_live(A, S.objs) := rewrite(sym(eob), lv)
   show := apply(mp.empty_rep[c := ui.C, AT := AT, L := auxv, s := S], ui.C_ok, at, al, hb, sp, rewrite(sym(ev), z0), rewrite(sym(ev), im), rewrite(sym(ev), cl),
     rewrite(sym(ev), db), rewrite(sym(ev), fr), rewrite(sym(ev), pm), rewrite(sym(ev), bk), rewrite(sym(ev), fm), rewrite(sym(ev), fw), t1, t2, t3, al2)
+qed
+
+// what the allocator owns at main: the image's read-only bytes, its data,
+// libc's data on the initial stack
+theorem ui.owned_main: all m0 s lo top argv envp auxv m V fs a. ui.MX(m0, s, lo, top, argv, envp, auxv, m, V, fs) -> m in x86_64_linux.Machine -> a in omega ->
+  a in mallocng.owned(ui.C)[claim_malloc.empty_heap(m, ui.OB(m0, argv, envp))] -> a in musl_malloc.static || claim_malloc.initial_auxv(m0, argv, envp, a)
+proof
+  fix m0 s lo top argv envp auxv m V fs a
+  assume h hM ha ho
+  have hx _ := expand(h, ui.MX)
+  let S := claim_malloc.empty_heap(m, ui.OB(m0, argv, envp))
+  let AT := ui.AT(m0, argv, envp)
+  let A := ui.A0(m0, argv, envp, auxv)
+  have ot ou := apply(ui.ob_type[m0 := m0, argv := argv, envp := envp])
+  have st := apply(ui.heap_typed[m := m, objs := ui.OB(m0, argv, envp)], hM, ot, ou)
+  have at al := apply(ui.mx_typ[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs], h)
+  have {aa = abs} := apply(mp.a0_type[AT := AT, L := auxv], at, al)
+  have hr := apply(ui.rep_main[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs], h)
+  obtain B, hBa hBr hBf from apply(mallocng.owned_mem[c := ui.C, s := S, a := a], st, ho)
+  have eq := mp(mallocng.abs_unique[c := ui.C, s := S, A := B, B := A], ui.C_ok, st, hBa, aa, hBr, hr)
+  have f1 := unsel(expand(rewrite(eq, hBf), mallocng.footprint))
+  have f2 := unsel(expand((a in mallocng.fp_set(mallocng.fp_ranges(ui.C, A), S.blocks) by taut(f1)), mallocng.fp_set))
+  have ir: mallocng.in_ranges(a, mallocng.fp_ranges(ui.C, A)) by taut(f2)
+  have w := expand(apply(ui.fp_where[AT := AT, L := auxv, a := a], at, al, ha, ir), ui.FW)
+  have c1: ui.RO(a) || ui.DATA(a) -> a in musl_malloc.static := mp(all_elim(ui.st_in, {a}), ha)
+  have c2: mallocng.in_ranges(a, mallocng.auxv_ranges(A)) -> claim_malloc.initial_auxv(m0, argv, envp, a) proof
+    assume hi
+    have _ _ ia := apply(ui.ax_in[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, x := a], hx, ha, hi)
+    show := ia
+  qed
+  show by taut(w, c1, c2)
+qed
+
+// startup: from exec to main, the allocator's invariant holds on the empty
+// heap, what it owns its static bytes and libc's data on the initial stack
+theorem ui.init_main: claim_malloc.init_at_main(mallocng.inv(ui.C), mallocng.owned(ui.C), musl_malloc.errno_offset, musl_malloc.file, musl_malloc.main_at,
+  musl_malloc.static)
+proof
+  unfold claim_malloc.init_at_main
+  fix argv envp m0 m
+  assume ht hp
+  have hav hev hM0 hM := ht
+  have he hu hr := hp
+  obtain lo top auxv s V fs, hx hat from apply(ui.to_main[argv := argv, envp := envp, m0 := m0, m := m], hav, hev, hM0, he, hu, hr)
+  have h: ui.MX(m0, s, lo, top, argv, envp, auxv, m, V, fs) by defs(conj(hx, hat), ui.MX)
+  let S := claim_malloc.empty_heap(m, ui.OB(m0, argv, envp))
+  have ot ou := apply(ui.ob_type[m0 := m0, argv := argv, envp := envp])
+  have st := apply(ui.heap_typed[m := m, objs := ui.OB(m0, argv, envp)], hM, ot, ou)
+  have at al := apply(ui.mx_typ[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs], h)
+  have {aa = abs} := apply(mp.a0_type[AT := ui.AT(m0, argv, envp), L := auxv], at, al)
+  have hr0 := apply(ui.rep_main[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs], h)
+  have iv := apply(mallocng.inv_intro[c := ui.C, s := S, A := ui.A0(m0, argv, envp, auxv)], st, aa, hr0)
+  have ow: all a. a in omega -> a in mallocng.owned(ui.C)[S] -> (a in musl_malloc.static || a in malloc.range(m.fs_base, musl_malloc.errno_offset[empty])) ||
+      claim_malloc.initial_auxv(m0, argv, envp, a) proof
+    fix a
+    assume ha ho
+    have q := apply(ui.owned_main[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs, a := a], h, hM, ha, ho)
+    show by taut(q)
+  qed
+  show := conj(iv, ow)
 qed
