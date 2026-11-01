@@ -1827,3 +1827,98 @@ proof
   have lv: int_add(x, i) in ui.wob0(m0.gpr[4], top).live by rsimp(li)
   show := rewrite(sym(mp(ite_f[c := x86_64_linux.mapped(ui.wvm(s.vm), p) && !(snd(ui.wvm(s.vm).pages[p]).kind = 2), a := ite(w, snd(ui.wvm(s.vm).pages[p]).prot.w, snd(ui.wvm(s.vm).pages[p]).prot.r) && int_add(x, i) in ui.wob0(m0.gpr[4], top).c_bytes, b := int_lt(int_add(x, i), int_pow(2, 64)) && int_add(x, i) in ui.wob0(m0.gpr[4], top).live], nm)), conj(lt, lv))
 qed
+
+// ----------------------------------------------------------------------
+//  The image's pages
+
+// (the loads: the first four program headers)
+theorem ui.loads: all j. j in omega -> x86_64_linux.is_load(musl_malloc.file, j) -> j = 0 || j = 1 || j = 2 || j = 3
+proof
+  fix j
+  assume hj hl
+  have {pn = phnum, g4 = s4, g5 = s5, g6 = s6, g7 = s7} := ui.elf
+  have jl ty := expand(hl, x86_64_linux.is_load)
+  have pl: x86_64_linux.PT_LOAD = 1 by defs(eval(), x86_64_linux.PT_LOAD)
+  have t4 _ _ _ _ _ := expand(g4, ui.segis)
+  have t5 _ _ _ _ _ := expand(g5, ui.segis)
+  have t6 _ _ _ _ _ := expand(g6, ui.segis)
+  have t7 _ _ _ _ _ := expand(g7, ui.segis)
+  have c4: !(j = 4) proof
+    assume e
+    show by arith(t4, rewrite(e, ty), pl)
+  qed
+  have c5: !(j = 5) proof
+    assume e
+    show by arith(t5, rewrite(e, ty), pl)
+  qed
+  have c6: !(j = 6) proof
+    assume e
+    show by arith(t6, rewrite(e, ty), pl)
+  qed
+  have c7: !(j = 7) proof
+    assume e
+    show by arith(t7, rewrite(e, ty), pl)
+  qed
+  show by arith(hj, jl, pn, c4, c5, c6, c7)
+qed
+
+theorem ui.load_i: all i. i in omega -> int_le(i, 3) -> x86_64_linux.is_load(musl_malloc.file, i)
+proof
+  fix i
+  assume hi hil
+  have {pn = phnum, g0 = s0, g1 = s1, g2 = s2, g3 = s3} := ui.elf
+  have pl: x86_64_linux.PT_LOAD = 1 by defs(eval(), x86_64_linux.PT_LOAD)
+  have t0 _ _ _ _ _ := expand(g0, ui.segis)
+  have t1 _ _ _ _ _ := expand(g1, ui.segis)
+  have t2 _ _ _ _ _ := expand(g2, ui.segis)
+  have t3 _ _ _ _ _ := expand(g3, ui.segis)
+  have c: i = 0 || i = 1 || i = 2 || i = 3 by arith(hi, hil)
+  have ty: x86_64_linux.le_at(musl_malloc.file, x86_64_linux.ph(musl_malloc.file, i), 4) = 1 proof
+    have d0: i = 0 -> x86_64_linux.le_at(musl_malloc.file, x86_64_linux.ph(musl_malloc.file, i), 4) = 1 proof
+      assume e
+      show := rewrite(sym(e), t0)
+    qed
+    have d1: i = 1 -> x86_64_linux.le_at(musl_malloc.file, x86_64_linux.ph(musl_malloc.file, i), 4) = 1 proof
+      assume e
+      show := rewrite(sym(e), t1)
+    qed
+    have d2: i = 2 -> x86_64_linux.le_at(musl_malloc.file, x86_64_linux.ph(musl_malloc.file, i), 4) = 1 proof
+      assume e
+      show := rewrite(sym(e), t2)
+    qed
+    have d3: i = 3 -> x86_64_linux.le_at(musl_malloc.file, x86_64_linux.ph(musl_malloc.file, i), 4) = 1 proof
+      assume e
+      show := rewrite(sym(e), t3)
+    qed
+    show by taut(c, d0, d1, d2, d3)
+  qed
+  show by defs(taut((int_lt(i, x86_64_linux.phnum(musl_malloc.file)) by arith(pn, hil, hi)), trans(ty, sym(pl))), x86_64_linux.is_load)
+qed
+
+// (a segment the last on page p: no later load on p)
+theorem ui.last_on: all i p. i in omega -> int_le(i, 3) -> x86_64_linux.seg_page(x86_64_linux.segment(musl_malloc.file, i), p) ->
+  (all j. j in omega -> int_lt(i, j) -> int_le(j, 3) -> !x86_64_linux.seg_page(x86_64_linux.segment(musl_malloc.file, j), p)) ->
+  x86_64_linux.last_on_page(musl_malloc.file, i, p)
+proof
+  fix i p
+  assume hi hil hs hn
+  have nl: all x0. x0 in omega -> x86_64_linux.is_load(musl_malloc.file, x0) && int_lt(i, x0) -> !x86_64_linux.seg_page(x86_64_linux.segment(musl_malloc.file, x0), p) proof
+    fix j
+    assume hj hjl
+    have l1 l2 := hjl
+    show := mp(all_elim(hn, {j}), hj, l2, (int_le(j, 3) by arith(apply(ui.loads, hj, l1))))
+  qed
+  show by defs(taut(apply(ui.load_i, hi, hil), hs, nl), x86_64_linux.last_on_page)
+qed
+
+// an image page as exec maps it: its segment's protection, not the stack
+theorem ui.img_pg: all argv envp m0 i p. x86_64_linux.exec_state(musl_malloc.file, argv, envp, m0) -> i in omega -> p in omega ->
+  x86_64_linux.last_on_page(musl_malloc.file, i, p) ->
+  m0.vm.pages[p] = some(fn_update(fn_update(empty, "prot", x86_64_linux.seg_prot(x86_64_linux.segment(musl_malloc.file, i))), "kind", 0))
+proof
+  fix argv envp m0 i p
+  assume he hi hp hl
+  have il: x86_64_linux.image_loaded(musl_malloc.file, m0.vm) by taut(expand(he, x86_64_linux.exec_state))
+  have ip _ := expand(il, x86_64_linux.image_loaded)
+  show := mp(all_elim(ip, {i}, {p}), conj(hi, hp), hl)
+qed
