@@ -5187,3 +5187,63 @@ proof
   have e0: seq_len(empty) = 0 by simp()
   show by taut(e0, rsimp(fa), rsimp(ml), rsimp(fw), rsimp(an), rsimp(fc), rsimp(fp))
 qed
+
+// the allocator's invariant at main: the empty state, libc's vector exec's
+theorem ui.rep_main: all m0 s lo top argv envp auxv m V fs. ui.MX(m0, s, lo, top, argv, envp, auxv, m, V, fs) ->
+  mallocng.rep(ui.C, ui.A0(m0, argv, envp, auxv), claim_malloc.empty_heap(m, ui.OB(m0, argv, envp)))
+proof
+  fix m0 s lo top argv envp auxv m V fs
+  assume h
+  have hx ha := expand(h, ui.MX)
+  have _ _ _ hfs _ hfb _ _ := expand(ha, ui.at_main)
+  let S := claim_malloc.empty_heap(m, ui.OB(m0, argv, envp))
+  let AT := ui.AT(m0, argv, envp)
+  let A := ui.A0(m0, argv, envp, auxv)
+  have e1: S.vm = claim_malloc.c_vm(m.vm) by defs(rsimp(), claim_malloc.empty_heap)
+  have ev: S.vm = ui.wvm(m.vm) := trans(e1, all_elim(ui.cv_eq, {m.vm}))
+  have efs: S.fs_base = fs by defs(rsimp(hfb), claim_malloc.empty_heap)
+  have eob: S.objs = abi.objs_at(ui.OB(m0, argv, envp), m.fs_base) by defs(rsimp(), claim_malloc.empty_heap)
+  have at al := apply(ui.mx_typ[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs], h)
+  have hb: all p. p in bits(64) -> S.blocks[p] = none proof
+    fix p
+    assume hp
+    show by defs(rsimp(mp(app_fn_build[d := bits(64), v := x. none, a := p], hp)), claim_malloc.empty_heap)
+  qed
+  have sp := apply(ui.sep_regions[AT := AT, L := auxv], at, al)
+  have z0 _ _ := apply(ui.mm_zero[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs], h)
+  have im := apply(ui.image_main[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs], h)
+  have cl db := apply(ui.tables_main[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs], h)
+  have fr := apply(ui.fresh_main[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs], h)
+  have pm := apply(ui.perms_main[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs, b := S.blocks], h)
+  have bk := apply(ui.brk_main[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs], h)
+  have fm := apply(ui.fpm_main[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs, b := S.blocks], h)
+  have fw := apply(ui.free_rw_main[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs], h)
+  have lv := apply(ui.aux_main[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs], h)
+  // (the thread's words: none of the allocator's)
+  have t1: all x0. x0 in omega -> int_lt(x0, 8) -> !mallocng.in_ranges(int_add(S.fs_base, x0), mallocng.fp_ranges(ui.C, A)) proof
+    fix x0
+    assume ho hl
+    show := rewrite(sym(efs), apply(ui.fs_apart[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs, j := x0],
+      h, ho, arith(hl)))
+  qed
+  have t2: all x0. x0 in omega -> int_lt(x0, 4) -> !mallocng.in_ranges(int_add(int_add(S.fs_base, 52), x0), mallocng.fp_ranges(ui.C, A)) proof
+    fix x0
+    assume ho hl
+    have q := apply(ui.fs_apart[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs, j := int_add(52, x0)],
+      h, arith(ho), arith(hl))
+    have eq: int_add(fs, int_add(52, x0)) = int_add(int_add(fs, 52), x0) by arith()
+    show := rewrite(sym(efs), rewrite(eq, q))
+  qed
+  have t3: all x0. x0 in omega -> x0 in abi.canary(S.fs_base) -> !mallocng.in_ranges(x0, mallocng.fp_ranges(ui.C, A)) proof
+    fix x0
+    assume ho hc
+    have _ c1 c2 := unsel(expand(rewrite(efs, hc), abi.canary))
+    have q := apply(ui.fs_apart[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs, j := int_sub(x0, fs)],
+      h, arith(c1, hfs), arith(c2))
+    have eq: int_add(fs, int_sub(x0, fs)) = x0 by arith()
+    show := rewrite(eq, q)
+  qed
+  have al2: mallocng.aux_live(A, S.objs) := rewrite(sym(eob), lv)
+  show := apply(mp.empty_rep[c := ui.C, AT := AT, L := auxv, s := S], ui.C_ok, at, al, hb, sp, rewrite(sym(ev), z0), rewrite(sym(ev), im), rewrite(sym(ev), cl),
+    rewrite(sym(ev), db), rewrite(sym(ev), fr), rewrite(sym(ev), pm), rewrite(sym(ev), bk), rewrite(sym(ev), fm), rewrite(sym(ev), fw), t1, t2, t3, al2)
+qed
