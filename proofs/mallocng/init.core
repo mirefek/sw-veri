@@ -2033,3 +2033,78 @@ proof
   qed
   show by taut(k1, k2)
 qed
+
+// (an image page startup uses: read only, or the data's read-write)
+abbrev ui.img_page(p, w) := (int_le(1031, p) && int_le(p, 1032)) || (!w && (p = 1024 || p = 1030))
+
+// an image page in the view: exec's, readable, writable if the data's
+abbrev ui.WI(s, m0, p, w) := x86_64_linux.mapped(ui.wvm(s.vm), p) && !(snd(ui.wvm(s.vm).pages[p]).kind = 2) && snd(ui.wvm(s.vm).pages[p]).prot.r &&
+  (w -> snd(ui.wvm(s.vm).pages[p]).prot.w) && ui.wvm(s.vm).pages[p] = m0.vm.pages[p]
+
+theorem ui.w_img: all argv envp m0 s lo top p w. x86_64_linux.exec_state(musl_malloc.file, argv, envp, m0) -> ui.ctx(m0, s, lo, top) -> int_lt(1032, lo) ->
+  p in omega -> ui.img_page(p, w) -> ui.WI(s, m0, p, w)
+proof
+  fix argv envp m0 s lo top p w
+  assume he hc hlo hp hi
+  have k1 k2 := apply(ui.pg_img[argv := argv, envp := envp, m0 := m0, p := p], he, hp)
+  have pl: int_lt(p, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) by arith(hi, (int_lt(1032, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) by eval()))
+  have pb: int_lt(p, lo) by arith(hi, hlo)
+  have any: all b. m0.vm.pages[p] = ui.PG(true, b) -> (w -> b) -> ui.WI(s, m0, p, w) proof
+    fix b
+    assume ep hb
+    let PR := fn_update(fn_update(empty, "prot", fn_update(fn_update(fn_update(empty, "r", true), "w", b), "x", false)), "kind", 0)
+    have mq: x86_64_linux.mapped(m0.vm, p) by defs(rsimp(ep, ui.some_nn[x := PR], pl), x86_64_linux.mapped)
+    have ew := apply(ui.w_low[m0 := m0, s := s, lo := lo, top := top, p := p], hc, hp, pb, mq)
+    have e2: ui.wvm(s.vm).pages[p] = some(PR) := trans(ew, ep)
+    have mw: x86_64_linux.mapped(ui.wvm(s.vm), p) by defs(taut(pl, rewrite(sym(e2), ui.some_nn[x := PR])), x86_64_linux.mapped)
+    have sn: snd(ui.wvm(s.vm).pages[p]) = PR := rewrite(sym(e2), ui.snd_some[x := PR])
+    have kd: !(snd(ui.wvm(s.vm).pages[p]).kind = 2) := rewrite(sym(sn), (!(PR.kind = 2) by rsimp()))
+    have pr: snd(ui.wvm(s.vm).pages[p]).prot.r := rewrite(sym(sn), (PR.prot.r by rsimp()))
+    have pw: snd(ui.wvm(s.vm).pages[p]).prot.w = b := rewrite(sym(sn), (PR.prot.w = b by rsimp()))
+    have pw2: w -> snd(ui.wvm(s.vm).pages[p]).prot.w proof
+      assume hw
+      show := rewrite(sym(pw), mp(hb, hw))
+    qed
+    show by taut(mw, kd, pr, pw2, ew)
+  qed
+  have c1: int_le(1031, p) && int_le(p, 1032) -> ui.WI(s, m0, p, w) proof
+    assume h
+    show := mp(all_elim(any, {true}), mp(k2, h), taut())
+  qed
+  have c2: !w && (p = 1024 || p = 1030) -> ui.WI(s, m0, p, w) proof
+    assume h
+    have nw h2 := h
+    show := mp(all_elim(any, {false}), mp(k1, h2), taut(nw))
+  qed
+  show by taut(hi, c1, c2)
+qed
+
+// bytes on image pages: usable in the view
+theorem ui.us_img: all argv envp m0 s lo top x n w. x86_64_linux.exec_state(musl_malloc.file, argv, envp, m0) -> ui.ctx(m0, s, lo, top) -> int_lt(1032, lo) ->
+  x in omega -> (all i. i in omega -> int_lt(i, n) -> ui.img_page(int_div(int_add(x, i), x86_64_linux.PAGE), w)) ->
+  gimple.usable(ui.wvm(s.vm), ui.wob0(m0.gpr[4], top), x, n, w)
+proof
+  fix argv envp m0 s lo top x n w
+  assume he hc hlo hx hpg
+  unfold gimple.usable
+  fix i
+  assume hi hil
+  let p := int_div(int_add(x, i), x86_64_linux.PAGE)
+  let V := ui.wvm(s.vm)
+  have po: p in omega by arith(hx, hi)
+  have mw kd pr pw _ := apply(ui.w_img[argv := argv, envp := envp, m0 := m0, s := s, lo := lo, top := top, p := p, w := w], he, hc, hlo, po, mp(all_elim(hpg, {i}), hi, hil))
+  have xo: int_add(x, i) in omega by arith(hx, hi)
+  have cb: int_add(x, i) in ui.wob0(m0.gpr[4], top).c_bytes by simp(xo)
+  have pv: ite(w, snd(V.pages[p]).prot.w, snd(V.pages[p]).prot.r) proof
+    have t1: w -> ite(w, snd(V.pages[p]).prot.w, snd(V.pages[p]).prot.r) proof
+      assume hw
+      show := rewrite(sym(mp(ite_t[c := w, a := snd(V.pages[p]).prot.w, b := snd(V.pages[p]).prot.r], hw)), mp(pw, hw))
+    qed
+    have t2: !w -> ite(w, snd(V.pages[p]).prot.w, snd(V.pages[p]).prot.r) proof
+      assume hw
+      show := rewrite(sym(mp(ite_f[c := w, a := snd(V.pages[p]).prot.w, b := snd(V.pages[p]).prot.r], hw)), pr)
+    qed
+    show by taut(t1, t2)
+  qed
+  show := rewrite(sym(mp(ite_t[c := x86_64_linux.mapped(V, p) && !(snd(V.pages[p]).kind = 2), a := ite(w, snd(V.pages[p]).prot.w, snd(V.pages[p]).prot.r) && int_add(x, i) in ui.wob0(m0.gpr[4], top).c_bytes, b := int_lt(int_add(x, i), int_pow(2, 64)) && int_add(x, i) in ui.wob0(m0.gpr[4], top).live], conj(mw, kd))), conj(pv, cb))
+qed
