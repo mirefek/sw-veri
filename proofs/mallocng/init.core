@@ -2276,3 +2276,64 @@ proof
   have l8 := mp(x86.le8_nat[vm := m0.vm, a := a], bt)
   show := subst({y. gimple.bytes_at(ui.wvm(s.vm), a, 8) = x86_64_linux.le(m0.vm.bytes, y, 8)}, sym(ab), trans(e, sym(l8)))
 qed
+
+// a byte of exec's stack in the view: exec's
+theorem ui.w_stk1: all m0 s lo top a. ui.ctx(m0, s, lo, top) -> a in omega -> int_le(m0.gpr[4], a) -> int_lt(a, int_mul(top, x86_64_linux.PAGE)) ->
+  gimple.bytes_at(ui.wvm(s.vm), bits_of_int(64, a), 1) = m0.vm.bytes[bits_of_int(64, a)]
+proof
+  fix m0 s lo top a
+  assume hc ha h1 h2
+  have hM _ _ hs .. := expand(hc, ui.ctx)
+  have s1 s2 .. := expand(hs, x86_64_linux.stack_pages)
+  have bt: m0.vm.bytes in fn_space(bits(64), bits(8)) by simp(expand(apply(x86i.parts, hM).4, x86_64_linux.Vm))
+  have abt: a in bits(64) by arith(ha, h2, s2)
+  have ab: bits_of_int(64, a) = a := apply(nf.boi_in[n := 64, x := a], eval(), abt)
+  have e := apply(ui.w_stk[m0 := m0, s := s, lo := lo, top := top, a := a, n := 1], hc, ha, eval(), h1, arith(h2))
+  have b1 := apply(ms.bytes1[vm := m0.vm, a := a], bt, abt)
+  show := rewrite(sym(ab), trans(e, b1))
+qed
+
+// (exec's stack: above what startup writes)
+theorem ui.stk_nw: all m0 s lo top x. ui.ctx(m0, s, lo, top) -> int_lt(1032, lo) -> x in omega -> int_le(m0.gpr[4], x) -> !(x in startup_specs.start_writes(ui.G))
+proof
+  fix m0 s lo top x
+  assume hc hlo hx h1 hw
+  have _ _ _ _ hl .. := expand(hc, ui.ctx)
+  have _ _ b := apply(ui.sw_range[x := x], hw)
+  show by arith(hl, hlo, h1, b, hx)
+qed
+
+// a string on exec's stack (a zero byte at L): a C string in the view,
+// startup writing none of it
+theorem ui.cstr_stk: all m0 s lo top q L. ui.ctx(m0, s, lo, top) -> int_lt(1032, lo) -> q in omega -> L in omega ->
+  m0.vm.bytes[bits_of_int(64, int_add(q, L))] = 0 -> int_le(m0.gpr[4], q) -> int_le(int_add(q, int_add(L, 1)), int_mul(top, x86_64_linux.PAGE)) ->
+  startup_specs.cstr(ui.wvm(s.vm), ui.wob0(m0.gpr[4], top), q, startup_specs.start_writes(ui.G))
+proof
+  fix m0 s lo top q L
+  assume hc hlo hq hL hz h1 h2
+  have hM _ _ hs _ _ h16 _ := expand(hc, ui.ctx)
+  have s1 s2 .. := expand(hs, x86_64_linux.stack_pages)
+  let V := ui.wvm(s.vm)
+  have ex0: ex k. k in omega && (int_le(k, L) && m0.vm.bytes[bits_of_int(64, int_add(q, k))] = 0) by ex_intro({L}, taut(hL, (int_le(L, L) by arith(hL)), hz))
+  obtain c, co cz cm from mp(nat_least[p := k. int_le(k, L) && m0.vm.bytes[bits_of_int(64, int_add(q, k))] = 0], ex0)
+  have cl c0 := cz
+  have nz: !(q = 0) by arith(h1, h16)
+  have lt: int_lt(int_add(int_add(q, c), 1), int_pow(2, 63)) by arith(h2, cl, co, hq, s2)
+  have us := apply(ui.us_stack[m0 := m0, s := s, lo := lo, top := top, x := q, n := int_add(c, 1), w := false], hc, hq, arith(co), h1, arith(h2, cl, co, hq))
+  have bn: all i. i in omega -> int_lt(i, c) -> !(gimple.bytes_at(V, bits_of_int(64, int_add(q, i)), 1) = 0) proof
+    fix i
+    assume hi hic hb
+    have e := apply(ui.w_stk1[m0 := m0, s := s, lo := lo, top := top, a := int_add(q, i)], hc, arith(hq, hi), arith(h1, hq, hi), arith(h2, hic, cl, hq, hi, co))
+    have z: m0.vm.bytes[bits_of_int(64, int_add(q, i))] = 0 := trans(sym(e), hb)
+    have le := mp(all_elim(cm, {i}), hi, conj((int_le(i, L) by arith(hic, cl, hi, co)), z))
+    show by arith(le, hic, hi, co)
+  qed
+  have bz: gimple.bytes_at(V, bits_of_int(64, int_add(q, c)), 1) = 0 :=
+    trans(apply(ui.w_stk1[m0 := m0, s := s, lo := lo, top := top, a := int_add(q, c)], hc, arith(hq, co), arith(h1, hq, co), arith(h2, cl, hq, co)), c0)
+  have nw: all i. i in omega -> int_le(i, c) -> !(int_add(q, i) in startup_specs.start_writes(ui.G)) proof
+    fix i
+    assume hi hic
+    show := apply(ui.stk_nw[m0 := m0, s := s, lo := lo, top := top, x := int_add(q, i)], hc, hlo, arith(hq, hi), arith(h1, hq, hi))
+  qed
+  show by defs(ex_intro({c}, taut(co, nz, lt, us, bn, bz, nw)), startup_specs.cstr)
+qed
