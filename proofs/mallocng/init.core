@@ -1922,3 +1922,114 @@ proof
   have ip _ := expand(il, x86_64_linux.image_loaded)
   show := mp(all_elim(ip, {i}, {p}), conj(hi, hp), hl)
 qed
+
+// (the loads' pages: 1024 the first's, 1025..1029 the text's, 1030 the
+// read-only data's, 1031..1032 the data's)
+theorem ui.seg_pages: all j p. j in omega -> int_le(j, 3) -> p in omega -> x86_64_linux.seg_page(x86_64_linux.segment(musl_malloc.file, j), p) ->
+  (j = 0 && p = 1024) || (j = 1 && int_le(1025, p) && int_le(p, 1029)) || (j = 2 && p = 1030) || (j = 3 && int_le(1031, p) && int_le(p, 1032))
+proof
+  fix j p
+  assume hj hj3 hp hs
+  have {g0 = s0, g1 = s1, g2 = s2, g3 = s3} := ui.elf
+  have _ _ _ v0 _ m0 := expand(g0, ui.segis)
+  have _ _ _ v1 _ m1 := expand(g1, ui.segis)
+  have _ _ _ v2 _ m2 := expand(g2, ui.segis)
+  have _ _ _ v3 _ m3 := expand(g3, ui.segis)
+  have sp := expand(hs, x86_64_linux.seg_page, x86_64_linux.PAGE)
+  have c0: j = 0 -> p = 1024 proof
+    assume e
+    show by arith(rewrite(e, sp), v0, m0, hp)
+  qed
+  have c1: j = 1 -> int_le(1025, p) && int_le(p, 1029) proof
+    assume e
+    show by arith(rewrite(e, sp), v1, m1, hp)
+  qed
+  have c2: j = 2 -> p = 1030 proof
+    assume e
+    show by arith(rewrite(e, sp), v2, m2, hp)
+  qed
+  have c3: j = 3 -> int_le(1031, p) && int_le(p, 1032) proof
+    assume e
+    show by arith(rewrite(e, sp), v3, m3, hp)
+  qed
+  show by taut(c0, c1, c2, c3, (j = 0 || j = 1 || j = 2 || j = 3 by arith(hj, hj3)))
+qed
+
+theorem ui.seg_page_at: all j p. (j = 0 && p = 1024) || (j = 2 && p = 1030) || (j = 3 && int_le(1031, p) && int_le(p, 1032)) ->
+  x86_64_linux.seg_page(x86_64_linux.segment(musl_malloc.file, j), p)
+proof
+  fix j p
+  assume h
+  have {g0 = s0, g2 = s2, g3 = s3} := ui.elf
+  have _ _ _ v0 _ m0 := expand(g0, ui.segis)
+  have _ _ _ v2 _ m2 := expand(g2, ui.segis)
+  have _ _ _ v3 _ m3 := expand(g3, ui.segis)
+  have c0: j = 0 && p = 1024 -> x86_64_linux.seg_page(x86_64_linux.segment(musl_malloc.file, j), p) proof
+    assume e
+    have e1 e2 := e
+    show := rewrite(sym(e1), rewrite(sym(e2), (x86_64_linux.seg_page(x86_64_linux.segment(musl_malloc.file, 0), 1024) by defs(arith(v0, m0), x86_64_linux.seg_page, x86_64_linux.PAGE))))
+  qed
+  have c2: j = 2 && p = 1030 -> x86_64_linux.seg_page(x86_64_linux.segment(musl_malloc.file, j), p) proof
+    assume e
+    have e1 e2 := e
+    show := rewrite(sym(e1), rewrite(sym(e2), (x86_64_linux.seg_page(x86_64_linux.segment(musl_malloc.file, 2), 1030) by defs(arith(v2, m2), x86_64_linux.seg_page, x86_64_linux.PAGE))))
+  qed
+  have c3: j = 3 && int_le(1031, p) && int_le(p, 1032) -> x86_64_linux.seg_page(x86_64_linux.segment(musl_malloc.file, j), p) proof
+    assume e
+    have e1 p1 p2 := e
+    show := rewrite(sym(e1), (x86_64_linux.seg_page(x86_64_linux.segment(musl_malloc.file, 3), p) by defs(arith(v3, m3, p1, p2), x86_64_linux.seg_page, x86_64_linux.PAGE)))
+  qed
+  show by taut(h, c0, c2, c3)
+qed
+
+// the first page (the program headers) and the read-only data's: read
+// only; the data's: read-write
+abbrev ui.PG(r, w) := some(fn_update(fn_update(empty, "prot", fn_update(fn_update(fn_update(empty, "r", r), "w", w), "x", false)), "kind", 0))
+
+theorem ui.pg_img: all argv envp m0 p. x86_64_linux.exec_state(musl_malloc.file, argv, envp, m0) -> p in omega ->
+  ((p = 1024 || p = 1030) -> m0.vm.pages[p] = ui.PG(true, false)) && (int_le(1031, p) && int_le(p, 1032) -> m0.vm.pages[p] = ui.PG(true, true))
+proof
+  fix argv envp m0 p
+  assume he hpo
+  have {g0 = s0, g2 = s2, g3 = s3} := ui.elf
+  have _ f0 _ _ _ _ := expand(g0, ui.segis)
+  have _ f2 _ _ _ _ := expand(g2, ui.segis)
+  have _ f3 _ _ _ _ := expand(g3, ui.segis)
+  // (the last segment on each: no later one there)
+  have nl: all i. i in omega -> int_le(i, 3) -> ((i = 0 && p = 1024) || (i = 2 && p = 1030) || (i = 3 && int_le(1031, p) && int_le(p, 1032))) ->
+      x86_64_linux.last_on_page(musl_malloc.file, i, p) proof
+    fix i
+    assume hi hi3 hip
+    have later: all j. j in omega -> int_lt(i, j) -> int_le(j, 3) -> !x86_64_linux.seg_page(x86_64_linux.segment(musl_malloc.file, j), p) proof
+      fix j
+      assume hj hij hj3 hs
+      have q := apply(ui.seg_pages[j := j, p := p], hj, hj3, hpo, hs)
+      show by arith(q, hip, hij)
+    qed
+    show := apply(ui.last_on[i := i, p := p], hi, hi3, apply(ui.seg_page_at[j := i, p := p], hip), later)
+  qed
+  have k1: (p = 1024 || p = 1030) -> m0.vm.pages[p] = ui.PG(true, false) proof
+    assume hp
+    have c0: p = 1024 -> m0.vm.pages[p] = ui.PG(true, false) proof
+      assume e
+      have l := mp(all_elim(nl, {0}), eval(), eval(), taut(refl({0}), e))
+      have pg := apply(ui.img_pg[argv := argv, envp := envp, m0 := m0, i := 0, p := p], he, eval(), (p in omega by arith(e)), l)
+      show by rsimp(pg, f0, x86_64_linux.seg_prot, (bit(4, 2) by eval()), (!bit(4, 1) by eval()), (!bit(4, 0) by eval()))
+    qed
+    have c2: p = 1030 -> m0.vm.pages[p] = ui.PG(true, false) proof
+      assume e
+      have l := mp(all_elim(nl, {2}), eval(), eval(), taut(refl({2}), e))
+      have pg := apply(ui.img_pg[argv := argv, envp := envp, m0 := m0, i := 2, p := p], he, eval(), (p in omega by arith(e)), l)
+      show by rsimp(pg, f2, x86_64_linux.seg_prot, (bit(4, 2) by eval()), (!bit(4, 1) by eval()), (!bit(4, 0) by eval()))
+    qed
+    show by taut(hp, c0, c2)
+  qed
+  have k2: int_le(1031, p) && int_le(p, 1032) -> m0.vm.pages[p] = ui.PG(true, true) proof
+    assume hp
+    have l := mp(all_elim(nl, {3}), eval(), eval(), taut(refl({3}), hp))
+    have p1 _ := hp
+    have pg := apply(ui.img_pg[argv := argv, envp := envp, m0 := m0, i := 3, p := p], he, eval(), (p in omega by arith(p1)), l)
+    show by rsimp(pg, f3, x86_64_linux.seg_prot, (bit(6, 2) by eval()), (bit(6, 1) by eval()), (!bit(6, 0) by eval()))
+  qed
+  show by taut(k1, k2)
+qed
