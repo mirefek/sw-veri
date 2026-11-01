@@ -3820,3 +3820,139 @@ proof
   qed
   show by taut(v0, v1, v2, v3, v4, v5)
 qed
+
+// the regions of the empty state (the data symbols, the read-only loads,
+// no areas, no reserve, no groups): apart
+theorem ui.sep_regions: all AT L. AT in omega -> L in list_type(cart(omega, omega)) -> mallocng.separate(mallocng.regions(ui.C, mp.a0(AT, L)))
+proof
+  fix AT L
+  assume hat hl
+  let A := mp.a0(AT, L)
+  let F := musl_malloc.file
+  have {ab = abs, au = univ} := apply(mp.a0_type[AT := AT, L := L], hat, hl)
+  have {pf = front, pa = areas, pr = rodata, prs = reserve, pg = groups, peq = eq} := apply(mp.regions_parts[c := ui.C, A := A], ui.C_ok, au, ab)
+  let P0 := pair(ui.C.ctx, mallocng.CTX_SIZE)
+  let P1 := pair(ui.C.lock, 4)
+  let P2 := pair(ui.C.libc, 16)
+  let DA := mallocng.data_ranges(ui.C)
+  let RO := mallocng.ro_ranges(ui.C.file)
+  let AR := fn_build(int_sub(seq_len(A.areas), 0), x0. pair(A.areas[int_add(0, x0)], 4096))
+  let RS := seq_one(pair(A.reserve, int_mul(4096, A.reserve_cnt)))
+  let GR := fn_build(int_sub(seq_len(A.used), 0), x0. ite(int_lt(0, A.metas[A.used[int_add(0, x0)]].maplen), mallocng.group_range(A.metas[A.used[int_add(0, x0)]]), pair(0, 0)))
+  let X2 := seq_concat(DA, RO)
+  let X3 := seq_concat(X2, AR)
+  let X4 := seq_concat(X3, RS)
+  let R := seq_concat(X4, GR)
+  have rt: R in list_type(cart(omega, omega)) := apply(tr.concat_list, apply(tr.concat_list, pf, apply(tr.seq_one_type, prs)), pg)
+  // (the pieces: lists)
+  have ro := apply(mp.ro_list, (ui.C.file in seq_type(bits(8)) by simp(ui.file_bytes)))
+  have cf: ui.C.ctx in omega && ui.C.lock in omega && ui.C.libc in omega by simp(ui.C_ok)
+  have o1 := apply(tr.seq_one_type, (P0 in univ(1) by simp(cf)))
+  have o2 := apply(tr.seq_one_type, (P1 in univ(1) by simp(cf)))
+  have o3 := apply(tr.seq_one_type, (P2 in univ(1) by simp(cf)))
+  have dl: DA in list_type(univ(1)) by defs(apply(tr.concat_list, apply(tr.concat_list, o1, o2), o3), mallocng.data_ranges)
+  have rsl := apply(tr.seq_one_type, prs)
+  have x4c := apply(tr.concat_list, pf, rsl)
+  // (their lengths)
+  have {u0 = used, r0 = areas} := mp.e_lens[AT := AT, L := L]
+  have dG: seq_len(GR) = int_sub(seq_len(A.used), 0) by defs(fn_build_dom[d := int_sub(seq_len(A.used), 0),
+    v := x0. ite(int_lt(0, A.metas[A.used[int_add(0, x0)]].maplen), mallocng.group_range(A.metas[A.used[int_add(0, x0)]]), pair(0, 0))], seq_len)
+  have lG: seq_len(GR) = 0 by arith(dG, u0)
+  have dA: seq_len(AR) = int_sub(seq_len(A.areas), 0) by defs(fn_build_dom[d := int_sub(seq_len(A.areas), 0), v := x0. pair(A.areas[int_add(0, x0)], 4096)], seq_len)
+  have lA: seq_len(AR) = 0 by arith(dA, r0)
+  have lS: seq_len(RS) = 1 by arith(rsl)
+  have {pn = phnum} := ui.elf
+  have fe: ui.C.file = F by rsimp()
+  have dR: seq_len(mallocng.ro_ranges(F)) = int_sub(x86_64_linux.phnum(F), 0) by defs(fn_build_dom[d := int_sub(x86_64_linux.phnum(F), 0),
+    v := x0. ite(x86_64_linux.is_load(F, int_add(0, x0)) && !bit(x86_64_linux.segment(F, int_add(0, x0)).flags, 1),
+      pair(x86_64_linux.segment(F, int_add(0, x0)).vaddr, x86_64_linux.segment(F, int_add(0, x0)).memsz), pair(0, 0))], seq_len, mallocng.ro_ranges)
+  have lR: seq_len(RO) = 8 := rewrite(sym(fe), (seq_len(mallocng.ro_ranges(F)) = 8 by arith(dR, pn)))
+  have lD: seq_len(DA) = 3 by defs(len_literal[x := P0, y := P1, z := P2], mallocng.data_ranges)
+  have l2: seq_len(X2) = 11 by arith(dl, ro, lD, lR)
+  have l3: seq_len(X3) = 11 by arith(pr, pa, l2, lA)
+  have l4: seq_len(X4) = 12 by arith(pf, rsl, l3, lS)
+  have lT: seq_len(R) = 12 by arith(x4c, pg, l4, lG)
+  have H: all k a. k in omega -> int_lt(k, seq_len(R)) -> a in omega -> mallocng.in_range(a, R[k]) -> ui.F(a) = k proof
+    fix k a
+    assume ko kl ao hr
+    have fv0 fv1 fv2 fv3 fv4 fv5 := apply(ui.f_vals[a := a], ao)
+    have e1 := at({R[k]}, x4c, pg, ko, (int_lt(k, seq_len(X4)) by arith(kl, lT, l4)))
+    have h4 := rewrite(e1, hr)
+    // (the reserve: none)
+    have c11: !int_lt(k, 11) -> ui.F(a) = k proof
+      assume n11
+      have e2 := at({X4[int_add(seq_len(X3), 0)]}, pf, rsl, (0 in omega by eval()), (int_lt(0, seq_len(RS)) by arith(lS)))
+      have z: k = int_add(seq_len(X3), 0) by arith(n11, l3, kl, lT, ko)
+      have q := rsimp(expand(rewrite(e2, rewrite(z, h4)), mallocng.in_range))
+      show by arith(q, ao)
+    qed
+    have clt: int_lt(k, 11) -> ui.F(a) = k proof
+      assume k11
+      have e2 := at({X4[k]}, pf, rsl, ko, (int_lt(k, seq_len(X3)) by arith(k11, l3)))
+      have e3 := at({X3[k]}, pr, pa, ko, (int_lt(k, seq_len(X2)) by arith(k11, l2)))
+      have h2 := rewrite(e3, rewrite(e2, h4))
+      // (the data symbols)
+      have cd: int_lt(k, 3) -> ui.F(a) = k proof
+        assume k3
+        have e4 := at({X2[k]}, dl, ro, ko, (int_lt(k, seq_len(DA)) by arith(k3, lD)))
+        have hd := rewrite(e4, h2)
+        have d0: k = 0 -> ui.F(a) = k proof
+          assume e0
+          have dv: DA[0] = P0 by defs(at({seq_concat(seq_concat(seq_one(P0), seq_one(P1)), seq_one(P2))[0]}), mallocng.data_ranges)
+          have q1 q2 := rsimp(expand(rewrite(dv, rewrite(e0, hd)), mallocng.in_range))
+          show := rewrite(sym(e0), mp(fv5, (int_le(4227328, a) && int_lt(a, 4228256) by arith(q1, q2, (ui.C.ctx = 4227328 by eval()), (mallocng.CTX_SIZE = 928 by defs(eval(), mallocng.CTX_SIZE))))))
+        qed
+        have d1: k = 1 -> ui.F(a) = k proof
+          assume e0
+          have dv: DA[1] = P1 by defs(at({seq_concat(seq_concat(seq_one(P0), seq_one(P1)), seq_one(P2))[1]}), mallocng.data_ranges)
+          have q1 q2 := rsimp(expand(rewrite(dv, rewrite(e0, hd)), mallocng.in_range))
+          show := rewrite(sym(e0), mp(fv4, (int_le(4227300, a) && int_lt(a, 4227304) by arith(q1, q2, (ui.C.lock = 4227300 by eval())))))
+        qed
+        have d2: k = 2 -> ui.F(a) = k proof
+          assume e0
+          have dv: DA[2] = P2 by defs(at({seq_concat(seq_concat(seq_one(P0), seq_one(P1)), seq_one(P2))[2]}), mallocng.data_ranges)
+          have q1 q2 := rsimp(expand(rewrite(dv, rewrite(e0, hd)), mallocng.in_range))
+          show := rewrite(sym(e0), mp(fv3, (int_le(4227136, a) && int_lt(a, 4227152) by arith(q1, q2, (ui.C.libc = 4227136 by eval())))))
+        qed
+        show by taut(d0, d1, d2, (k = 0 || k = 1 || k = 2 by arith(k3, ko)))
+      qed
+      // (the read-only loads)
+      have cr: !int_lt(k, 3) -> ui.F(a) = k proof
+        assume n3
+        let j := int_sub(k, seq_len(DA))
+        have jo: j in omega by arith(n3, lD, ko)
+        have e4 := at({X2[int_add(seq_len(DA), j)]}, dl, ro, jo, (int_lt(j, seq_len(RO)) by arith(k11, lD, lR, n3)))
+        have kj: k = int_add(seq_len(DA), j) by arith(n3, lD, ko)
+        have ij: int_sub(int_add(seq_len(DA), j), seq_len(DA)) = j by arith(jo, lD)
+        have hr2 := rewrite(fe, rewrite(ij, rewrite(e4, rewrite(kj, h2))))
+        have jm: j in int_sub(x86_64_linux.phnum(F), 0) := mp(nat_lt_mem[k := j, n := int_sub(x86_64_linux.phnum(F), 0)], jo, (int_sub(x86_64_linux.phnum(F), 0) in omega by arith(pn)),
+          (int_lt(j, int_sub(x86_64_linux.phnum(F), 0)) by arith(k11, lD, pn, n3)))
+        have ev := mp(app_fn_build[d := int_sub(x86_64_linux.phnum(F), 0),
+          v := x0. ite(x86_64_linux.is_load(F, int_add(0, x0)) && !bit(x86_64_linux.segment(F, int_add(0, x0)).flags, 1),
+            pair(x86_64_linux.segment(F, int_add(0, x0)).vaddr, x86_64_linux.segment(F, int_add(0, x0)).memsz), pair(0, 0)), a := j], jm)
+        have hr3 := rewrite(ev, expand(hr2, mallocng.ro_ranges))
+        have w := apply(ui.ro_at[a := a, k := int_add(0, j)], ao, arith(jo), hr3)
+        have r0: int_add(0, j) = 0 && ui.S0(a) -> ui.F(a) = k proof
+          assume hh
+          have z s := hh
+          show := trans(mp(fv0, s), (3 = k by arith(z, lD, ko, n3)))
+        qed
+        have r1: int_add(0, j) = 1 && ui.S1(a) -> ui.F(a) = k proof
+          assume hh
+          have z s := hh
+          show := trans(mp(fv1, s), (4 = k by arith(z, lD, ko, n3)))
+        qed
+        have r2: int_add(0, j) = 2 && ui.S2(a) -> ui.F(a) = k proof
+          assume hh
+          have z s := hh
+          show := trans(mp(fv2, s), (5 = k by arith(z, lD, ko, n3)))
+        qed
+        show by taut(w, r0, r1, r2)
+      qed
+      show by taut(cd, cr)
+    qed
+    show by taut(c11, clt)
+  qed
+  have sR := apply(ui.sep_class[rs := R, f := a. ui.F(a)], rt, H)
+  show := rewrite(sym(peq), sR)
+qed
