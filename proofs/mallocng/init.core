@@ -4037,3 +4037,74 @@ proof
   have r2: mallocng.pg(ui.MV(m), a) = m0.vm.pages[p] := trans(mv2, trans(g1, trans(apply(ui.app_eq[k := p], g2), ew)))
   show := conj(r1, r2)
 qed
+
+// a .bss byte startup does not write: zero at main
+theorem ui.mm_bss: all m0 s lo top argv envp auxv m V fs a. ui.MX(m0, s, lo, top, argv, envp, auxv, m, V, fs) -> a in omega ->
+  int_le(4227088, a) -> int_lt(a, 4228696) -> !(a in startup_specs.start_writes(ui.G)) -> mallocng.b8(ui.MV(m), a) = 0
+proof
+  fix m0 s lo top argv envp auxv m V fs a
+  assume h ha h1 h2 hw
+  have hx _ := expand(h, ui.MX)
+  have he := expand(hx, ui.SX).10
+  have b1 _ := apply(ui.mm_img[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs, a := a], h, ha, h2,
+    (ui.img_page(int_div(a, x86_64_linux.PAGE), false) by arith(h1, h2, ha)), hw)
+  have {g3 = s3} := ui.elf
+  have _ bss := apply(ui.seg_bytes[argv := argv, envp := envp, m0 := m0, j := 3, ty := 1, fl := 6, of := 28616, va := 4227016, fs := 72, ms := 1680], he, eval(), eval(), g3)
+  have z := mp(all_elim(bss, {a}), ha, arith(h1), arith(h2))
+  have bi: bits_of_int(64, a) = a := apply(nf.boi_in[n := 64, x := a], eval(), (a in bits(64) by arith(ha, h2)))
+  show := trans(b1, rewrite(bi, z))
+qed
+
+// (n zero bytes the invariant reads: zero)
+theorem ui.rd_zero: all M a n. n in omega -> (all i. i in omega -> int_lt(i, n) -> mallocng.b8(M, int_add(a, i)) = 0) -> mallocng.rd(M, a, n) = int_sum(0, n, i. 0)
+proof
+  fix M a n
+  assume hn hz
+  have pw: all i. i in omega -> int_le(0, i) -> int_lt(i, n) -> int_mul(mallocng.b8(M, int_add(a, i)), int_pow(256, i)) = 0 proof
+    fix i
+    assume i1 _ i2
+    have z: int_mul(0, int_pow(256, i)) = 0 by arith()
+    show by rsimp(mp(all_elim(hz, {i}), i1, i2), z)
+  qed
+  have ext := mp(int_sum_ext[a := 0, b := n, f := i. int_mul(mallocng.b8(M, int_add(a, i)), int_pow(256, i)), g := i. 0], eval(), hn, pw)
+  show by defs(ext, mallocng.rd)
+qed
+
+// the allocator's context, its lock, libc's need_locks: zero at main
+theorem ui.mm_zero: all m0 s lo top argv envp auxv m V fs. ui.MX(m0, s, lo, top, argv, envp, auxv, m, V, fs) ->
+  (all a. a in omega -> int_le(ui.C.ctx, a) -> int_lt(a, int_add(ui.C.ctx, mallocng.CTX_SIZE)) -> mallocng.b8(ui.MV(m), a) = 0) &&
+  mallocng.b8(ui.MV(m), int_add(ui.C.libc, mallocng.L_NEED_LOCKS)) = 0 && mallocng.rd(ui.MV(m), ui.C.lock, 4) = 0
+proof
+  fix m0 s lo top argv envp auxv m V fs
+  assume h
+  have cx: ui.C.ctx = 4227328 by eval()
+  have cs: mallocng.CTX_SIZE = 928 by defs(eval(), mallocng.CTX_SIZE)
+  // (none of them startup's write)
+  have nw: all a. a in omega -> int_le(4227264, a) && int_lt(a, 4228264) -> !(a in startup_specs.start_writes(ui.G)) proof
+    fix a
+    assume ha hr hw
+    show by arith(apply(ui.sw_exact[x := a], hw), hr)
+  qed
+  have z1: all a. a in omega -> int_le(ui.C.ctx, a) -> int_lt(a, int_add(ui.C.ctx, mallocng.CTX_SIZE)) -> mallocng.b8(ui.MV(m), a) = 0 proof
+    fix a
+    assume ha h1 h2
+    show := apply(ui.mm_bss[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs, a := a], h, ha,
+      arith(h1, cx), arith(h2, cx, cs), mp(all_elim(nw, {a}), ha, arith(h1, h2, cx, cs)))
+  qed
+  have nl: int_add(ui.C.libc, mallocng.L_NEED_LOCKS) = 4227139 by defs(eval(), mallocng.L_NEED_LOCKS)
+  have nwl: !(4227139 in startup_specs.start_writes(ui.G)) proof
+    assume hw
+    show by arith(apply(ui.sw_exact[x := 4227139], hw))
+  qed
+  have z2: mallocng.b8(ui.MV(m), 4227139) = 0 := apply(ui.mm_bss[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs, a := 4227139], h,
+    eval(), eval(), eval(), nwl)
+  have lk: ui.C.lock = 4227300 by eval()
+  have z3: all i. i in omega -> int_lt(i, 4) -> mallocng.b8(ui.MV(m), int_add(ui.C.lock, i)) = 0 proof
+    fix i
+    assume hi hil
+    show := apply(ui.mm_bss[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs, a := int_add(ui.C.lock, i)], h,
+      arith(lk, hi), arith(lk, hi), arith(lk, hil), mp(all_elim(nw, {int_add(ui.C.lock, i)}), arith(lk, hi), arith(lk, hi, hil)))
+  qed
+  have r3 := trans(apply(ui.rd_zero[M := ui.MV(m), a := ui.C.lock, n := 4], eval(), z3), (int_sum(0, 4, i. 0) = 0 by eval()))
+  show by taut(z1, rewrite(sym(nl), z2), r3)
+qed
