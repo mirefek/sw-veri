@@ -40,23 +40,24 @@ The step left:
   `ui.entry_objs` -- exec's stack data the callers' objects, `ui.iobjs`
   --, the world's view `ui.wvm` with `ui.wvm_vok`; `_start_c`'s spec's
   runs under its precondition, `ui.c_q`: an overflow or main entered with
-  startup's effect, to_main's havoc satisfiable by `ui.main_exists`).
-  Left: `lk.start_impl` applied at `ui.s5` with `ui.until_run` and `ui.c_q`
-  (no undefined behaviour and no return given the precondition); the
-  precondition `ui.c_pre` at the world's view from exec's stack layout
-  (the words, strings, program headers, globals, AT_RANDOM, ctors);
-  `lk.start_impl` at `_start_c` (its outcome by `ui.until_run`:
-  no undefined behaviour, the spec never returns, so the stop at main);
-  `mp.empty_rep`'s premises from the spec's world at main and exec's
-  image; the owned bound. Exec to the C world at `_start` (its 5 instructions
-  -- `xor rbp, rbp; mov rdi, rsp; lea rsi, [0]; and rsp, -16; call
-  _start_c` -- entered as exec leaves the machine, rsp at argc and no
-  return address: no ABI contract, so here; its decode facts in the steps
-  line, `_start:22`); the stop's startup
-  view (tr.at_tm(false, ..)) turned into main's world; at `main` the
-  empty heap's rep (the context zero from .bss, the thread block in .bss
-  apart from the allocator's ranges) and `owned` within the statics, the
-  thread descriptor and the auxv.
+  startup's effect, to_main's havoc satisfiable by `ui.main_exists`;
+  `lk.start_impl` applied, the claim's run stopping at main as the spec's
+  world entering it, `ui.c_stop`, `ui.main_world` / `ui.at_main`; the
+  precondition `ui.c_pre` in the world's view from exec's state,
+  `ui.cpre`, given exec's stack facts bundled as `ui.SX` -- the image's
+  pages and bytes in the view, `ui.w_img`, `ui.img_read`; the stack's,
+  `ui.w_stk`, `ui.w_word`; strings, `ui.cstr_stk`; the vector,
+  `ui.auxv_view`, `ui.aux_eq`; envp, `ui.env_view`; globals, `.bss`,
+  headers, ctors: `ui.globals`, `ui.tls_fresh`, `ui.phdrs`, `ui.ctors`).
+  Left: `ui.SX` from exec_state at `ui.s5` (lo/top/auxv from exec's
+  existential, `int_lt(1032, lo)` from the image's last page, argv's
+  typing from the claim); the view world typed (`tr.vw(..)` in World,
+  univ(1)); `mp.empty_rep`'s premises from `ui.at_main` and exec's
+  image (the context zero from .bss, the thread block in .bss apart from
+  the allocator's ranges); the owned bound (the statics, the thread
+  descriptor, the auxv); assembling `musl.init` (claim's run →
+  `ui.until_parts` → `ui.start4` → `ui.start_call` → `ui.c_stop` →
+  `ui.main_world` → `mp.empty_rep`), moving claim.core after init.core.
 
   The auxiliary vector is on the initial stack: in the claim's heap (the C
   view, `c_vm`: stack pages hidden) live stack objects (`rep.aux`), in the
@@ -66,12 +67,7 @@ The step left:
   It needs from exec (spec/linux/exec.sl): the break within the user
   space (`brk_ok`), the auxiliary vector apart from the data
   (`fresh_ok.auxv_ctx`) and not at null (`auxv_nz`); and the ABI's entry
-  its `brk_start_ok`. And `start_c_spec`'s requirement at `_start_c`'s
-  entry: the stack's words (argc under 2^31, argv, envp, the vector:
-  `start_main_pre`, `init_libc_pre`), the program headers readable and
-  not PT_TLS, AT_RANDOM's bytes, the init_array as loaded (`ctors_ok`),
-  startup's globals zero in .bss (`tls_fresh`), none of the stack data
-  in startup's writes.
+  its `brk_start_ok`.
 
   The internal specs' `holds_in` has `shown` (`mallocng.shown_in`: the
   allocator's bytes the C world's, its reserve's pages valid); the
