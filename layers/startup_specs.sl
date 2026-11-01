@@ -115,6 +115,10 @@ pred in_tls(g: StartGlobals, fs: Addr) = uint(g.builtin_tls) <= uint(fs) && uint
 // stack protector's word in it
 pred thread_set(vm: Vm, fs: Addr) = thread_ok(vm, fs) && canary_ok(vm, fs)
 
+// the thread set up in the static TLS area (the allocator keeps its
+// ranges apart from the descriptor)
+pred thread_at(g: StartGlobals, vm: Vm, fs: Addr) = thread_set(vm, fs) && in_tls(g, fs)
+
 // __init_tls(aux): aux the 38 words musl copied the vector to; the thread
 // pointer set to a descriptor in the static TLS area
 pred init_tls_pre(vm: Vm, objs: Objs, g: StartGlobals, aux: Addr) =
@@ -180,15 +184,16 @@ pred init_libc_pre(vm: Vm, objs: Objs, g: StartGlobals, envp: Addr, pn: Addr) =
     (ex u: nat, gr: nat. aux_is(auxv, AT_UID, u) && aux_is(auxv, AT_EUID, u) && aux_is(auxv, AT_GID, gr) && aux_is(auxv, AT_EGID, gr)) &&
     aux_is(auxv, AT_SECURE, 0)
 
-// the thread set up, libc.auxv the vector's address (past envp's zero word)
+// the thread set up (in the static TLS area), libc.auxv the vector's
+// address (past envp's zero word)
 proc[World] init_libc_spec(g: StartGlobals, envp: Addr, pn: Addr) {
   require init_libc_pre(vm, objs, g, envp, pn)
   either { overflow_start() } or {
     let before = vm
     havoc vm where frame(before, vm, objs, start_writes(g)) &&
       (all n: nat. env_at(before, objs, envp, n) -> bytes_at(vm, g.libc + 8, 8) = uint(envp) + 8 * (n + 1)) &&
-      (ex fs: Addr. thread_set(vm, fs))
-    fs_base := any fs: Addr where thread_set(vm, fs)
+      (ex fs: Addr. thread_at(g, vm, fs))
+    fs_base := any fs: Addr where thread_at(g, vm, fs)
   }
 }
 
@@ -259,8 +264,8 @@ proc[World] to_main(g: StartGlobals, envp: Addr) {
   let before = vm
   havoc vm where frame(before, vm, objs, start_writes(g)) &&
     (all n: nat. env_at(before, objs, envp, n) -> bytes_at(vm, g.libc + 8, 8) = uint(envp) + 8 * (n + 1)) &&
-    (ex fs: Addr. thread_set(vm, fs))
-  fs_base := any fs: Addr where thread_set(vm, fs)
+    (ex fs: Addr. thread_at(g, vm, fs))
+  fs_base := any fs: Addr where thread_at(g, vm, fs)
   main_entered()
 }
 
