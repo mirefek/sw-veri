@@ -3590,3 +3590,52 @@ proof
   qed
   show by taut(sp, h1, c1, c2)
 qed
+
+// ----------------------------------------------------------------------
+//  At main: the empty heap's representation
+
+// exec's stack data as startup read it, main's world
+def ui.MX(m0, s, lo, top, argv, envp, auxv, m, V, fs) := ui.SX(m0, s, lo, top, argv, envp, auxv) &&
+  ui.at_main(s, ui.iobjs(m0.gpr[4], top), m, m0.gpr[4], V, fs)
+
+abbrev ui.A0(m0, argv, envp, auxv) := mp.a0(ui.AT(m0, argv, envp), auxv)
+abbrev ui.OB(m0, argv, envp) := set_select(omega, x. claim_malloc.initial_auxv(m0, argv, envp, x))
+
+// (the vector's typing, its address)
+theorem ui.mx_typ: all m0 s lo top argv envp auxv m V fs. ui.MX(m0, s, lo, top, argv, envp, auxv, m, V, fs) ->
+  ui.AT(m0, argv, envp) in omega && auxv in list_type(cart(omega, omega))
+proof
+  fix m0 s lo top argv envp auxv m V fs
+  assume h
+  have hx _ := expand(h, ui.MX)
+  have hc _ hna hne _ hla .. := expand(hx, ui.SX)
+  have hM .. := expand(hc, ui.ctx)
+  have r0 := apply(x86i.rsp_typed, hM)
+  show by taut((ui.AT(m0, argv, envp) in omega by arith(r0, hna, hne)), hla)
+qed
+
+// the thread's descriptor (in the static TLS area): apart from the
+// allocator's ranges
+theorem ui.fs_apart: all m0 s lo top argv envp auxv m V fs j. ui.MX(m0, s, lo, top, argv, envp, auxv, m, V, fs) -> j in omega -> int_lt(j, 56) ->
+  !mallocng.in_ranges(int_add(fs, j), mallocng.fp_ranges(ui.C, ui.A0(m0, argv, envp, auxv)))
+proof
+  fix m0 s lo top argv envp auxv m V fs j
+  assume h hj hjl hin
+  have hx ha := expand(h, ui.MX)
+  have hc hlo .. := expand(hx, ui.SX)
+  have _ _ _ _ hl .. := expand(hc, ui.ctx)
+  have _ _ _ hfs hta .. := expand(ha, ui.at_main)
+  have _ it := expand(hta, startup_specs.thread_at)
+  have i1 i2 := expand(it, startup_specs.in_tls)
+  have bt: ui.G.builtin_tls = 4228288 by eval()
+  have at al := apply(ui.mx_typ[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs], h)
+  have fo: int_add(fs, j) in omega by arith(hfs, hj)
+  have w := expand(apply(ui.fp_where[AT := ui.AT(m0, argv, envp), L := auxv, a := int_add(fs, j)], at, al, fo, hin), ui.FW)
+  have c3: mallocng.in_ranges(int_add(fs, j), mallocng.auxv_ranges(ui.A0(m0, argv, envp, auxv))) -> false proof
+    assume hh
+    have b1 _ _ := apply(ui.ax_in[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, x := int_add(fs, j)], hx, fo, hh)
+    show by arith(b1, hl, hlo, i2, bt, hjl, hj)
+  qed
+  have c12: !(ui.RO(int_add(fs, j)) || ui.DATA(int_add(fs, j))) by arith(i1, i2, bt, hjl, hj, hfs)
+  show by taut(w, c3, c12)
+qed
