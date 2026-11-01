@@ -5188,6 +5188,70 @@ proof
   show by taut(e0, rsimp(fa), rsimp(ml), rsimp(fw), rsimp(an), rsimp(fc), rsimp(fp))
 qed
 
+// (libc's data on the initial stack: a set of bytes)
+theorem ui.ob_type: all m0 argv envp. ui.OB(m0, argv, envp) in set_type(omega) && ui.OB(m0, argv, envp) in univ(1)
+proof
+  fix m0 argv envp
+  have ss: subset(ui.OB(m0, argv, envp), omega) proof
+    fix x
+    assume h
+    show by taut(set_select_def[s := omega, p := x0. claim_malloc.initial_auxv(m0, argv, envp, x0), z := x], h)
+  qed
+  have t: ui.OB(m0, argv, envp) in set_type(omega) by defs(taut(powerset_def[s := omega, a := ui.OB(m0, argv, envp)], ss), set_type)
+  have u := mp(univ_subset[u := 1, a := ui.OB(m0, argv, envp), b := omega], omega_univ, ss)
+  show := conj(t, u)
+qed
+
+// the empty heap at a machine state: a heap (its world, no blocks)
+theorem ui.heap_typed: all m objs. m in x86_64_linux.Machine -> objs in set_type(omega) -> objs in univ(1) ->
+  claim_malloc.empty_heap(m, objs) in rec_and(abi.World, malloc.Heap.ghost)
+proof
+  fix m objs
+  assume hM ho hou
+  let W := abi.wo(m, objs, claim_malloc.c_vm(m.vm))
+  let B := fn_build(bits(64), x. none)
+  let H := fn_update(empty, "blocks", B)
+  have _ _ _ vt := apply(x86i.parts, hM)
+  have wt wu := apply(ui.wvm_typed, vt, apply(ui.vm_univ, vt))
+  have ce := all_elim(ui.cv_eq, {m.vm})
+  have mu := apply(ui.m_univ, hM)
+  have c := mp(all_elim(abi.objs_at_univ, {objs}, {m.fs_base}), hou)
+  have wun: W in univ(1) by simp(mu, c, rewrite(sym(ce), wu))
+  have ww := apply(abi.world_typed[s := m, objs := objs, mem := claim_malloc.c_vm(m.vm)], hM, ho, rewrite(sym(ce), wt), wun)
+  // (the ghost part: the blocks, none)
+  have nb: all x. x in bits(64) -> none in option(omega) proof
+    fix x
+    assume _
+    show by defs(simp(), option)
+  qed
+  have bs := apply(fn_build_space[d := bits(64), v := x. none, b := option(omega)], nb)
+  have smu: all x. x in omega -> some(x) in univ(1) proof
+    fix x
+    assume hx
+    have xu := mp(mp(univ_trans[u := 1, a := x, b := omega], omega_univ), hx)
+    show by defs(simp(xu), some)
+  qed
+  have imu := mp(mp(univ_image[u := 1, s := omega, f := x. some(x)], omega_univ), smu)
+  have nu: single(none) in univ(1) by defs(simp(), single, none)
+  have ou: option(omega) in univ(1) by defs(mp(mp(union2_univ[u := 1, a := single(none), b := set_image(omega, x. some(x))], nu), imu), option)
+  have bu := apply(fn_space_univ[u := 1, a := bits(64), b := option(omega), f := B], bits_univ[n := 64], ou, bs)
+  have f0 d0 := dom_empty
+  have hf := mp(fn_update_fun[f := empty, k := "blocks", v := B], f0)
+  have hd: dom(H) = insert("blocks", empty) := rewrite(d0, mp(dom_update[f := empty, k := "blocks", v := B], f0))
+  have hu: H in univ(1) by simp(bu)
+  have hb: H.blocks in fn_space(bits(64), option(omega)) by rsimp(bs)
+  have hg: H in malloc.Heap.ghost by defs(apply(rec_type_intro[u := 1, k := insert("blocks", empty), p := x. (is_fun(x) && dom(x) = insert("blocks", empty)) &&
+    x.blocks in fn_space(bits(64), option(omega)), r := H], hu, hf, hd, taut(hf, hd, hb)), malloc.Heap.ghost)
+  have u := apply(rec_and_intro[a := abi.World, b := malloc.Heap.ghost, x := W, y := H], ww, hg)
+  // (the heap: the world, its blocks added)
+  have sd: dom(W) = insert("vm", insert("os", insert("fs_base", insert("cpu", insert("objs", empty))))) by simp(expand(ww, abi.World))
+  have l := apply(dom_lacks[x := W, d := insert("vm", insert("os", insert("fs_base", insert("cpu", insert("objs", empty))))), k := "blocks"], sd,
+    (!("blocks" in insert("vm", insert("os", insert("fs_base", insert("cpu", insert("objs", empty)))))) by simp()))
+  have fu := rewrite(union2_empty[a := W], mp(fn_update_union_r[a := W, b := empty, k := "blocks", v := B], l))
+  have es: claim_malloc.empty_heap(m, objs) = fn_update(W, "blocks", B) by defs(refl({fn_update(W, "blocks", B)}), claim_malloc.empty_heap)
+  show := rewrite(sym(trans(es, fu)), u)
+qed
+
 // the allocator's invariant at main: the empty state, libc's vector exec's
 theorem ui.rep_main: all m0 s lo top argv envp auxv m V fs. ui.MX(m0, s, lo, top, argv, envp, auxv, m, V, fs) ->
   mallocng.rep(ui.C, ui.A0(m0, argv, envp, auxv), claim_malloc.empty_heap(m, ui.OB(m0, argv, envp)))
