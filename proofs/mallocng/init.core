@@ -1569,3 +1569,88 @@ proof
   qed
   show by taut(expand(hq, ui.Q), q1, q2, q3)
 qed
+
+// ----------------------------------------------------------------------
+//  _start_c's machine code from its entry: the stop at main
+
+// startup's globals and the program's addresses (the units' symbols)
+abbrev ui.G := fn_update(fn_update(fn_update(fn_update(fn_update(fn_update(fn_update(fn_update(fn_update(fn_update(fn_update(empty,
+  "environ", c_src_env___libc_start_main.__environ), "hwcap", c_src_env___libc_start_main.__hwcap), "sysinfo", c_src_env___libc_start_main.__sysinfo),
+  "libc", c_src_env___libc_start_main.__libc), "progname", c_src_env___libc_start_main.__progname), "progname_full", c_src_env___libc_start_main.__progname_full),
+  "empty_str", c_src_env___libc_start_main.str_), "default_stacksize", c_src_env___init_tls.__default_stacksize), "builtin_tls", c_src_env___init_tls.builtin_tls),
+  "main_tls", c_src_env___init_tls.main_tls), "stack_chk_guard", c_src_env___stack_chk_fail.__stack_chk_guard)
+abbrev ui.P := fn_update(fn_update(fn_update(fn_update(empty, "init_array", c_src_env___libc_start_main.__init_array_start),
+  "init_array_end", c_src_env___libc_start_main.__init_array_end), "ctor", 4198864), "main", c_crt_crt1.main_at)
+
+theorem ui.gp_ok: lk.gok(ui.G) && lk.pok(ui.P)
+proof
+  show by rsimp()
+qed
+
+// (the globals' layout: libc below the static TLS area)
+theorem ui.g_facts: ui.G.builtin_tls in bits(64) && ui.G.libc in bits(64) && int_lt(int_add(ui.G.libc, 56), 9223372036854775808) &&
+  int_lt(int_add(ui.G.builtin_tls, 336), 9223372036854775808) && (int_le(int_add(ui.G.builtin_tls, 336), int_add(ui.G.libc, 8)) || int_le(int_add(ui.G.libc, 16), ui.G.builtin_tls))
+proof
+  show by eval()
+qed
+
+// every run of _start_c's spec from a world where its precondition holds:
+// a stack overflow or main entered
+theorem ui.c_only: all a t o. t in abi.World -> t in univ(1) -> a in bits(64) -> ui.c_pre(t.vm, t.objs, ui.G, ui.P, a) ->
+  runs(startup_specs.start_c_spec_fun(ui.G, ui.P)[seq_one(a)], t, o) ->
+  (ex x. o = exc(x, exc_val("stack_overflow", empty))) || (ex x. o = exc(x, exc_val("at_main", empty)))
+proof
+  fix a t o
+  assume hw hu ha hp hr
+  have f1 f2 f3 f4 f5 := ui.g_facts
+  have q := apply(ui.c_q[g := ui.G, P := ui.P, sp := a, t := t, o := o], hw, hu, f1, f2, f3, f4, f5, ha, hp, hr)
+  have c1: sp.ovf_any(t, o) -> (ex x. o = exc(x, exc_val("stack_overflow", empty))) proof
+    assume h
+    obtain f v ob, _ _ _ e from expand(h, sp.ovf_any)
+    show by ex_intro({fn_update(fn_update(fn_update(t, "fs_base", f), "vm", v), "objs", ob)}, e)
+  qed
+  have c2: (ex V fs. V in x86_64_linux.Vm && startup_specs.frame(t.vm, V, t.objs, startup_specs.start_writes(ui.G)) &&
+    (all x4. x4 in omega -> startup_specs.env_at(t.vm, t.objs, bits_add(64, a, int_mul(8, int_add(gimple.bytes_at(t.vm, a, 8), 2))), x4) ->
+       gimple.bytes_at(V, int_add(ui.G.libc, 8), 8) = int_add(bits_add(64, a, int_mul(8, int_add(gimple.bytes_at(t.vm, a, 8), 2))), int_mul(8, int_add(x4, 1)))) &&
+    fs in bits(64) && startup_specs.thread_set(V, fs) && o = exc(fn_update(fn_update(t, "vm", V), "fs_base", fs), exc_val("at_main", empty))) ->
+    (ex x. o = exc(x, exc_val("at_main", empty))) proof
+    assume h
+    obtain V fs, _ _ _ _ _ e from h
+    show by ex_intro({fn_update(fn_update(t, "vm", V), "fs_base", fs)}, e)
+  qed
+  show by taut(q, c1, c2)
+qed
+
+// _start_c's machine code from its entry s (exec's stack data the callers'
+// objects, the world's view of s): the claim's run to main ends at m as
+// its spec's world entering main
+theorem ui.c_stop: all s objs m a. s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(s.vm, 4198400, text.code, empty) -> s.rip = 4198565 ->
+  tr.eok(false, false, s, seq_one(a)) -> a in bits(64) -> objs in set_type(omega) -> tr.objs_ok(s, objs) -> ui.UR(4198873, s, m) ->
+  !(4198873 = x86_64_linux.le(s.vm.bytes, s.gpr[4], 8)) -> tr.vw(false, s, objs, ui.wvm(s.vm)) in abi.World -> tr.vw(false, s, objs, ui.wvm(s.vm)) in univ(1) ->
+  ui.c_pre(ui.wvm(s.vm), abi.wob(objs, abi.cball), ui.G, ui.P, a) ->
+  tr.stv(false, startup_specs.start_c_spec_fun(ui.G, ui.P)[seq_one(a)], tr.vw(false, s, objs, ui.wvm(s.vm)), ok(m, exc_val("stop", empty)))
+proof
+  fix s objs m a
+  assume hM hU hl hr he ha ho hob hur hnt hw hwu hp
+  let W := tr.vw(false, s, objs, ui.wvm(s.vm))
+  let SP := startup_specs.start_c_spec_fun(ui.G, ui.P)[seq_one(a)]
+  obtain o, hrun hq from apply(ui.until_run[s := s, t := 4198873, m0 := s, m := m], hur, hnt)
+  have gk: lk.gok(ui.G) by rsimp()
+  have pk: lk.pok(ui.P) by rsimp()
+  have im := expand(mp(all_elim(lk.start_impl, {ui.G}, {ui.P}, {empty}), gk, pk), tr.impl_m)
+  have _ _ _ pv := apply(x86i.parts, hM)
+  have wt _ := apply(ui.wvm_typed, pv, apply(ui.vm_univ, pv))
+  have sl := apply(tr.seq_one_type[x := a, t := bits(64)], ha)
+  have ol: ord_le(seq_len(seq_one(a)), 6) by defs(arith((seq_len(seq_one(a)) = 1 by simp())), ord_le)
+  have ra: seq_one(a) in abi.ARGS by sel(conj(sl, ol))
+  have mt := mp(all_elim(im, {seq_one(a)}, {objs}, {ui.wvm(s.vm)}, {s}, {o}), ra, ho, wt, hM, hU, hl, hr, he, hob, ui.wvm_vok[s := s, objs := objs], hrun)
+  have wv: W.vm = ui.wvm(s.vm) by rsimp()
+  have wo: W.objs = abi.wob(objs, abi.cball) by rsimp()
+  have hP: all o2. runs(SP, W, o2) -> (ex x. o2 = exc(x, exc_val("stack_overflow", empty))) || (ex x. o2 = exc(x, exc_val("at_main", empty))) proof
+    fix o2
+    assume h2
+    have hp2: ui.c_pre(W.vm, W.objs, ui.G, ui.P, a) := rewrite(sym(wv), rewrite(sym(wo), hp))
+    show := apply(ui.c_only[a := a, t := W, o := o2], hw, hwu, ha, hp2, h2)
+  qed
+  show := apply(ui.mtv_stop[s := s, V := abi.wob(objs, tr.cbm(false, s.fs_base)), P := SP, W := W, o := o, m := m], hP, mt, hq)
+qed
