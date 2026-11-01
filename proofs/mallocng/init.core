@@ -1171,6 +1171,35 @@ qed
 // ----------------------------------------------------------------------
 //  _start_c's spec: its runs
 
+// (a memory: in the universe)
+theorem ui.vm_univ: all vm. vm in x86_64_linux.Vm -> vm in univ(1)
+proof
+  fix vm
+  assume h
+  let K := insert("pages", insert("bytes", insert("stack_top", insert("stack_limit", insert("brk_start", insert("brk", empty))))))
+  have hp hq := unsel(expand(h, x86_64_linux.Vm))
+  have hf hd := (is_fun(vm) && dom(vm) = K by taut(hq))
+  have ku: K in univ(1) by simp()
+  show := mp(rec_univ[u := 1, k := K, r := vm], ku, hp, hf, hd)
+qed
+
+// (__init_tls's writes: startup's)
+theorem ui.tls_sub: all g x. g.libc in bits(64) -> int_lt(int_add(g.libc, 56), 18446744073709551616) -> x in startup_specs.tls_writes(g) -> x in startup_specs.start_writes(g)
+proof
+  fix g x
+  assume hl hl2 hx
+  have xo q := unsel(expand(hx, startup_specs.tls_writes))
+  have c2: x in startup_specs.span(bits_add(64, g.libc, 16), 32) -> x in startup_specs.span(bits_add(64, g.libc, 8), 48) proof
+    assume h
+    have _ a1 a2 := unsel(expand(h, startup_specs.span))
+    show by defs(sel(conj(xo, (int_le(bits_add(64, g.libc, 8), x) && int_lt(x, int_add(bits_add(64, g.libc, 8), 48)) by defs(arith(a1, a2, hl, hl2), bits_add, pow2)))), startup_specs.span)
+  qed
+  show by defs(sel(conj(xo, (x in startup_specs.span(g.libc, 1) || x in startup_specs.span(bits_add(64, g.libc, 8), 48) || x in startup_specs.span(g.environ, 8) ||
+    x in startup_specs.span(g.hwcap, 8) || x in startup_specs.span(g.sysinfo, 8) || x in startup_specs.span(g.progname, 8) ||
+    x in startup_specs.span(g.progname_full, 8) || x in startup_specs.span(g.default_stacksize, 4) || x in startup_specs.span(g.builtin_tls, 336) ||
+    x in startup_specs.span(g.main_tls, 48) || x in startup_specs.span(g.stack_chk_guard, 8) by taut(q, c2)))), startup_specs.start_writes)
+qed
+
 // (a store apart from the thread's descriptor's first 48 bytes: the thread
 // kept)
 theorem ui.ts_store: all V fs a v. startup_specs.thread_set(V, fs) -> fs in bits(64) -> a in bits(64) -> int_lt(int_add(fs, 48), 9223372036854775808) ->
@@ -1196,4 +1225,63 @@ proof
     (all x0. x0 in omega -> int_lt(x0, 8) -> snd(V2.pages[int_div(int_add(int_add(fs, 40), x0), x86_64_linux.PAGE)]).prot.w &&
       !abi.stack_page(V2, int_div(int_add(int_add(fs, 40), x0), x86_64_linux.PAGE)) by rsimp(expand(c2, abi.stack_page, x86_64_linux.mapped), abi.stack_page, x86_64_linux.mapped))), abi.canary_ok)
   show by defs(taut(to2, co2), startup_specs.thread_set)
+qed
+
+// (a memory with startup's effect: the thread set up -- __init_tls's choice
+// -- and libc.auxv past envp's n words: to_main's choice is possible)
+theorem ui.main_exists: all g t E n. t in abi.World -> g.builtin_tls in bits(64) -> g.libc in bits(64) -> int_lt(int_add(g.libc, 56), 9223372036854775808) ->
+  int_lt(int_add(g.builtin_tls, 336), 9223372036854775808) -> (int_le(int_add(g.builtin_tls, 336), int_add(g.libc, 8)) || int_le(int_add(g.libc, 16), g.builtin_tls)) ->
+  startup_specs.globals_ok(t.vm, t.objs, g) -> n in omega -> startup_specs.env_at(t.vm, t.objs, E, n) -> E in bits(64) ->
+  ex V. V in x86_64_linux.Vm && (startup_specs.frame(t.vm, V, t.objs, startup_specs.start_writes(g)) &&
+    (all x4. x4 in omega -> startup_specs.env_at(t.vm, t.objs, E, x4) -> gimple.bytes_at(V, bits_add(64, g.libc, 8), 8) = int_add(E, int_mul(8, int_add(x4, 1))))) &&
+    (ex x4. x4 in bits(64) && startup_specs.thread_set(V, x4))
+proof
+  fix g t E n
+  assume hw hb hl hl2 hb2 hdis hg hn he hE
+  obtain V0, hV0 hfr0 hfs from apply(sp.tls_exists, {g}, {t}, hw, hb, hg)
+  obtain fs0, hf0 hts hit from hfs
+  let a := bits_add(64, g.libc, 8)
+  let val := int_add(E, int_mul(8, int_add(n, 1)))
+  let V2 := fn_update(V0, "bytes", x86_64_linux.store_le(V0.bytes, a, 8, val))
+  have _ ev _ _ _ := expand(he, startup_specs.env_at)
+  have ae: a = int_add(g.libc, 8) by defs(arith(hl, hl2), bits_add, pow2)
+  have ab: a in bits(64) by arith(ae, hl, hl2)
+  have vb: val in bits(64) by arith(ev, hn, hE)
+  // (typed)
+  have V0u := apply(ui.vm_univ, hV0)
+  have bt: V0.bytes in fn_space(bits(64), bits(8)) by taut(unsel(expand(hV0, x86_64_linux.Vm)))
+  have st := apply(x86.store_typed[b := V0.bytes, a := a, n := 8, v := val], bt)
+  have su := mp(fn_space_univ[u := 1, a := bits(64), b := bits(8), f := x86_64_linux.store_le(V0.bytes, a, 8, val)], bits_univ[n := 64], bits_univ[n := 8], st)
+  have V2u: V2 in univ(1) by simp(V0u, su)
+  have V2v := apply(x86.store_vm[vm := V0, a := a, n := 8, v := val], hV0, V2u)
+  // (the frame: __init_tls's writes and libc.auxv's word, startup's)
+  have ts: all x. x in startup_specs.tls_writes(g) -> x in startup_specs.start_writes(g) proof
+    fix x
+    assume hx
+    show := apply(ui.tls_sub[g := g, x := x], hl, arith(hl2), hx)
+  qed
+  have fr1 := apply(sp.fr_mono[b := t.vm, U := V0, o := t.objs, W1 := startup_specs.tls_writes(g), W2 := startup_specs.start_writes(g)], hfr0, ts)
+  have sw: all i. i in omega -> int_lt(i, 8) -> int_add(a, i) in startup_specs.start_writes(g) || abi.stack_free(t.vm, t.objs, int_add(a, i)) proof
+    fix i
+    assume hi hil
+    show by taut(apply(sp.sw_libc8[g := g, x := int_add(a, i)], hl, arith(hl2), arith(hi, ab), arith(ae, hi), arith(ae, hi, hil)))
+  qed
+  have fr2 := apply(sp.fr_store[b := t.vm, U := V0, objs := t.objs, W := startup_specs.start_writes(g), a := a, n := 8, v := val], fr1, ab, eval(), arith(ae, hl2), sw)
+  // (libc.auxv's word)
+  have l8 := apply(tr.le_store8[b := V0.bytes, a := a, x := val], bt, ab, arith(vb))
+  have b2: V2.bytes in fn_space(bits(64), bits(8)) by rsimp(st, rewrite(ae, st))
+  have l8b := apply(x86.le8_nat[vm := V2, a := a], b2)
+  have bv: gimple.bytes_at(V2, a, 8) = val := trans(sym(l8b), trans((x86_64_linux.le(V2.bytes, a, 8) = x86_64_linux.le(x86_64_linux.store_le(V0.bytes, a, 8, val), a, 8) by rsimp()),
+    trans(l8, apply(nf.boi_in[n := 64, x := val], eval(), vb))))
+  have ea: all x4. x4 in omega -> startup_specs.env_at(t.vm, t.objs, E, x4) -> gimple.bytes_at(V2, bits_add(64, g.libc, 8), 8) = int_add(E, int_mul(8, int_add(x4, 1))) proof
+    fix x4
+    assume h4 he4
+    have q := apply(sp.env_unique[vm := t.vm, o := t.objs, e := E, n1 := n, n2 := x4], hn, h4, he, he4)
+    show := rewrite(q, bv)
+  qed
+  // (the thread: apart from libc)
+  have i1 i2 := expand(hit, startup_specs.in_tls)
+  have ts2 := apply(ui.ts_store[V := V0, fs := fs0, a := a, v := val], hts, hf0, ab, arith(i2, hb2), arith(ae, hl2), arith(hdis, ae, i1, i2))
+  have et: ex x4. x4 in bits(64) && startup_specs.thread_set(V2, x4) by ex_intro({fs0}, taut(hf0, ts2))
+  show by ex_intro({V2}, taut(V2v, fr2, ea, et))
 qed
