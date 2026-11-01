@@ -922,6 +922,153 @@ proof
   show by taut(mp(all_elim(x1, {p}), po), c1)
 qed
 
+// the world's memory at an entry: the machine's, its stack pages hidden
+abbrev ui.wpages(vm) := fn_build(set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))), p. ite(abi.stack_page(vm, p), none, vm.pages[p]))
+abbrev ui.wvm(vm) := fn_update(vm, "pages", ui.wpages(vm))
+
+theorem ui.wvm_typed: all vm. vm in x86_64_linux.Vm -> vm in univ(1) -> ui.wvm(vm) in x86_64_linux.Vm && ui.wvm(vm) in univ(1)
+proof
+  fix vm
+  assume h hu
+  let D := set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)))
+  have vp := apply(x86.vm_pages_typed, {vm}, h)
+  have pv: all p. p in D -> ite(abi.stack_page(vm, p), none, vm.pages[p]) in option(x86_64_linux.Page) proof
+    fix p
+    assume hp
+    have a := apply(x86.vm_page_at[vm := vm, q := p], h, hp)
+    have n: none in option(x86_64_linux.Page) by defs(simp(), option)
+    have c1: abi.stack_page(vm, p) -> ite(abi.stack_page(vm, p), none, vm.pages[p]) in option(x86_64_linux.Page) proof
+      assume hs
+      show := rewrite(sym(mp(ite_t[c := abi.stack_page(vm, p), a := none, b := vm.pages[p]], hs)), n)
+    qed
+    have c2: !abi.stack_page(vm, p) -> ite(abi.stack_page(vm, p), none, vm.pages[p]) in option(x86_64_linux.Page) proof
+      assume hs
+      show := rewrite(sym(mp(ite_f[c := abi.stack_page(vm, p), a := none, b := vm.pages[p]], hs)), a)
+    qed
+    show by taut(c1, c2)
+  qed
+  have ps := apply(fn_build_space[d := D, v := p. ite(abi.stack_page(vm, p), none, vm.pages[p]), b := option(x86_64_linux.Page)], pv)
+  have pu := mp(fn_space_univ[u := 1, a := D, b := option(x86_64_linux.Page), f := ui.wpages(vm)], x86.pn_univ, x86.opt_page_univ, ps)
+  have wu: ui.wvm(vm) in univ(1) by simp(hu, pu)
+  let K := insert("pages", insert("bytes", insert("stack_top", insert("stack_limit", insert("brk_start", insert("brk", empty))))))
+  have ht: is_fun(vm) && dom(vm) = K by simp(expand(h, x86_64_linux.Vm))
+  have hf: is_fun(vm) by taut(ht)
+  have dv: dom(vm) = K by taut(ht)
+  have pd: "pages" in dom(vm) by simp(dv)
+  have fuf := mp(fn_update_fun[f := vm, k := "pages", v := ui.wpages(vm)], hf)
+  have fud := mp(mp(fn_update_dom[f := vm, k := "pages", v := ui.wpages(vm)], hf), pd)
+  let W := ui.wvm(vm)
+  have pv2: ((((((is_fun(W) && dom(W) = K) && W.pages in fn_space(D, option(x86_64_linux.Page))) && W.bytes in fn_space(bits(64), bits(8))) && W.stack_top in bits(64)) &&
+    W.stack_limit in omega) && W.brk_start in bits(64)) && W.brk in bits(64) by simp(expand(h, x86_64_linux.Vm), ps, fuf, fud, dv)
+  have r := mp(mp(mp(mp(rec_type_intro[u := 1, k := K, p := x0. ((((((is_fun(x0) && dom(x0) = K) && x0.pages in fn_space(D, option(x86_64_linux.Page))) &&
+    x0.bytes in fn_space(bits(64), bits(8))) && x0.stack_top in bits(64)) && x0.stack_limit in omega) && x0.brk_start in bits(64)) && x0.brk in bits(64), r := W], wu), fuf), trans(fud, dv)), pv2)
+  have wv: W in x86_64_linux.Vm by defs(r, x86_64_linux.Vm)
+  show by taut(wv, wu)
+qed
+
+theorem ui.wvm_pages: all vm. abi.world_pages(vm, ui.wvm(vm))
+proof
+  fix vm
+  unfold abi.world_pages
+  fix p
+  assume hp
+  show by rsimp(mp(app_fn_build[d := set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))), v := q. ite(abi.stack_page(vm, q), none, vm.pages[q]), a := p], hp))
+qed
+
+// (a page of the view: the machine's, or none for a stack page)
+theorem ui.wvm_at: all vm p. p in set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))) ->
+  (abi.stack_page(vm, p) -> ui.wvm(vm).pages[p] = none) && (!abi.stack_page(vm, p) -> ui.wvm(vm).pages[p] = vm.pages[p])
+proof
+  fix vm p
+  assume hp
+  have a := mp(app_fn_build[d := set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))), v := q. ite(abi.stack_page(vm, q), none, vm.pages[q]), a := p], hp)
+  have e: ui.wvm(vm).pages[p] = ite(abi.stack_page(vm, p), none, vm.pages[p]) by rsimp(a)
+  have c1: abi.stack_page(vm, p) -> ui.wvm(vm).pages[p] = none proof
+    assume hs
+    show := trans(e, mp(ite_t[c := abi.stack_page(vm, p), a := none, b := vm.pages[p]], hs))
+  qed
+  have c2: !abi.stack_page(vm, p) -> ui.wvm(vm).pages[p] = vm.pages[p] proof
+    assume hs
+    show := trans(e, mp(ite_f[c := abi.stack_page(vm, p), a := none, b := vm.pages[p]], hs))
+  qed
+  show by taut(c1, c2)
+qed
+
+// the view at the entry s, with any callers' objects (all bytes the C
+// world's: the startup mode)
+theorem ui.wvm_vok: all s objs. tr.vok(false, s, objs, ui.wvm(s.vm))
+proof
+  fix s objs
+  let V := s.vm
+  let W := ui.wvm(s.vm)
+  let OB := abi.wob(objs, abi.cball)
+  let D := set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)))
+  have k1: [top] tr.wmc(V, V, W, OB, s.fs_base, abi.sp(s)) by rsimp()
+  have k2: [limit] tr.wmc(V, V, W, OB, s.fs_base, abi.sp(s)) by rsimp()
+  have k3: [brk0] tr.wmc(V, V, W, OB, s.fs_base, abi.sp(s)) by rsimp()
+  have k4: [brk] tr.wmc(V, V, W, OB, s.fs_base, abi.sp(s)) by rsimp()
+  have k5: [bytes] tr.wmc(V, V, W, OB, s.fs_base, abi.sp(s)) proof
+    fix x
+    assume _ _
+    show by rsimp()
+  qed
+  have k6: [frames] tr.wmc(V, V, W, OB, s.fs_base, abi.sp(s)) proof
+    fix x
+    assume _ _
+    show := refl({V.bytes[x]})
+  qed
+  have k7: [hid] tr.wmc(V, V, W, OB, s.fs_base, abi.sp(s)) proof
+    fix x
+    assume _ _
+    show by taut(refl({V.bytes[x]}), refl({V.pages[x86_64_linux.page_of(x)]}))
+  qed
+  have k8: [c_bytes] tr.wmc(V, V, W, OB, s.fs_base, abi.sp(s)) by rsimp()
+  have k9: [pages] tr.wmc(V, V, W, OB, s.fs_base, abi.sp(s)) proof
+    fix p
+    assume hp
+    have a1 a2 := apply(ui.wvm_at[vm := V, p := p], hp)
+    have c1: abi.stack_page(V, p) -> V.pages[p] = W.pages[p] || (W.pages[p] = none && abi.stack_page(V, p)) proof
+      assume hs
+      show by taut(hs, mp(a1, hs))
+    qed
+    have c2: !abi.stack_page(V, p) -> V.pages[p] = W.pages[p] || (W.pages[p] = none && abi.stack_page(V, p)) proof
+      assume hs
+      show by taut(sym(mp(a2, hs)))
+    qed
+    show by taut(c1, c2)
+  qed
+  have k10: [nostk] tr.wmc(V, V, W, OB, s.fs_base, abi.sp(s)) proof
+    fix p
+    assume hp hn
+    have _ lt := unsel(hp)
+    have a1 a2 := apply(ui.wvm_at[vm := V, p := p], hp)
+    have ns: !abi.stack_page(V, p) proof
+      assume hs
+      show by taut(hn, mp(a1, hs))
+    qed
+    have e := mp(a2, ns)
+    have mv: x86_64_linux.mapped(V, p) by defs(taut(lt, rewrite(e, hn)), x86_64_linux.mapped)
+    have nk: !(snd(V.pages[p]).kind = 2) proof
+      assume hk
+      have st: abi.stack_page(V, p) by defs(taut(mv, hk), abi.stack_page)
+      show by taut(st, ns)
+    qed
+    show := rewrite(sym(e), nk)
+  qed
+  have k11: [stk] tr.wmc(V, V, W, OB, s.fs_base, abi.sp(s)) proof
+    fix p
+    assume _ _
+    show := refl({V.pages[p]})
+  qed
+  have k12: [rsv] tr.wmc(V, V, W, OB, s.fs_base, abi.sp(s)) proof
+    assume h
+    show := h
+  qed
+  have wm: tr.wmc(V, V, W, OB, s.fs_base, abi.sp(s)) by clauses(k1, k2, k3, k4, k5, k6, k7, k8, k9, k10, k11, k12)
+  have cb: abi.cball = tr.cbm(false, s.fs_base) by rsimp()
+  show by defs(taut(ui.wvm_pages[vm := V], rewrite(cb, wm)), tr.vok)
+qed
+
 // the ABI's entry at _start_c (the startup mode, aligned): rsp at the
 // pushed return address on a stack page, the reserve, df clear, rdi exec's
 // rsp -- the argument --, the break's start sound
