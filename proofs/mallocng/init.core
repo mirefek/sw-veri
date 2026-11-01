@@ -4886,3 +4886,82 @@ proof
   qed
   show by defs(taut(k1, k2, k3), mallocng.perms_ok)
 qed
+
+// (four cases)
+theorem ui.or4(P0, P1, P2, P3, G): P0 || P1 || P2 || P3 -> (P0 -> G) -> (P1 -> G) -> (P2 -> G) -> (P3 -> G) -> G
+proof
+  assume h h0 h1 h2 h3
+  show by taut(h, h0, h1, h2, h3)
+qed
+
+// an image page at main: mapped, not the stack
+theorem ui.mm_map: all m0 s lo top argv envp auxv m V fs i a. ui.MX(m0, s, lo, top, argv, envp, auxv, m, V, fs) -> i in omega -> a in omega ->
+  ui.TAB(i, int_div(a, x86_64_linux.PAGE)) ->
+  x86_64_linux.mapped(ui.wvm(m.vm), int_div(a, x86_64_linux.PAGE)) && !(snd(ui.wvm(m.vm).pages[int_div(a, x86_64_linux.PAGE)]).kind = 2)
+proof
+  fix m0 s lo top argv envp auxv m V fs i a
+  assume h hi ha ht
+  let p := int_div(a, x86_64_linux.PAGE)
+  let PG := fn_update(fn_update(empty, "prot", x86_64_linux.seg_prot(x86_64_linux.segment(musl_malloc.file, i))), "kind", 0)
+  have g := apply(ui.mm_pg[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs, i := i, a := a], h, hi, ha, ht)
+  have _ mv2 := apply(ui.mview_at[vm := ui.wvm(m.vm), a := a], ha)
+  have e: ui.wvm(m.vm).pages[p] = some(PG) := trans(sym(mv2), g)
+  have pl: int_lt(p, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) by arith(ht)
+  have mq: x86_64_linux.mapped(ui.wvm(m.vm), p) by defs(taut(pl, rewrite(sym(e), ui.some_nn[x := PG])), x86_64_linux.mapped)
+  have pk: !(PG.kind = 2) by rsimp()
+  show by taut(mq, rewrite(sym(rewrite(sym(e), ui.snd_some[x := PG])), pk))
+qed
+
+// a byte of exec's stack at main: in the stack's space
+theorem ui.mm_iss: all m0 s lo top argv envp auxv m V fs a. ui.MX(m0, s, lo, top, argv, envp, auxv, m, V, fs) -> a in omega ->
+  int_le(m0.gpr[4], a) -> int_lt(a, int_mul(top, x86_64_linux.PAGE)) -> mallocng.in_stack_space(ui.wvm(m.vm), a)
+proof
+  fix m0 s lo top argv envp auxv m V fs a
+  assume h ha h1 h2
+  have hx _ := expand(h, ui.MX)
+  have hc .. := expand(hx, ui.SX)
+  have _ _ _ hs hl .. := expand(hc, ui.ctx)
+  have s1 s2 s3 s4 .. := expand(hs, x86_64_linux.stack_pages)
+  have t1 t2 := apply(ui.mm_stkf[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs], h)
+  show by defs(arith(t1, t2, s1, s2, s3, s4, hl, h1, h2), mallocng.in_stack_space, x86_64_linux.stack_floor)
+qed
+
+// the empty state's ranges mapped at main: the loads' and data's pages
+// not the stack, the vector in the stack's space
+theorem ui.fpm_main: all m0 s lo top argv envp auxv m V fs b. ui.MX(m0, s, lo, top, argv, envp, auxv, m, V, fs) ->
+  mallocng.fp_mapped(mallocng.fp_ranges(ui.C, ui.A0(m0, argv, envp, auxv)), mallocng.auxv_ranges(ui.A0(m0, argv, envp, auxv)), b, ui.wvm(m.vm))
+proof
+  fix m0 s lo top argv envp auxv m V fs b
+  assume h
+  have hx _ := expand(h, ui.MX)
+  let A := ui.A0(m0, argv, envp, auxv)
+  let RS := mallocng.fp_ranges(ui.C, A)
+  let XS := mallocng.auxv_ranges(A)
+  have at al := apply(ui.mx_typ[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs], h)
+  have k1: all k a. k in omega && a in omega -> ((((int_lt(k, seq_len(RS)) && int_le(fst(RS[k]), a)) && int_lt(a, int_add(fst(RS[k]), snd(RS[k])))) &&
+      !(a in malloc.live_of(b))) && !mallocng.in_ranges(a, XS)) ->
+      x86_64_linux.mapped(ui.wvm(m.vm), int_div(a, x86_64_linux.PAGE)) && !(snd(ui.wvm(m.vm).pages[int_div(a, x86_64_linux.PAGE)]).kind = 2) proof
+    fix k a
+    assume ho hr
+    have o0 o1 := ho
+    have r0 r1 r2 _ nx := hr
+    have ir: mallocng.in_ranges(a, RS) by defs(ex_intro({k}, taut(o0, r0, r1, r2)), mallocng.in_ranges, mallocng.in_range)
+    have w := expand(apply(ui.fp_where[AT := ui.AT(m0, argv, envp), L := auxv, a := a], at, al, o1, ir), ui.FW)
+    have ti: ui.TAB(0, int_div(a, x86_64_linux.PAGE)) || ui.TAB(1, int_div(a, x86_64_linux.PAGE)) || ui.TAB(2, int_div(a, x86_64_linux.PAGE)) ||
+      ui.TAB(3, int_div(a, x86_64_linux.PAGE)) by arith(w, nx, o1)
+    have c0 := apply(ui.mm_map[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs, i := 0, a := a], h, eval(), o1)
+    have c1 := apply(ui.mm_map[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs, i := 1, a := a], h, eval(), o1)
+    have c2 := apply(ui.mm_map[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs, i := 2, a := a], h, eval(), o1)
+    have c3 := apply(ui.mm_map[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs, i := 3, a := a], h, eval(), o1)
+    show := apply(ui.or4[P0 := ui.TAB(0, int_div(a, x86_64_linux.PAGE)), P1 := ui.TAB(1, int_div(a, x86_64_linux.PAGE)), P2 := ui.TAB(2, int_div(a, x86_64_linux.PAGE)),
+      P3 := ui.TAB(3, int_div(a, x86_64_linux.PAGE)), G := x86_64_linux.mapped(ui.wvm(m.vm), int_div(a, x86_64_linux.PAGE)) &&
+      !(snd(ui.wvm(m.vm).pages[int_div(a, x86_64_linux.PAGE)]).kind = 2)], ti, c0, c1, c2, c3)
+  qed
+  have k2: all a. a in omega -> mallocng.in_ranges(a, XS) -> mallocng.in_stack_space(ui.wvm(m.vm), a) proof
+    fix a
+    assume ha hr
+    have b1 b2 _ := apply(ui.ax_in[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, x := a], hx, ha, hr)
+    show := apply(ui.mm_iss[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs, a := a], h, ha, b1, b2)
+  qed
+  show := apply(mp.fpm_intro[RS := RS, XS := XS, b := b, vm := ui.wvm(m.vm)], k1, k2)
+qed
