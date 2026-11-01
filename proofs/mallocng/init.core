@@ -4494,3 +4494,41 @@ proof
   have l: ui.le_b(T, int_mul(1, i), 1) = mallocng.debruijn32_tab[i] by cases({i}, {0}, {32}, simp(at({mallocng.debruijn32_tab[i]}), v), hi, hil)
   show := trans(mp(all_elim(f, {i}), hi, hil), l)
 qed
+
+// a byte of the read-only data at main: on a mapped readable page, not
+// the stack's
+theorem ui.ro2_page: all m0 s lo top argv envp auxv m V fs x. ui.MX(m0, s, lo, top, argv, envp, auxv, m, V, fs) -> x in omega ->
+  int_le(4218880, x) -> int_lt(x, 4219184) ->
+  mallocng.m_mapped(ui.MV(m), x) && snd(mallocng.pg(ui.MV(m), x)).prot.r && !(snd(mallocng.pg(ui.MV(m), x)).kind = 2)
+proof
+  fix m0 s lo top argv envp auxv m V fs x
+  assume h hx h1 h2
+  let PG := fn_update(fn_update(empty, "prot", x86_64_linux.seg_prot(x86_64_linux.segment(musl_malloc.file, 2))), "kind", 0)
+  have _ p := apply(ui.ro2_byte[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs, x := x], h, hx, h1, h2)
+  have sn: snd(mallocng.pg(ui.MV(m), x)) = PG := rewrite(sym(p), ui.snd_some[x := PG])
+  have {g2 = s2} := ui.elf
+  have _ f2 _ _ _ _ := expand(g2, ui.segis)
+  have pr: PG.prot.r by rsimp(f2, x86_64_linux.seg_prot, (bit(4, 2) by eval()))
+  have pk: !(PG.kind = 2) by rsimp()
+  have mm: mallocng.m_mapped(ui.MV(m), x) by defs(taut((int_lt(int_div(x, x86_64_linux.PAGE), int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) by arith(hx, h2)),
+    rewrite(sym(p), ui.some_nn[x := PG])), mallocng.m_mapped)
+  show by taut(mm, rewrite(sym(sn), pr), rewrite(sym(sn), pk))
+qed
+
+// (the read-only data's range among the loads': header 2's)
+theorem ui.ro2_range: mallocng.ro_ranges(ui.C.file)[2] = pair(4218880, 304)
+proof
+  let F := musl_malloc.file
+  have {pn = phnum, g2 = s2} := ui.elf
+  have _ f2 _ v2 _ m2 := expand(g2, ui.segis)
+  have fe: ui.C.file = F by rsimp()
+  have im: 2 in int_sub(x86_64_linux.phnum(F), 0) := mp(nat_lt_mem[k := 2, n := int_sub(x86_64_linux.phnum(F), 0)], eval(), arith(pn), arith(pn))
+  have a := mp(app_fn_build[d := int_sub(x86_64_linux.phnum(F), 0), v := x0. ite(x86_64_linux.is_load(F, int_add(0, x0)) && !bit(x86_64_linux.segment(F, int_add(0, x0)).flags, 1),
+    pair(x86_64_linux.segment(F, int_add(0, x0)).vaddr, x86_64_linux.segment(F, int_add(0, x0)).memsz), pair(0, 0)), a := 2], im)
+  have c: x86_64_linux.is_load(F, int_add(0, 2)) && !bit(x86_64_linux.segment(F, int_add(0, 2)).flags, 1)
+    by rsimp(apply(ui.load_i[i := 2], eval(), eval()), f2, (!bit(4, 1) by eval()))
+  have e := trans(a, mp(ite_t[c := x86_64_linux.is_load(F, int_add(0, 2)) && !bit(x86_64_linux.segment(F, int_add(0, 2)).flags, 1),
+    a := pair(x86_64_linux.segment(F, int_add(0, 2)).vaddr, x86_64_linux.segment(F, int_add(0, 2)).memsz), b := pair(0, 0)], c))
+  have r: mallocng.ro_ranges(F)[2] = pair(4218880, 304) by defs(rsimp(e, v2, m2), mallocng.ro_ranges)
+  show := rewrite(sym(fe), r)
+qed
