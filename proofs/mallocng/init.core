@@ -1654,3 +1654,60 @@ proof
   qed
   show := apply(ui.mtv_stop[s := s, V := abi.wob(objs, tr.cbm(false, s.fs_base)), P := SP, W := W, o := o, m := m], hP, mt, hq)
 qed
+
+// (equal records: equal fields)
+theorem ui.app_eq: all f g k. f = g -> f[k] = g[k]
+proof
+  fix f g k
+  assume e
+  show := subst({y. f[k] = y[k]}, e, refl({f[k]}))
+qed
+
+// the machine at main: its world startup's -- its memory's view V the
+// entry's but startup's writes, libc.auxv set, the thread set up at m's
+// thread pointer
+def ui.at_main(s, objs, m, a, V, fs) := V in x86_64_linux.Vm && startup_specs.frame(ui.wvm(s.vm), V, abi.wob(objs, abi.cball), startup_specs.start_writes(ui.G)) &&
+  (all x4. x4 in omega -> startup_specs.env_at(ui.wvm(s.vm), abi.wob(objs, abi.cball), bits_add(64, a, int_mul(8, int_add(gimple.bytes_at(ui.wvm(s.vm), a, 8), 2))), x4) ->
+     gimple.bytes_at(V, int_add(ui.G.libc, 8), 8) = int_add(bits_add(64, a, int_mul(8, int_add(gimple.bytes_at(ui.wvm(s.vm), a, 8), 2))), int_mul(8, int_add(x4, 1)))) &&
+  fs in bits(64) && startup_specs.thread_set(V, fs) && m.fs_base = fs && m.os = s.os && tr.vok(false, m, objs, V)
+
+theorem ui.main_world: all s objs m a. a in bits(64) -> tr.vw(false, s, objs, ui.wvm(s.vm)) in abi.World -> tr.vw(false, s, objs, ui.wvm(s.vm)) in univ(1) ->
+  ui.c_pre(ui.wvm(s.vm), abi.wob(objs, abi.cball), ui.G, ui.P, a) ->
+  tr.stv(false, startup_specs.start_c_spec_fun(ui.G, ui.P)[seq_one(a)], tr.vw(false, s, objs, ui.wvm(s.vm)), ok(m, exc_val("stop", empty))) ->
+  ex V fs. ui.at_main(s, objs, m, a, V, fs)
+proof
+  fix s objs m a
+  assume ha hw hwu hp hst
+  let W := tr.vw(false, s, objs, ui.wvm(s.vm))
+  let AM := exc_val("at_main", empty)
+  obtain m1 w v2 mem2, e1 _ hr ew hv from expand(hst, tr.stv)
+  have me _ := apply(ui.ok_inj, e1)
+  have wv: W.vm = ui.wvm(s.vm) by rsimp()
+  have wo: W.objs = abi.wob(objs, abi.cball) by rsimp()
+  have hp2: ui.c_pre(W.vm, W.objs, ui.G, ui.P, a) := rewrite(sym(wv), rewrite(sym(wo), hp))
+  have f1 f2 f3 f4 f5 := ui.g_facts
+  have q := apply(ui.c_q[g := ui.G, P := ui.P, sp := a, t := W, o := exc(w, AM)], hw, hwu, f1, f2, f3, f4, f5, ha, hp2, hr)
+  have c1: sp.ovf_any(W, exc(w, AM)) -> false proof
+    assume h
+    obtain f v ob, _ _ _ e from expand(h, sp.ovf_any)
+    have _ q2 := apply(ui.exc_inj, e)
+    have u _ := apply(pair_inj[a := "at_main", b := empty, c := "stack_overflow", d := empty], (pair("at_main", empty) = pair("stack_overflow", empty) by defs(q2, exc_val)))
+    show by taut(u, (!("at_main" = "stack_overflow") by eval()))
+  qed
+  obtain V fs, hV hfr hen hfb hts e from (ex V fs. V in x86_64_linux.Vm && startup_specs.frame(W.vm, V, W.objs, startup_specs.start_writes(ui.G)) &&
+    (all x4. x4 in omega -> startup_specs.env_at(W.vm, W.objs, bits_add(64, a, int_mul(8, int_add(gimple.bytes_at(W.vm, a, 8), 2))), x4) ->
+       gimple.bytes_at(V, int_add(ui.G.libc, 8), 8) = int_add(bits_add(64, a, int_mul(8, int_add(gimple.bytes_at(W.vm, a, 8), 2))), int_mul(8, int_add(x4, 1)))) &&
+    fs in bits(64) && startup_specs.thread_set(V, fs) && exc(w, AM) = exc(fn_update(fn_update(W, "vm", V), "fs_base", fs), AM) by taut(q, c1))
+  let T := fn_update(fn_update(W, "vm", V), "fs_base", fs)
+  have wT _ := apply(ui.exc_inj, e)
+  // (the stop's world: T -- its fields m's)
+  have qT: tr.vw(false, m1, v2, mem2) = T := trans(sym(ew), wT)
+  have k1: mem2 = V := rsimp(apply(ui.app_eq[k := "vm"], qT))
+  have k2: m1.fs_base = fs := rsimp(apply(ui.app_eq[k := "fs_base"], qT))
+  have k3: m1.os = s.os := rsimp(apply(ui.app_eq[k := "os"], qT))
+  have k4: v2 = objs := rsimp(apply(ui.app_eq[k := "live"], apply(ui.app_eq[k := "objs"], qT)))
+  have hv2: tr.vok(false, m, objs, V) := rewrite(sym(me), rewrite(k4, rewrite(k1, hv)))
+  have r: ui.at_main(s, objs, m, a, V, fs) by defs(taut(hV, rewrite(wv, rewrite(wo, hfr)), rewrite(wv, rewrite(wo, hen)), hfb, hts,
+    rewrite(sym(me), k2), rewrite(sym(me), k3), hv2), ui.at_main)
+  show by ex_intro({V}, {fs}, r)
+qed
