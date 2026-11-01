@@ -794,7 +794,8 @@ qed
 // exec's stack (grown if need be), rdi exec's rsp
 def ui.s5(m0, s) := s in x86_64_linux.Machine && s in univ(1) && s.rip = 4198565 && s.gpr[4] = bits_sub(64, m0.gpr[4], 8) && s.gpr[7] = m0.gpr[4] &&
   s.flags.df = m0.flags.df && s.os = m0.os && s.fs_base = m0.fs_base && s.gs_base = m0.gs_base && s.cpu = m0.cpu &&
-  (ex v1. x86.stk_ext(m0.vm, v1) && abi.vm_grows(m0.vm, v1) && (all j. j in omega -> int_lt(j, 8) -> x86_64_linux.can_access(v1, bits_add(64, bits_sub(64, m0.gpr[4], 8), bits_of_int(64, j)), 1)) &&
+  (ex v1. x86.stk_ext(m0.vm, v1) && abi.vm_grows(m0.vm, v1) && x86.vm_fields(m0.vm, v1) &&
+    (all j. j in omega -> int_lt(j, 8) -> x86_64_linux.can_access(v1, bits_add(64, bits_sub(64, m0.gpr[4], 8), bits_of_int(64, j)), 1)) &&
     s.vm = fn_update(v1, "bytes", x86_64_linux.store_le(v1.bytes, bits_sub(64, m0.gpr[4], 8), 8, 4198565)))
 
 theorem ui.start_call: all m0 m4 m. m0 in x86_64_linux.Machine -> ui.s4(m0, m4) -> int_mod(m0.gpr[4], 16) = 0 -> int_le(16, m0.gpr[4]) -> int_lt(m0.gpr[4], 140737488355328) ->
@@ -857,8 +858,55 @@ proof
   have w2: abi.vm_grows(m0.vm, m1.vm) := rewrite(pv, vg)
   have w3: all j. j in omega -> int_lt(j, 8) -> x86_64_linux.can_access(m1.vm, bits_add(64, bits_sub(64, m0.gpr[4], 8), bits_of_int(64, j)), 1) := rewrite(ae, ac)
   have w4: S.vm = fn_update(m1.vm, "bytes", x86_64_linux.store_le(m1.vm.bytes, bits_sub(64, m0.gpr[4], 8), 8, 4198565)) by rsimp(ae, hr)
-  have ev: ex v1. x86.stk_ext(m0.vm, v1) && abi.vm_grows(m0.vm, v1) && (all j. j in omega -> int_lt(j, 8) -> x86_64_linux.can_access(v1, bits_add(64, bits_sub(64, m0.gpr[4], 8), bits_of_int(64, j)), 1)) &&
-    S.vm = fn_update(v1, "bytes", x86_64_linux.store_le(v1.bytes, bits_sub(64, m0.gpr[4], 8), 8, 4198565)) by ex_intro({m1.vm}, taut(w1, w2, w3, w4))
+  have w5: x86.vm_fields(m0.vm, m1.vm) := rewrite(pv, apply(x86.touch_range_fields, ht))
+  have ev: ex v1. x86.stk_ext(m0.vm, v1) && abi.vm_grows(m0.vm, v1) && x86.vm_fields(m0.vm, v1) &&
+    (all j. j in omega -> int_lt(j, 8) -> x86_64_linux.can_access(v1, bits_add(64, bits_sub(64, m0.gpr[4], 8), bits_of_int(64, j)), 1)) &&
+    S.vm = fn_update(v1, "bytes", x86_64_linux.store_le(v1.bytes, bits_sub(64, m0.gpr[4], 8), 8, 4198565)) by ex_intro({m1.vm}, taut(w1, w2, w5, w3, w4))
   have s5: ui.s5(m0, S) by defs(taut(SM, SU, k1, k2, k3, k4, k5, k6, k7, k8, ev), ui.s5)
   show by ex_intro({S}, taut(s5, u5))
+qed
+
+// ----------------------------------------------------------------------
+//  The bridge's entry facts at _start_c
+
+// (the bytes written: the pages' facts kept)
+theorem ui.ca_bytes: all v B a k. x86_64_linux.can_access(v, a, k) -> x86_64_linux.can_access(fn_update(v, "bytes", B), a, k)
+proof
+  fix v B a k
+  assume h
+  show by defs(rsimp(expand(h, x86_64_linux.can_access, x86_64_linux.mapped)), x86_64_linux.can_access, x86_64_linux.mapped)
+qed
+
+theorem ui.sp_bytes: all v B p. abi.stack_page(v, p) -> abi.stack_page(fn_update(v, "bytes", B), p)
+proof
+  fix v B p
+  assume h
+  show by defs(rsimp(expand(h, abi.stack_page, x86_64_linux.mapped)), abi.stack_page, x86_64_linux.mapped)
+qed
+
+theorem ui.rsv_bytes: all v B. abi.stack_reserve(v) -> abi.stack_reserve(fn_update(v, "bytes", B))
+proof
+  fix v B
+  assume h
+  show by defs(rsimp(expand(h, abi.stack_reserve, abi.stack_page, x86_64_linux.mapped, x86_64_linux.stack_floor)),
+    abi.stack_reserve, abi.stack_page, x86_64_linux.mapped, x86_64_linux.stack_floor)
+qed
+
+// the program loaded at _start_c's entry: the text as exec loaded it, the
+// push on the stack
+theorem ui.entry_loaded: all m0 s. ui.s5(m0, s) -> abi.code_at(m0.vm, 4198400, text.code) -> abi.loaded(s.vm, 4198400, text.code, empty)
+proof
+  fix m0 s
+  assume h5 hc
+  have _ _ _ _ _ _ _ _ _ _ ev := expand(h5, ui.s5)
+  obtain v1, _ vg _ ac ve from ev
+  have c1 := apply(x86.code_grows[v0 := m0.vm, v := v1, a := 4198400, c := text.code], eval(), hc, vg)
+  have c2 := all_elim(apply(tr.store_code_acc[f := 4198400, code := text.code, vm := v1, a := bits_sub(64, m0.gpr[4], 8), n := 8], eval(), eval(), c1, ac), {4198565})
+  have c3: abi.code_at(s.vm, 4198400, text.code) := rewrite(sym(ve), c2)
+  have vac: all x0. x0 in omega -> x0 in empty -> x86_64_linux.off_stack_space(s.vm, int_div(x0, x86_64_linux.PAGE), 1) proof
+    fix x
+    assume _ hx
+    show by taut(hx, empty_mem[x := x])
+  qed
+  show by defs(taut(c3, vac), abi.loaded)
 qed
