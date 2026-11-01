@@ -2549,3 +2549,96 @@ proof
   show by defs(taut(c1, (int_lt(int_add(ui.G.libc, 56), int_pow(2, 63)) by eval()), (!(ui.G.builtin_tls = 0) by eval()),
     (int_lt(int_add(ui.G.builtin_tls, 336), int_pow(2, 63)) by eval())), startup_specs.globals_ok)
 qed
+
+// (the same page: mapped in both)
+theorem ui.mapped_eq: all v1 v2 p. v1.pages[p] = v2.pages[p] -> x86_64_linux.mapped(v1, p) -> x86_64_linux.mapped(v2, p)
+proof
+  fix v1 v2 p
+  assume e h
+  have a b := expand(h, x86_64_linux.mapped)
+  show by defs(taut(a, rewrite(e, b)), x86_64_linux.mapped)
+qed
+
+// n bytes on the image's pages (below its globals' end): read in the
+// view as in exec's memory
+theorem ui.w_img_bytes: all argv envp m0 s lo top a n. x86_64_linux.exec_state(musl_malloc.file, argv, envp, m0) -> ui.ctx(m0, s, lo, top) -> int_lt(1032, lo) ->
+  a in omega -> n in omega -> int_le(int_add(a, n), 4228696) -> (all i. i in omega -> int_lt(i, n) -> ui.img_page(int_div(int_add(a, i), x86_64_linux.PAGE), false)) ->
+  gimple.bytes_at(ui.wvm(s.vm), a, n) = gimple.bytes_at(m0.vm, a, n)
+proof
+  fix argv envp m0 s lo top a n
+  assume he hc hlo ha hn hl hpg
+  have _ _ _ _ hr .. := expand(hc, ui.ctx)
+  have pi: all i. i in omega -> int_lt(i, n) -> x86_64_linux.mapped(m0.vm, int_div(int_add(a, i), x86_64_linux.PAGE)) &&
+      !(int_le(int_sub(m0.gpr[4], 8), int_add(a, i)) && int_lt(int_add(a, i), m0.gpr[4])) proof
+    fix i
+    assume hi hil
+    let p := int_div(int_add(a, i), x86_64_linux.PAGE)
+    have mw _ _ _ ew := apply(ui.w_img[argv := argv, envp := envp, m0 := m0, s := s, lo := lo, top := top, p := p, w := false], he, hc, hlo, arith(ha, hi),
+      mp(all_elim(hpg, {i}), hi, hil))
+    have mq := apply(ui.mapped_eq[v1 := ui.wvm(s.vm), v2 := m0.vm, p := p], ew, mw)
+    show by taut(mq, (!(int_le(int_sub(m0.gpr[4], 8), int_add(a, i))) by arith(hr, hlo, hl, hil, hi, ha)))
+  qed
+  show := apply(ui.w_bytes[m0 := m0, s := s, lo := lo, top := top, a := a, n := n], hc, ha, hn, arith(hl), pi)
+qed
+
+// a load's bytes at exec: the file's, then zeros (its .bss)
+theorem ui.seg_bytes: all argv envp m0 j ty fl of va fs ms. x86_64_linux.exec_state(musl_malloc.file, argv, envp, m0) -> j in omega -> int_le(j, 3) ->
+  ui.segis(musl_malloc.file, j, ty, fl, of, va, fs, ms) ->
+  (all a. a in omega -> int_le(va, a) -> int_lt(a, int_add(va, fs)) -> m0.vm.bytes[bits_of_int(64, a)] = musl_malloc.file[int_add(of, int_sub(a, va))]) &&
+  (all a. a in omega -> int_le(int_add(va, fs), a) -> int_lt(a, int_add(va, ms)) -> m0.vm.bytes[bits_of_int(64, a)] = 0)
+proof
+  fix argv envp m0 j ty fl of va fs ms
+  assume he hj hj3 hg
+  have il: x86_64_linux.image_loaded(musl_malloc.file, m0.vm) by taut(expand(he, x86_64_linux.exec_state))
+  have _ sb := expand(il, x86_64_linux.image_loaded)
+  have sj := mp(all_elim(sb, {j}), hj, apply(ui.load_i[i := j], hj, hj3))
+  have _ _ eo ev ef em := expand(hg, ui.segis)
+  have d z := rewrite(eo, rewrite(ev, rewrite(ef, rewrite(em, expand(sj, x86_64_linux.segment_bytes)))))
+  have d2: all a. a in omega -> int_le(va, a) -> int_lt(a, int_add(va, fs)) -> m0.vm.bytes[bits_of_int(64, a)] = musl_malloc.file[int_add(of, int_sub(a, va))] proof
+    fix a
+    assume ha h1 h2
+    show := mp(all_elim(d, {a}), ha, conj(h1, h2))
+  qed
+  have z2: all a. a in omega -> int_le(int_add(va, fs), a) -> int_lt(a, int_add(va, ms)) -> m0.vm.bytes[bits_of_int(64, a)] = 0 proof
+    fix a
+    assume ha h1 h2
+    show := mp(all_elim(z, {a}), ha, conj(h1, h2))
+  qed
+  show by taut(d2, z2)
+qed
+
+// libc's TLS fields and the main TLS module: zero (in the .bss)
+theorem ui.tls_fresh: all argv envp m0 s lo top. x86_64_linux.exec_state(musl_malloc.file, argv, envp, m0) -> ui.ctx(m0, s, lo, top) -> int_lt(1032, lo) ->
+  startup_specs.tls_fresh(ui.wvm(s.vm), ui.G)
+proof
+  fix argv envp m0 s lo top
+  assume he hc hlo
+  have {g3 = s3} := ui.elf
+  have _ bss := apply(ui.seg_bytes[argv := argv, envp := envp, m0 := m0, j := 3, ty := 1, fl := 6, of := 28616, va := 4227016, fs := 72, ms := 1680], he, eval(), eval(), g3)
+  // (n bytes of the .bss at a: zero in the view)
+  have zb: all a n. a in omega -> n in omega -> int_le(4227088, a) -> int_le(int_add(a, n), 4228696) ->
+      gimple.bytes_at(ui.wvm(s.vm), a, n) = int_sum(0, n, i. 0) proof
+    fix a n
+    assume ha hn h1 h2
+    have pg: all i. i in omega -> int_lt(i, n) -> ui.img_page(int_div(int_add(a, i), x86_64_linux.PAGE), false) proof
+      fix i
+      assume hi hil
+      show by arith(hi, hil, h1, h2, ha)
+    qed
+    have e1 := apply(ui.w_img_bytes[argv := argv, envp := envp, m0 := m0, s := s, lo := lo, top := top, a := a, n := n], he, hc, hlo, ha, hn, h2, pg)
+    have zs: all j. j in omega -> int_lt(j, n) -> m0.vm.bytes[bits_of_int(64, int_add(a, j))] = 0 proof
+      fix j
+      assume hj hjl
+      show := mp(all_elim(bss, {int_add(a, j)}), arith(ha, hj), arith(h1, hj, ha), arith(h2, hjl, hj, ha))
+    qed
+    show := trans(e1, apply(ui.bytes_zero[vm := m0.vm, a := a, n := n], ha, hn, arith(h2), zs))
+  qed
+  have l16 := mp(all_elim(zb, {bits_add(64, ui.G.libc, 16)}, {8}), eval(), eval(), eval(), eval())
+  have l24 := mp(all_elim(zb, {bits_add(64, ui.G.libc, 24)}, {8}), eval(), eval(), eval(), eval())
+  have l32 := mp(all_elim(zb, {bits_add(64, ui.G.libc, 32)}, {8}), eval(), eval(), eval(), eval())
+  have l40 := mp(all_elim(zb, {bits_add(64, ui.G.libc, 40)}, {8}), eval(), eval(), eval(), eval())
+  have lm := mp(all_elim(zb, {ui.G.main_tls}, {48}), eval(), eval(), eval(), eval())
+  have z8: int_sum(0, 8, i. 0) = 0 by eval()
+  have z48: int_sum(0, 48, i. 0) = 0 by eval()
+  show by defs(taut(trans(l16, z8), trans(l24, z8), trans(l32, z8), trans(l40, z8), trans(lm, z48)), startup_specs.tls_fresh)
+qed
