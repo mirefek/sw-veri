@@ -2883,7 +2883,7 @@ def ui.SX(m0, s, lo, top, argv, envp, auxv) := ui.ctx(m0, s, lo, top) && int_lt(
   (all i. i in omega -> int_lt(i, seq_len(argv)) -> seq_len(argv[i]) in omega) && auxv in list_type(cart(omega, omega)) &&
   x86_64_linux.stack_layout(m0.vm, m0.gpr[4], argv, envp, auxv) && x86_64_linux.auxv_ok(musl_malloc.file, m0.vm, m0.os, auxv) &&
   x86_64_linux.stack_data(m0.vm, m0.gpr[4], int_mul(top, x86_64_linux.PAGE), argv, envp, auxv) &&
-  x86_64_linux.exec_state(musl_malloc.file, argv, envp, m0) && claim_malloc.unprivileged(m0.os)
+  x86_64_linux.exec_state(musl_malloc.file, argv, envp, m0) && claim_malloc.unprivileged(m0.os) && int_lt(seq_len(argv), 2147483648)
 
 // (a word of exec's memory: a number below 2^64)
 theorem ui.le_nat: all m0 a. m0 in x86_64_linux.Machine -> x86_64_linux.le(m0.vm.bytes, a, 8) in omega && int_lt(x86_64_linux.le(m0.vm.bytes, a, 8), 18446744073709551616)
@@ -2989,7 +2989,7 @@ theorem ui.auxs: all m0 s lo top argv envp auxv. ui.SX(m0, s, lo, top, argv, env
 proof
   fix m0 s lo top argv envp auxv
   assume hx
-  have hc hlo hna hne hel hla hsl hao hsd he hu := expand(hx, ui.SX)
+  have hc hlo hna hne hel hla hsl hao hsd he hu h31 := expand(hx, ui.SX)
   have ns eu eg := expand(hu, claim_malloc.unprivileged)
   have _ _ k3 k4 k5 k6 k7 k8 k9 k10 _ _ := expand(hao, x86_64_linux.auxv_ok, x86_64_linux.aux)
   obtain q, hq hk hph _ _ from k10
@@ -3030,7 +3030,7 @@ theorem ui.libc_pre: all m0 s lo top argv envp auxv E pn. ui.SX(m0, s, lo, top, 
 proof
   fix m0 s lo top argv envp auxv E pn
   assume hx hE hpn
-  have hc hlo hna hne hel hla hsl hao hsd he hu := expand(hx, ui.SX)
+  have hc hlo hna hne hel hla hsl hao hsd he hu h31 := expand(hx, ui.SX)
   have hM _ _ hs .. := expand(hc, ui.ctx)
   have r0 := apply(x86i.rsp_typed, hM)
   let V := ui.wvm(s.vm)
@@ -3070,4 +3070,52 @@ proof
     by ex_intro({m0.os.creds.uid}, {m0.os.creds.gid}, taut(uo, go, a4, a5, a6, a7))
   have nh: n in omega := hne
   show by defs(ex_intro({n}, {auxv}, taut(nh, hla, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, a8)), startup_specs.init_libc_pre)
+qed
+
+// _start_c's precondition in the world's view at its entry: exec's stack
+// (argc at rsp, then argv)
+theorem ui.cpre: all m0 s lo top argv envp auxv. ui.SX(m0, s, lo, top, argv, envp, auxv) ->
+  ui.c_pre(ui.wvm(s.vm), ui.wob0(m0.gpr[4], top), ui.G, ui.P, m0.gpr[4])
+proof
+  fix m0 s lo top argv envp auxv
+  assume hx
+  have hc hlo hna hne hel hla hsl hao hsd he hu h31 := expand(hx, ui.SX)
+  have hM _ _ hs _ _ h16 _ := expand(hc, ui.ctx)
+  have s1 s2 .. := expand(hs, x86_64_linux.stack_pages)
+  have r0 := apply(x86i.rsp_typed, hM)
+  let R := m0.gpr[4]
+  let V := ui.wvm(s.vm)
+  let O := ui.wob0(R, top)
+  let la := seq_len(argv)
+  have a0 .. := expand(hsl, x86_64_linux.stack_layout)
+  have _ ib .. := expand(hsd, x86_64_linux.stack_data, x86_64_linux.in_stack)
+  have nl: seq_len(auxv) in omega by defs(simp(expand(hla, list_type)), seq_len)
+  have ro: R in omega by arith(r0)
+  have top8: int_le(int_add(int_add(R, 16), int_mul(8, int_add(la, 1))), int_mul(top, x86_64_linux.PAGE)) by arith(ib, hna, hne, nl, r0)
+  // argc: the stack's first word
+  have w0 := apply(ui.w_word[m0 := m0, s := s, lo := lo, top := top, a := R], hc, ro, arith(r0), arith(top8, hna, r0))
+  have ac: gimple.bytes_at(V, R, 8) = la := trans(w0, expand(a0, x86_64_linux.u64_at))
+  have b8: bits_add(64, R, 8) = int_add(R, 8) := apply(x86.add_nowrap[a := R, b := 8], ro, eval(), arith(top8, s2, hna, r0))
+  have eE: bits_add(64, int_add(R, 8), int_mul(8, int_add(la, 1))) = int_add(int_add(R, 8), int_mul(8, int_add(la, 1))) :=
+    apply(x86.add_nowrap[a := int_add(R, 8), b := int_mul(8, int_add(la, 1))], arith(r0), arith(hna), arith(top8, s2, hna, r0))
+  let E := bits_add(64, bits_add(64, R, 8), int_mul(8, int_add(gimple.bytes_at(V, R, 8), 1)))
+  have e1 := subst({y. E = bits_add(64, y, int_mul(8, int_add(gimple.bytes_at(V, R, 8), 1)))}, b8, refl({E}))
+  have e2 := subst({y. E = bits_add(64, int_add(R, 8), int_mul(8, int_add(y, 1)))}, ac, e1)
+  have hE: E = int_add(int_add(R, 16), int_mul(8, la)) := trans(e2, trans(eE, (int_add(int_add(R, 8), int_mul(8, int_add(la, 1))) = int_add(int_add(R, 16), int_mul(8, la)) by arith(r0, hna))))
+  // argv[0]: the stack's second word
+  have w1 := apply(ui.w_word[m0 := m0, s := s, lo := lo, top := top, a := int_add(R, 8)], hc, arith(r0), arith(r0), arith(top8, hna, r0))
+  let pn := bits_of_int(64, gimple.bytes_at(V, bits_add(64, R, 8), 8))
+  have p1 := subst({y. pn = bits_of_int(64, gimple.bytes_at(V, y, 8))}, b8, refl({pn}))
+  have hpn: pn = bits_of_int(64, x86_64_linux.le(m0.vm.bytes, bits_of_int(64, int_add(R, 8)), 8)) := subst({y. pn = bits_of_int(64, y)}, w1, p1)
+  have lp := apply(ui.libc_pre[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, E := E, pn := pn], hx, hE, hpn)
+  have ct := apply(ui.ctors[argv := argv, envp := envp, m0 := m0, s := s, lo := lo, top := top], he, hc, hlo)
+  have u0 := apply(ui.us_stack[m0 := m0, s := s, lo := lo, top := top, x := R, n := 8, w := false], hc, ro, eval(), arith(r0), arith(top8, hna, r0))
+  have u1 := apply(ui.us_stack[m0 := m0, s := s, lo := lo, top := top, x := int_add(R, 8), n := 8, w := false], hc, arith(r0), eval(), arith(r0), arith(top8, hna, r0))
+  have u1b: gimple.usable(V, O, bits_add(64, R, 8), 8, false) := rewrite(sym(b8), u1)
+  have m1: int_lt(gimple.bytes_at(V, R, 8), int_pow(2, 31)) := rewrite(sym(ac), (int_lt(la, int_pow(2, 31)) by arith(hna, h31)))
+  have m2: !(bits_add(64, R, 8) = 0) := rewrite(sym(b8), (!(int_add(R, 8) = 0) by arith(r0)))
+  have m3: int_lt(int_add(bits_add(64, R, 8), int_mul(8, int_add(gimple.bytes_at(V, R, 8), 1))), int_pow(2, 63)) :=
+    rewrite(sym(b8), rewrite(sym(ac), (int_lt(int_add(int_add(R, 8), int_mul(8, int_add(la, 1))), int_pow(2, 63)) by arith(top8, s2, hna, r0))))
+  have sm: startup_specs.start_main_pre(V, O, ui.G, ui.P, gimple.bytes_at(V, R, 8), bits_add(64, R, 8)) by defs(taut(m1, m2, m3, u1b, lp, ct), startup_specs.start_main_pre)
+  show by taut((!(R = 0) by arith(h16)), (int_lt(int_add(R, 16), int_pow(2, 63)) by arith(top8, s2, hna, r0)), u0, sm)
 qed
