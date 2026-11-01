@@ -292,9 +292,11 @@ pred fresh_ok(c: Cfg, A: Abs, m: Mem) =
     auxv: (all k: nat. k < len(A.auxv) ->
        rd(m, A.auxv_at + 16 * k, 8) = A.auxv[k][0] && rd(m, A.auxv_at + 16 * k + 8, 8) = A.auxv[k][1]) &&
     auxv_end: A.auxv[len(A.auxv) - 1][0] = AT_NULL && auxv_null: (all k: nat. k + 1 < len(A.auxv) -> A.auxv[k][0] != AT_NULL) &&
-    // (on the initial stack, apart from the context)
+    // (on the initial stack, apart from the context, from all the
+    // allocator's other ranges)
     auxv_ctx: (all k: nat, a: nat. k < len(auxv_ranges(A)) && auxv_ranges(A)[k][0] <= a && a < auxv_ranges(A)[k][0] + auxv_ranges(A)[k][1] ->
-       !(c.ctx <= a && a < c.ctx + CTX_SIZE))
+       !(c.ctx <= a && a < c.ctx + CTX_SIZE)) &&
+    auxv_apart: (all a: nat. in_ranges(a, auxv_ranges(A)) -> !in_ranges(a, fixed_ranges(c, A with { auxv: [], auxv_at: 0 })))
 
 pred areas_ok(c: Cfg, A: Abs, m: Mem) =
   head: ctx_word(c, m, C_AREA_HEAD) = (if len(A.areas) = 0 { 0 } else { A.areas[0] }) &&
@@ -491,9 +493,11 @@ pred perms_ok(c: Cfg, A: Abs, m: Mem, blocks: Addr -> Option[nat]) =
   groups: (all k: nat, a: nat. k < len(A.used) &&
      group_range(A.metas[A.used[k]])[0] <= a && a < group_range(A.metas[A.used[k]])[0] + group_range(A.metas[A.used[k]])[1] &&
      a notin live_of(blocks) && !in_reserved(A, a) -> m_rw(m, a) && pg(m, a).value.kind != stack) &&
+  // (the auxiliary vector: on the initial stack, the world's stack
+  // objects -- shown_in's -- or readable where on a page of the world)
   auxv: (all k: nat, a: nat. k < len(auxv_ranges(A)) &&
      auxv_ranges(A)[k][0] <= a && a < auxv_ranges(A)[k][0] + auxv_ranges(A)[k][1] ->
-       m_mapped(m, a) && pg(m, a).value.prot.r && pg(m, a).value.kind != stack)
+       m_mapped(m, a) && pg(m, a).value.kind != stack -> pg(m, a).value.prot.r)
 
 // Separate regions: the data symbols, the image, the meta areas, the
 // reserved pages and the individually mapped groups do not overlap (nested
@@ -557,12 +561,23 @@ pred holds(c: Cfg, A: Abs, m: Mem, blocks: Addr -> Option[nat], brk: Addr) =
 ///////////////////////////////////////////////////////////////////////
 //  The invariant and the owned bytes
 
+// a byte of the stack's space (memory.sl's `stack_space`), in the user space
+pred in_stack_space(vm: Vm, a: nat) = stack_floor(vm) <= a && a < uint(vm.stack_top) && a < TASK_SIZE
+
 // the owned bytes are mapped (for the law owned_mapped), not on a stack
 // page (none of the stack's free bytes, abi.sl's `stack_free`: a callee
-// leaves them)
-pred fp_mapped(rs: List[(nat, nat)], blocks: Addr -> Option[nat], vm: Vm) =
-  all k: nat, a: nat. k < len(rs) && rs[k][0] <= a && a < rs[k][0] + rs[k][1] && a notin live_of(blocks) ->
-    mapped(vm, a / PAGE) && vm.pages[a / PAGE].value.kind != stack
+// leaves them) -- but those of xs (the auxiliary vector's: on the initial
+// stack, stack objects -- `aux_live`), in the stack's space (which no
+// mmap but a fixed one maps), in the user space
+pred fp_mapped(rs: List[(nat, nat)], xs: List[(nat, nat)], blocks: Addr -> Option[nat], vm: Vm) =
+  pages: (all k: nat, a: nat. k < len(rs) && rs[k][0] <= a && a < rs[k][0] + rs[k][1] && a notin live_of(blocks) && !in_ranges(a, xs) ->
+    mapped(vm, a / PAGE) && vm.pages[a / PAGE].value.kind != stack) &&
+  low: (all a: nat. in_ranges(a, xs) -> in_stack_space(vm, a))
+
+// the auxiliary vector (before the allocator's first call): the world's
+// stack objects (the program's data on the initial stack)
+pred aux_live(A: Abs, objs: Objs) =
+  A.init_done = 0 -> all a: nat. in_ranges(a, auxv_ranges(A)) -> a in objs.live
 
 // no slot handed out and not yet framed (between the allocator's calls)
 pred no_reserved(A: Abs) = all g: nat, i: nat. i < len(A.slots[g]) -> A.slots[g][i] != reserved
@@ -573,7 +588,8 @@ pred no_reserved(A: Abs) = all g: nat, i: nat. i < len(A.slots[g]) -> A.slots[g]
 pred fp_shown(rs: List[(nat, nat)], objs: Objs) = all a: nat. in_ranges(a, rs) -> a in objs.c_bytes
 pred shown_in(c: Cfg, A: Abs, objs: Objs) =
   fp: fp_shown(fp_ranges(c, A), objs) &&
-  rsv: (A.reserve_cnt > 0 -> all a: nat. A.reserve / PAGE <= a / PAGE && a / PAGE < A.reserve / PAGE + A.reserve_cnt -> a in objs.c_bytes)
+  rsv: (A.reserve_cnt > 0 -> all a: nat. A.reserve / PAGE <= a / PAGE && a / PAGE < A.reserve / PAGE + A.reserve_cnt -> a in objs.c_bytes) &&
+  aux: aux_live(A, objs)
 
 ///////////////////////////////////////////////////////////////////////
 //  Internal steps by their purpose
@@ -605,7 +621,7 @@ pred maps_ok(A: Abs, vm: Vm) =
     (all q: nat. A.metas[g].mem / PAGE <= q && q < A.metas[g].mem / PAGE + A.metas[g].maplen -> mapped(vm, q))
 
 pred holds_m(c: Cfg, A: Abs, vm: Vm, blocks: Addr -> Option[nat]) =
-  inv: holds(c, A, mview(vm, held(c, A, blocks)), blocks, vm.brk) && mapped: fp_mapped(fp_ranges(c, A), blocks, vm) && free: free_rw(c, mview(vm, footprint(c, A, blocks))) &&
+  inv: holds(c, A, mview(vm, held(c, A, blocks)), blocks, vm.brk) && mapped: fp_mapped(fp_ranges(c, A), auxv_ranges(A), blocks, vm) && free: free_rw(c, mview(vm, footprint(c, A, blocks))) &&
   rw: grp_rw(c, A, vm, blocks) &&
   // the reserve's pages: ones the kernel may reprotect (mapped, off the
   // stack's space, not executable -- as mmap and brk made them)
@@ -624,14 +640,16 @@ pred holds_in(c: Cfg, A: Abs, vm: Vm, objs: Objs, blocks: Addr -> Option[nat]) =
 // allocator's memory -- its word at fs, errno (musl's `errno_val`,
 // fs + 0x34) and the ABI's canary in none of its ranges (its bytes, the
 // live blocks: so a block freed is never the thread's), the canary in
-// none of its reserve's pages (so its bytes the C world's: shown_in)
+// none of its reserve's pages (so its bytes the C world's: shown_in); the
+// auxiliary vector the world's stack objects
 pred rep(c: Cfg, A: Abs, s: Heap) =
   mem: holds_m(c, A, s.vm, s.blocks) && unres: no_reserved(A) && untaken: len(A.taken) = 0 &&
   live: live_rw(s) &&
   tls: (all i: nat. i < 8 -> !in_ranges(uint(s.fs_base) + i, fp_ranges(c, A))) &&
   errno: (all i: nat. i < 4 -> !in_ranges(uint(s.fs_base) + 0x34 + i, fp_ranges(c, A))) &&
   canary: (all a: nat. a in canary(s.fs_base) -> !in_ranges(a, fp_ranges(c, A)) &&
-    !(A.reserve_cnt > 0 && A.reserve / PAGE <= a / PAGE && a / PAGE < A.reserve / PAGE + A.reserve_cnt))
+    !(A.reserve_cnt > 0 && A.reserve / PAGE <= a / PAGE && a / PAGE < A.reserve / PAGE + A.reserve_cnt)) &&
+  aux: aux_live(A, s.objs)
 
 fn inv(c: Cfg) -> Set[Heap] = {s: Heap | ex A: Abs. rep(c, A, s)}
 

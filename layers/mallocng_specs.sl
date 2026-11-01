@@ -1076,7 +1076,7 @@ pred let_go(c: Cfg, A0: Abs, A: Abs, blocks: Addr -> Option[nat], mb: bits[64], 
 // metas as they were (free_group's own while it gives back its slot);
 // memory outside the allocator's (and the reserved slot's) untouched; the
 // allocator grown only by the reserved slot; what it lets go returned (its
-// pages ones the kernel may unmap)
+// pages ones the kernel may unmap); its initialization as it was
 pred freed_back(c: Cfg, A0: Abs, A: Abs, blocks: Addr -> Option[nat], before: Vm, vm: Vm, objs: Objs, mb: bits[64], ml: bits[64]) =
   holds_in(c, A, vm, objs, blocks) && no_reserved(A) && A.taken = A0.taken &&
   untouched(c, A0, blocks, before, vm, objs, {a: nat | in_reserved(A0, a)}) &&
@@ -1084,7 +1084,8 @@ pred freed_back(c: Cfg, A0: Abs, A: Abs, blocks: Addr -> Option[nat], before: Vm
   let_go(c, A0, A, blocks, mb, ml) &&
   (uint(ml) != 0 -> unmap_ok(vm, page_of(mb), pages_for(uint(ml))) &&
      (all q: nat. page_of(mb) <= q && q < page_of(mb) + pages_for(uint(ml)) -> mapped(vm, q)) &&
-     (ex m: bits[64], l: bits[64]. m = mb && l = ml))
+     (ex m: bits[64], l: bits[64]. m = mb && l = ml)) &&
+  init: (A.init_done = A0.init_done && A.auxv = A0.auxv && A.auxv_at = A0.auxv_at)
 
 // nontrivial_free(g, i): slot i of the group g, the one reserved (its
 // block just freed), given back to the allocator -- unused again, or with

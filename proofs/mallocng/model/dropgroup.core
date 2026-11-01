@@ -1818,6 +1818,7 @@ theorem mp.dr_holds_m(c, A, A2, vm, vm2, b, g): c in mallocng.Cfg -> A in univ(1
   mallocng.holds_m(c, A, vm, b) -> A2 in univ(1) -> A2 in mallocng.Abs -> mp.dropr(A, A2, g) ->
   mallocng.holds(c, A2, mallocng.mview(vm, mallocng.held(c, A, b)), b, vm.brk) ->
   mallocng.fixed_ranges(c, A2) = mallocng.fixed_ranges(c, A) -> A2.reserve = A.reserve -> A2.reserve_cnt = A.reserve_cnt ->
+  mallocng.auxv_ranges(A2) = mallocng.auxv_ranges(A) ->
   (all a. mallocng.in_taken(A, a) -> mallocng.in_taken(A2, a)) ->
   (all x a. mallocng.is_used(A2, x) -> a in omega -> mallocng.in_range(a, mallocng.group_range(A2.metas[x])) -> !(a in malloc.live_of(b)) ->
      !mallocng.in_reserved(A2, a) -> !mallocng.in_reserved(A, a)) ->
@@ -1825,7 +1826,7 @@ theorem mp.dr_holds_m(c, A, A2, vm, vm2, b, g): c in mallocng.Cfg -> A in univ(1
   (all a. a in omega -> a in mallocng.held(c, A2, b) -> vm2.bytes[bits_of_int(64, a)] = vm.bytes[bits_of_int(64, a)]) ->
   mallocng.holds_m(c, A2, vm2, b)
 proof
-  assume hc hu ha hb hh hu2 ha2 dr H2 fe er ec tk hr3 ep eb et el ebt
+  assume hc hu ha hb hh hu2 ha2 dr H2 fe er ec eax tk hr3 ep eb et el ebt
   let FP := mallocng.held(c, A, b)
   let FP2 := mallocng.held(c, A2, b)
   let M := mallocng.mview(vm, FP)
@@ -1930,24 +1931,24 @@ proof
   have H3 := apply(mp.holds_held[c := c, A := A2, M := M, M2 := M2, b := b, brk := vm.brk], hc, hu2, ha2, hb, H2, ag)
   have i2 := rewrite(sym(eb), H3)
   // mapped: the ranges among those before, the pages as before
-  have mp1: mallocng.fp_mapped(mallocng.fp_ranges(c, A2), b, vm) proof
-    have m0 := expand(hm, mallocng.fp_mapped)
-    have r: all x0. all x1. x0 in omega && x1 in omega -> ((int_lt(x0, seq_len(mallocng.fp_ranges(c, A2))) && int_le(fst(mallocng.fp_ranges(c, A2)[x0]), x1)) &&
-        int_lt(x1, int_add(fst(mallocng.fp_ranges(c, A2)[x0]), snd(mallocng.fp_ranges(c, A2)[x0])))) && !(x1 in malloc.live_of(b)) ->
+  have mp1: mallocng.fp_mapped(mallocng.fp_ranges(c, A2), mallocng.auxv_ranges(A2), b, vm) proof
+    have r: all x0. all x1. x0 in omega && x1 in omega -> (((int_lt(x0, seq_len(mallocng.fp_ranges(c, A2))) && int_le(fst(mallocng.fp_ranges(c, A2)[x0]), x1)) &&
+        int_lt(x1, int_add(fst(mallocng.fp_ranges(c, A2)[x0]), snd(mallocng.fp_ranges(c, A2)[x0])))) && !(x1 in malloc.live_of(b))) && !mallocng.in_ranges(x1, mallocng.auxv_ranges(A2)) ->
         x86_64_linux.mapped(vm, int_div(x1, x86_64_linux.PAGE)) && !(snd(vm.pages[int_div(x1, x86_64_linux.PAGE)]).kind = 2) proof
       fix k a
       assume ho hq
       have hk hao := ho
-      have hkl lo hi nl := hq
+      have hkl lo hi nl nx := hq
       have ir2: mallocng.in_ranges(a, mallocng.fp_ranges(c, A2)) by defs(ex_intro({k}, taut(hk, hkl, (mallocng.in_range(a, mallocng.fp_ranges(c, A2)[k]) by defs(taut(lo, hi), mallocng.in_range)))), mallocng.in_ranges)
       have ir1 := apply(mp.dr_fpr[c := c, A := A, A2 := A2, g := g, a := a], hc, hu, ha, hu2, ha2, dr, fe, ir2)
       obtain k1, hk1 hk1l hr1 from expand(ir1, mallocng.in_ranges)
       have r1 r2 := expand(hr1, mallocng.in_range)
-      show := mp(all_elim(m0, {k1}, {a}), conj(hk1, hao), taut(hk1l, r1, r2, nl))
+      show := apply(mp.fpm_use, hm, hk1, hao, hk1l, r1, r2, nl, rewrite(eax, nx))
     qed
-    show by defs(r, mallocng.fp_mapped)
+    have {L = low} := expand(hm, mallocng.fp_mapped)
+    show := apply(mp.fpm_intro, r, rewrite(sym(eax), L))
   qed
-  have mp2 := apply(mp.fpm_pages[RS := mallocng.fp_ranges(c, A2), b := b, vm := vm, vm2 := vm2], mp1, ep)
+  have mp2 := apply(mp.fpm_pages[RS := mallocng.fp_ranges(c, A2), XS := mallocng.auxv_ranges(A2), b := b, vm := vm, vm2 := vm2], mp1, ep, et, el)
   // the context's free bytes: the allocator's after just when before
   have fr1 := apply(mp.free_rw_pages[c := c, vm := vm, vm2 := vm2, F := mallocng.footprint(c, A, b)], hfr, ep)
   have d0 _ _ := apply(mp.data_at[c := c])
@@ -2015,10 +2016,12 @@ qed
 // ... the allocator's bytes the C world's: those before
 theorem mp.dr_shown(c, A, A2, objs, g): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> A2 in univ(1) -> A2 in mallocng.Abs -> mp.dropr(A, A2, g) ->
   mallocng.fixed_ranges(c, A2) = mallocng.fixed_ranges(c, A) -> A2.reserve = A.reserve -> A2.reserve_cnt = A.reserve_cnt ->
+  A2.init_done = A.init_done -> mallocng.auxv_ranges(A2) = mallocng.auxv_ranges(A) ->
   mallocng.shown_in(c, A, objs) -> mallocng.shown_in(c, A2, objs)
 proof
-  assume hc hu ha hu2 ha2 dr fe er ec hs
-  have {sfp = fp, srs = rsv} := expand(hs, mallocng.shown_in)
+  assume hc hu ha hu2 ha2 dr fe er ec ei eax hs
+  have {sfp = fp, srs = rsv, sax = aux} := expand(hs, mallocng.shown_in)
+  have sax2 := apply(mp.aux_same[A := A, A2 := A2, objs := objs], sax, ei, eax)
   have f0 := expand(sfp, mallocng.fp_shown)
   have r: all a. a in omega -> mallocng.in_ranges(a, mallocng.fp_ranges(c, A2)) -> a in objs.c_bytes proof
     fix a
@@ -2026,7 +2029,7 @@ proof
     show := mp(all_elim(f0, {a}), hao, apply(mp.dr_fpr[c := c, A := A, A2 := A2, g := g, a := a], hc, hu, ha, hu2, ha2, dr, fe, ir))
   qed
   have fp2: mallocng.fp_shown(mallocng.fp_ranges(c, A2), objs) by defs(r, mallocng.fp_shown)
-  show by defs(taut(fp2, rewrite(sym(er), rewrite(sym(ec), srs))), mallocng.shown_in)
+  show by defs(taut(fp2, rewrite(sym(er), rewrite(sym(ec), srs)), sax2), mallocng.shown_in)
 qed
 
 // ----------------------------------------------------------------------
@@ -2061,9 +2064,10 @@ proof
     show := apply(mp.drop_taken[A := A, g := g, k := k, a := a], ha, go, t)
   qed
   have hr3 := apply(mp.drop_res_own[c := c, A := A, M := M, b := b, brk := vm.brk, g := g, k := k], hc, hu, ha, H, hk, hkl, hkg, mg, emp)
-  have hm2 := apply(mp.dr_holds_m[c := c, A := A, A2 := D, vm := vm, vm2 := vm2, b := b, g := g], hc, hu, ha, hb, hh, du, da, dr, H2, fe, er, ec, tk, hr3,
+  have eax: mallocng.auxv_ranges(D) = mallocng.auxv_ranges(A) by defs(simp(), mallocng.auxv_ranges)
+  have hm2 := apply(mp.dr_holds_m[c := c, A := A, A2 := D, vm := vm, vm2 := vm2, b := b, g := g], hc, hu, ha, hb, hh, du, da, dr, H2, fe, er, ec, eax, tk, hr3,
     ep, eb, et, el, ebt)
-  have sh2 := apply(mp.dr_shown[c := c, A := A, A2 := D, objs := objs, g := g], hc, hu, ha, du, da, dr, fe, er, ec, hsh)
+  have sh2 := apply(mp.dr_shown[c := c, A := A, A2 := D, objs := objs, g := g], hc, hu, ha, du, da, dr, fe, er, ec, simp(), eax, hsh)
   have hi2: mallocng.holds_in(c, D, vm2, objs, b) by defs(taut(hm2, sh2), mallocng.holds_in)
   show by taut(da, du, hi2)
 qed
@@ -2111,9 +2115,10 @@ proof
     show by defs(simp(expand(t2, mallocng.in_taken)), mallocng.in_taken)
   qed
   have hr3 := apply(mp.drop_res_nest[c := c, A := A, M := M, b := b, brk := vm.brk, g := g, k := k, h := h, j := j], hc, hu, ha, H, hk, hkl, hkg, hh, hj, hjl, ehj, emp)
-  have hm2 := apply(mp.dr_holds_m[c := c, A := A, A2 := N, vm := vm, vm2 := vm2, b := b, g := g], hc, hu, ha, hb, hh2, nu, na, dr, H2, fe, er, ec, tk, hr3,
+  have eax: mallocng.auxv_ranges(N) = mallocng.auxv_ranges(A) by defs(simp(), mallocng.auxv_ranges)
+  have hm2 := apply(mp.dr_holds_m[c := c, A := A, A2 := N, vm := vm, vm2 := vm2, b := b, g := g], hc, hu, ha, hb, hh2, nu, na, dr, H2, fe, er, ec, eax, tk, hr3,
     ep, eb, et, el, ebt)
-  have sh2 := apply(mp.dr_shown[c := c, A := A, A2 := N, objs := objs, g := g], hc, hu, ha, nu, na, dr, fe, er, ec, hsh)
+  have sh2 := apply(mp.dr_shown[c := c, A := A, A2 := N, objs := objs, g := g], hc, hu, ha, nu, na, dr, fe, er, ec, simp(), eax, hsh)
   have hi2: mallocng.holds_in(c, N, vm2, objs, b) by defs(taut(hm2, sh2), mallocng.holds_in)
   have rs: all a. mallocng.in_ranges(a, mallocng.fp_ranges(c, N)) -> mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) proof
     fix a

@@ -51,6 +51,45 @@ proof
   show by defs(g, gimple.usable)
 qed
 
+// ... bytes of the view the world's live objects too: readable where on a
+// page of the world (the initial stack's data)
+theorem mp.view_usable_live(vm, fp, objs, a, n): a in omega ->
+  (all i. i in omega -> int_lt(i, n) -> ((((int_add(a, i) in fp &&
+     (mallocng.m_mapped(mallocng.mview(vm, fp), int_add(a, i)) && !(snd(mallocng.pg(mallocng.mview(vm, fp), int_add(a, i))).kind = 2) ->
+        snd(mallocng.pg(mallocng.mview(vm, fp), int_add(a, i))).prot.r)) &&
+     int_add(a, i) in objs.c_bytes) && int_lt(int_add(a, i), int_pow(2, 64))) && int_add(a, i) in objs.live)) ->
+  gimple.usable(vm, objs, a, n, false)
+proof
+  assume ha hf
+  have g: all i. i in omega -> int_lt(i, n) -> ite(x86_64_linux.mapped(vm, int_div(int_add(a, i), x86_64_linux.PAGE)) && !(snd(vm.pages[int_div(int_add(a, i), x86_64_linux.PAGE)]).kind = 2),
+      ite(false, snd(vm.pages[int_div(int_add(a, i), x86_64_linux.PAGE)]).prot.w, snd(vm.pages[int_div(int_add(a, i), x86_64_linux.PAGE)]).prot.r) && int_add(a, i) in objs.c_bytes,
+      int_lt(int_add(a, i), int_pow(2, 64)) && int_add(a, i) in objs.live) proof
+    fix i
+    assume hi hl
+    let x := int_add(a, i)
+    let P := vm.pages[int_div(x, x86_64_linux.PAGE)]
+    let C := x86_64_linux.mapped(vm, int_div(x, x86_64_linux.PAGE)) && !(snd(P).kind = 2)
+    let X := ite(false, snd(P).prot.w, snd(P).prot.r) && x in objs.c_bytes
+    let Y := int_lt(x, int_pow(2, 64)) && x in objs.live
+    have f1 f2 f3 f4 f5 := mp(all_elim(hf, {i}), hi, hl)
+    have ai: x in omega by arith(ha, hi)
+    have pg: mallocng.pg(mallocng.mview(vm, fp), x) = P by defs(simp(f1, ai), mallocng.pg, mallocng.mview, some)
+    have mm: mallocng.m_mapped(mallocng.mview(vm, fp), x) <-> x86_64_linux.mapped(vm, int_div(x, x86_64_linux.PAGE))
+      by defs(simp(pg), mallocng.m_mapped, x86_64_linux.mapped)
+    have c1: C -> ite(C, X, Y) proof
+      assume w
+      have r := mp(rewrite(pg, f2), taut(w, mm))
+      show := rewrite(sym(mp(ite_t[c := C, a := X, b := Y], w)), (X by simp(r, f3)))
+    qed
+    have c2: !C -> ite(C, X, Y) proof
+      assume w
+      show := rewrite(sym(mp(ite_f[c := C, a := X, b := Y], w)), (Y by taut(f4, f5)))
+    qed
+    show by taut(c1, c2)
+  qed
+  show by defs(g, gimple.usable)
+qed
+
 // ... and write the bytes it sees writable
 theorem mp.view_usable_w_at(vm, fp, objs, a, n): a in omega ->
   (all i. i in omega -> int_lt(i, n) -> int_add(a, i) in fp && mallocng.m_mapped(mallocng.mview(vm, fp), int_add(a, i)) &&
@@ -117,9 +156,9 @@ proof
   show := apply(mp.view_usable_w_at[vm := vm, fp := fp, objs := objs, a := a, n := n], ha, hf, apply(mp.vis_at[fp := fp, objs := objs, a := a, n := n], hin, hv))
 qed
 
-// (a world of no objects -- for what the invariant reads, not its
-// usability: every allocator's byte its)
-abbrev mp.no_objs := fn_update(fn_update(empty, "live", empty), "c_bytes", omega)
+// (a world of everything -- for what the invariant reads, not its
+// usability: every allocator's byte its, every byte live)
+abbrev mp.no_objs := fn_update(fn_update(empty, "live", omega), "c_bytes", omega)
 
 theorem mp.shown_none: all c A. mallocng.shown_in(c, A, mp.no_objs)
 proof
@@ -136,7 +175,16 @@ proof
     assume h _
     show := h
   qed
-  show by defs(simp(f, r, keep(mallocng.fp_ranges)), mallocng.shown_in, mallocng.fp_shown)
+  have x: mallocng.aux_live(A, mp.no_objs) proof
+    have q: A.init_done = 0 -> (all x0. x0 in omega -> mallocng.in_ranges(x0, mallocng.auxv_ranges(A)) -> x0 in mp.no_objs.live) proof
+      assume _
+      fix x0
+      assume h _
+      show by simp(h)
+    qed
+    show by defs(q, mallocng.aux_live)
+  qed
+  show by defs(simp(f, r, x, keep(mallocng.fp_ranges, mallocng.aux_live)), mallocng.shown_in, mallocng.fp_shown)
 qed
 
 // (the invariant's bytes: none of the ABI's own -- they are its ranges')
@@ -181,13 +229,32 @@ proof
   show := apply(mp.ranges_vis[c := c, A := A, objs := objs, a := a], h, hao, ir)
 qed
 
-// (the allocator's bytes the world's in a new state: its ranges and
-// reserve as before)
-theorem mp.shown_same(c, A, A2, objs): mallocng.shown_in(c, A, objs) -> mallocng.fp_ranges(c, A2) = mallocng.fp_ranges(c, A) ->
-  A2.reserve = A.reserve -> A2.reserve_cnt = A.reserve_cnt -> mallocng.shown_in(c, A2, objs)
+// (the auxiliary vector's ranges: its fields')
+theorem mp.aux_eq(A, A2): A2.auxv = A.auxv -> A2.auxv_at = A.auxv_at -> mallocng.auxv_ranges(A2) = mallocng.auxv_ranges(A)
 proof
-  assume h e r1 r2
-  show by defs(simp(expand(h, mallocng.shown_in), e, r1, r2, keep(mallocng.fp_shown)), mallocng.shown_in)
+  assume e1 e2
+  show by defs(simp(e1, e2), mallocng.auxv_ranges)
+qed
+
+// (the vector the world's stack objects in a new state: the same vector,
+// the same initialization)
+theorem mp.aux_same(A, A2, objs): mallocng.aux_live(A, objs) -> A2.init_done = A.init_done -> mallocng.auxv_ranges(A2) = mallocng.auxv_ranges(A) ->
+  mallocng.aux_live(A2, objs)
+proof
+  assume h ei ea
+  show by defs(rewrite(sym(ei), rewrite(sym(ea), expand(h, mallocng.aux_live))), mallocng.aux_live)
+qed
+
+// (the allocator's bytes the world's in a new state: its ranges and
+// reserve as before, the same vector)
+theorem mp.shown_same(c, A, A2, objs): mallocng.shown_in(c, A, objs) -> mallocng.fp_ranges(c, A2) = mallocng.fp_ranges(c, A) ->
+  A2.reserve = A.reserve -> A2.reserve_cnt = A.reserve_cnt -> A2.init_done = A.init_done -> A2.auxv = A.auxv -> A2.auxv_at = A.auxv_at ->
+  mallocng.shown_in(c, A2, objs)
+proof
+  assume h e r1 r2 ei ex ea
+  have {sa = aux} := expand(h, mallocng.shown_in)
+  have a2 := apply(mp.aux_same[A := A, A2 := A2, objs := objs], sa, ei, apply(mp.aux_eq[A := A, A2 := A2], ex, ea))
+  show by defs(simp(expand(h, mallocng.shown_in), e, r1, r2, a2, keep(mallocng.fp_shown, mallocng.aux_live)), mallocng.shown_in)
 qed
 
 // a meta in use: in a meta area, its 40 bytes the allocator's, readable and

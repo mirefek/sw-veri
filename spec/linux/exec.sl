@@ -163,8 +163,10 @@ pred exec_state(f: File, argv: List[List[bits[8]]], envp: List[List[bits[8]]], m
      lo * PAGE <= uint(m.gpr[rsp]) && uint(m.gpr[rsp]) < top * PAGE &&
      stack_layout(m.vm, uint(m.gpr[rsp]), argv, envp, auxv) && auxv_ok(f, m.vm, m.os, auxv) &&
      stack_data(m.vm, uint(m.gpr[rsp]), top * PAGE, argv, envp, auxv)) &&
-  // brk: page aligned, somewhere above the image (randomized), empty
+  // brk: page aligned, somewhere above the image (randomized), empty, in
+  // the user space
   uint(m.vm.brk_start) % PAGE = 0 && uint(m.vm.brk_start) >= image_end(f) && uint(m.vm.brk_start) >= PAGE &&
+  uint(m.vm.brk_start) <= TASK_SIZE &&
   m.vm.brk = m.vm.brk_start &&
   // registers: rip at the entry point, rsp 16-byte aligned, the rest zero
   uint(m.rip) = entry_of(f) && uint(m.gpr[rsp]) % 16 = 0 &&

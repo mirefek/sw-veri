@@ -18,6 +18,15 @@ proof
   show := apply(mp.gm_fp[c := c, A := A, A2 := A2, b := b], ha, apply(mp.mo_geom_of, ha, hmo))
 qed
 
+// (the same geometry: the same auxiliary vector)
+theorem mp.gm_aux(A, A2): mp.geom(A, A2) -> mallocng.auxv_ranges(A2) = mallocng.auxv_ranges(A)
+proof
+  assume hg
+  have e1 := apply(mp.gm_field[A := A, A2 := A2, k := "auxv"], hg, simp(), simp(), simp())
+  have e2 := apply(mp.gm_field[A := A, A2 := A2, k := "auxv_at"], hg, simp(), simp(), simp())
+  show := apply(mp.aux_eq[A := A, A2 := A2], e1, e2)
+qed
+
 // (the same geometry -- ranges, reserve: the allocator's bytes the world's
 // as before)
 theorem mp.shown_geom(c, A, A2, objs): A in mallocng.Abs -> mp.geom(A, A2) -> mallocng.shown_in(c, A, objs) -> mallocng.shown_in(c, A2, objs)
@@ -25,7 +34,10 @@ proof
   assume ha hg hs
   have r1 := apply(mp.gm_field[A := A, A2 := A2, k := "reserve"], hg, simp(), simp(), simp())
   have r2 := apply(mp.gm_field[A := A, A2 := A2, k := "reserve_cnt"], hg, simp(), simp(), simp())
-  show := apply(mp.shown_same[c := c, A := A, A2 := A2, objs := objs], hs, apply(mp.gm_ranges[c := c, A := A, A2 := A2], ha, hg), r1, r2)
+  have ex := apply(mp.gm_field[A := A, A2 := A2, k := "auxv"], hg, simp(), simp(), simp())
+  have ea := apply(mp.gm_field[A := A, A2 := A2, k := "auxv_at"], hg, simp(), simp(), simp())
+  have ei := apply(mp.gm_field[A := A, A2 := A2, k := "init_done"], hg, simp(), simp(), simp())
+  show := apply(mp.shown_same[c := c, A := A, A2 := A2, objs := objs], hs, apply(mp.gm_ranges[c := c, A := A, A2 := A2], ha, hg), r1, r2, ei, ex, ea)
 qed
 
 theorem mp.shown_mo(c, A, A2, objs): A in mallocng.Abs -> mallocng_specs.masks_only(A, A2) -> mallocng.shown_in(c, A, objs) -> mallocng.shown_in(c, A2, objs)
@@ -41,8 +53,48 @@ proof
   show := apply(mp.gm_held[c := c, A := A, A2 := A2, b := b], ha, apply(mp.mo_geom_of, ha, hmo))
 qed
 
+// (fp_mapped at a byte of range k, not one of xs: its page mapped, not
+// the stack's)
+theorem mp.fpm_use(RS, XS, b, vm, k, a): mallocng.fp_mapped(RS, XS, b, vm) -> k in omega -> a in omega -> int_lt(k, seq_len(RS)) ->
+  int_le(fst(RS[k]), a) -> int_lt(a, int_add(fst(RS[k]), snd(RS[k]))) -> !(a in malloc.live_of(b)) -> !mallocng.in_ranges(a, XS) ->
+  x86_64_linux.mapped(vm, int_div(a, x86_64_linux.PAGE)) && !(snd(vm.pages[int_div(a, x86_64_linux.PAGE)]).kind = 2)
+proof
+  assume hm hk ha hkl r1 r2 nl nx
+  have {P = pages} := expand(hm, mallocng.fp_mapped)
+  show := mp(all_elim(P, {k}, {a}), conj(hk, ha), taut(hkl, r1, r2, nl, nx))
+qed
+
+// (fp_mapped from its two parts)
+theorem mp.fpm_intro(RS, XS, b, vm): (all k a. k in omega && a in omega -> ((((int_lt(k, seq_len(RS)) && int_le(fst(RS[k]), a)) && int_lt(a, int_add(fst(RS[k]), snd(RS[k])))) &&
+    !(a in malloc.live_of(b))) && !mallocng.in_ranges(a, XS)) -> x86_64_linux.mapped(vm, int_div(a, x86_64_linux.PAGE)) && !(snd(vm.pages[int_div(a, x86_64_linux.PAGE)]).kind = 2)) ->
+  (all a. a in omega -> mallocng.in_ranges(a, XS) -> mallocng.in_stack_space(vm, a)) -> mallocng.fp_mapped(RS, XS, b, vm)
+proof
+  assume h1 h2
+  show by defs(conj(h1, h2), mallocng.fp_mapped)
+qed
+
+// (a byte of the stack's space: so in a memory with the same stack)
+theorem mp.iss_same(vm, vm2, a): mallocng.in_stack_space(vm, a) -> vm2.stack_top = vm.stack_top -> vm2.stack_limit = vm.stack_limit ->
+  mallocng.in_stack_space(vm2, a)
+proof
+  assume h et el
+  show by defs(rewrite(sym(et), rewrite(sym(el), expand(h, mallocng.in_stack_space, x86_64_linux.stack_floor))), mallocng.in_stack_space, x86_64_linux.stack_floor)
+qed
+
+// (fp_mapped's exempted bytes, the same ones: in the stack's space of a
+// memory with the same stack)
+theorem mp.fpm_low(RS, XS, XS2, b, vm, vm2): mallocng.fp_mapped(RS, XS, b, vm) -> XS2 = XS -> vm2.stack_top = vm.stack_top -> vm2.stack_limit = vm.stack_limit ->
+  all a. a in omega -> mallocng.in_ranges(a, XS2) -> mallocng.in_stack_space(vm2, a)
+proof
+  assume hm ex et el
+  fix a
+  assume ha hx
+  have {L = low} := expand(hm, mallocng.fp_mapped)
+  show := apply(mp.iss_same, mp(all_elim(L, {a}), ha, rewrite(ex, hx)), et, el)
+qed
+
 // the footprint mapped: in user space (below 2^64, no address wraps)
-theorem mp.fp_low(c, A, vm, b, a): mallocng.fp_mapped(mallocng.fp_ranges(c, A), b, vm) -> a in mallocng.footprint(c, A, b) ->
+theorem mp.fp_low(c, A, vm, b, a): mallocng.fp_mapped(mallocng.fp_ranges(c, A), mallocng.auxv_ranges(A), b, vm) -> a in mallocng.footprint(c, A, b) ->
   int_lt(a, 18446744073709551616)
 proof
   assume hm ha
@@ -52,11 +104,21 @@ proof
   have _ ir nl := (a in omega && mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) && !(a in malloc.live_of(b)) by taut(s2, expand(af, mallocng.fp_set)))
   obtain k, hk hkl hr from expand(ir, mallocng.in_ranges)
   have r1 r2 := expand(hr, mallocng.in_range)
-  have mp1 _ := mp(all_elim(expand(hm, mallocng.fp_mapped), {k}, {a}), taut(hk, ao), taut(hkl, r1, r2, nl))
-  have lt _ := expand(mp1, x86_64_linux.mapped)
-  have ts: int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE) = 34359738367 by defs(simp(), x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)
-  have pg: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
-  show by arith(lt, ts, pg, ao)
+  have {L = low} := expand(hm, mallocng.fp_mapped)
+  have cx: mallocng.in_ranges(a, mallocng.auxv_ranges(A)) -> int_lt(a, 18446744073709551616) proof
+    assume hx
+    have _ _ l := expand(mp(all_elim(L, {a}), ao, hx), mallocng.in_stack_space)
+    show by arith(expand(l, x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))
+  qed
+  have cn: !mallocng.in_ranges(a, mallocng.auxv_ranges(A)) -> int_lt(a, 18446744073709551616) proof
+    assume nx
+    have mp1 _ := apply(mp.fpm_use, hm, hk, ao, hkl, r1, r2, nl, nx)
+    have lt _ := expand(mp1, x86_64_linux.mapped)
+    have ts: int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE) = 34359738367 by defs(simp(), x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)
+    have pg: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
+    show by arith(lt, ts, pg, ao)
+  qed
+  show by taut(cx, cn)
 qed
 
 // two memories with the same pages, a's byte (if a is seen) the same:
@@ -116,34 +178,114 @@ proof
 qed
 
 // the footprint mapped: so on a memory with the same pages
-theorem mp.fpm_pages(RS, b, vm, vm2): mallocng.fp_mapped(RS, b, vm) -> vm2.pages = vm.pages -> mallocng.fp_mapped(RS, b, vm2)
+theorem mp.fpm_pages(RS, XS, b, vm, vm2): mallocng.fp_mapped(RS, XS, b, vm) -> vm2.pages = vm.pages -> vm2.stack_top = vm.stack_top -> vm2.stack_limit = vm.stack_limit ->
+  mallocng.fp_mapped(RS, XS, b, vm2)
 proof
-  assume hm ep
-  have mpw: all x0. all x1. x0 in omega && x1 in omega -> ((int_lt(x0, seq_len(RS)) && int_le(fst(RS[x0]), x1)) && int_lt(x1, int_add(fst(RS[x0]), snd(RS[x0])))) &&
-      !(x1 in malloc.live_of(b)) -> x86_64_linux.mapped(vm2, int_div(x1, x86_64_linux.PAGE)) && !(snd(vm2.pages[int_div(x1, x86_64_linux.PAGE)]).kind = 2) proof
+  assume hm ep et el
+  have L := apply(mp.fpm_low[RS := RS, XS := XS, XS2 := XS, b := b, vm := vm, vm2 := vm2], hm, refl({XS}), et, el)
+  have mpw: all x0. all x1. x0 in omega && x1 in omega -> ((((int_lt(x0, seq_len(RS)) && int_le(fst(RS[x0]), x1)) && int_lt(x1, int_add(fst(RS[x0]), snd(RS[x0])))) &&
+      !(x1 in malloc.live_of(b))) && !mallocng.in_ranges(x1, XS)) -> x86_64_linux.mapped(vm2, int_div(x1, x86_64_linux.PAGE)) && !(snd(vm2.pages[int_div(x1, x86_64_linux.PAGE)]).kind = 2) proof
     fix k a
     assume ho hr
-    have m1 k1 := mp(all_elim(expand(hm, mallocng.fp_mapped), {k}, {a}), ho, hr)
+    have hk ha := ho
+    have hkl r1 r2 nl nx := hr
+    have m1 k1 := apply(mp.fpm_use, hm, hk, ha, hkl, r1, r2, nl, nx)
     have l1 l2 := expand(m1, x86_64_linux.mapped)
     have mm: x86_64_linux.mapped(vm2, int_div(a, x86_64_linux.PAGE)) by defs(taut(l1, rewrite(sym(ep), l2)), x86_64_linux.mapped)
     show by taut(mm, rewrite(sym(ep), k1))
   qed
-  show by defs(mpw, mallocng.fp_mapped)
+  show := apply(mp.fpm_intro, mpw, L)
 qed
 
-// the footprint none of the stack's free bytes (off the stack's pages)
-theorem mp.fp_nofree(c, A, vm, b, objs, a): mallocng.fp_mapped(mallocng.fp_ranges(c, A), b, vm) ->
+// ... so on a memory changed in its bytes only
+theorem mp.fpm_vm(RS, XS, b, vm, vm2): mallocng.fp_mapped(RS, XS, b, vm) -> fn_update(vm2, "bytes", vm.bytes) = vm -> mallocng.fp_mapped(RS, XS, b, vm2)
+proof
+  assume hm ev
+  have up := mp(app_update_other[f := vm2, k := "bytes", v := vm.bytes, x := "pages"], (!("pages" = "bytes") by simp()))
+  have ut := mp(app_update_other[f := vm2, k := "bytes", v := vm.bytes, x := "stack_top"], (!("stack_top" = "bytes") by simp()))
+  have ul := mp(app_update_other[f := vm2, k := "bytes", v := vm.bytes, x := "stack_limit"], (!("stack_limit" = "bytes") by simp()))
+  show := apply(mp.fpm_pages, hm, sym(rewrite(ev, up)), sym(rewrite(ev, ut)), sym(rewrite(ev, ul)))
+qed
+
+// the footprint none of the stack's free bytes (off the stack's pages, or
+// the auxiliary vector's: stack objects)
+theorem mp.fp_nofree(c, A, vm, b, objs, a): mallocng.fp_mapped(mallocng.fp_ranges(c, A), mallocng.auxv_ranges(A), b, vm) ->
+  (all x. x in omega -> mallocng.in_ranges(x, mallocng.auxv_ranges(A)) -> x in objs.live) ->
   a in mallocng.footprint(c, A, b) -> !abi.stack_free(vm, objs, a)
 proof
-  assume hm ha
+  assume hm hx ha
   have s1 := set_select_def[s := omega, p := y. y in mallocng.fp_set(mallocng.fp_ranges(c, A), b) && !mallocng.in_reserved(A, y) && !mallocng.in_taken(A, y), z := a]
   have ao af _ := (a in omega && a in mallocng.fp_set(mallocng.fp_ranges(c, A), b) && !mallocng.in_reserved(A, a) by taut(s1, expand(ha, mallocng.footprint)))
   have s2 := set_select_def[s := omega, p := y. mallocng.in_ranges(y, mallocng.fp_ranges(c, A)) && !(y in malloc.live_of(b)), z := a]
   have _ ir nl := (a in omega && mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) && !(a in malloc.live_of(b)) by taut(s2, expand(af, mallocng.fp_set)))
   obtain k, hk hkl hr from expand(ir, mallocng.in_ranges)
   have r1 r2 := expand(hr, mallocng.in_range)
-  have k0 k1 := mp(all_elim(expand(hm, mallocng.fp_mapped), {k}, {a}), taut(hk, ao), taut(hkl, r1, r2, nl))
-  show by defs(taut(k0, k1), abi.stack_free)
+  have cx: mallocng.in_ranges(a, mallocng.auxv_ranges(A)) -> !abi.stack_free(vm, objs, a) proof
+    assume x
+    have l := mp(all_elim(hx, {a}), ao, x)
+    show by defs(taut(l), abi.stack_free)
+  qed
+  have cn: !mallocng.in_ranges(a, mallocng.auxv_ranges(A)) -> !abi.stack_free(vm, objs, a) proof
+    assume nx
+    have k0 k1 := apply(mp.fpm_use, hm, hk, ao, hkl, r1, r2, nl, nx)
+    show by defs(taut(k0, k1), abi.stack_free)
+  qed
+  show by taut(cx, cn)
+qed
+
+// (no auxiliary vector -- after the allocator's first call: its ranges
+// none)
+theorem mp.aux_none(A, x): A in mallocng.Abs -> seq_len(A.auxv) = 0 -> A.auxv_at = 0 -> !mallocng.in_ranges(x, mallocng.auxv_ranges(A))
+proof
+  assume ha hl h0
+  let L := A.auxv
+  have ll: L in list_type(cart(omega, omega)) by simp(ha)
+  let FB := fn_build(int_sub(seq_len(L), 0), x0. ite(fst(L[int_add(0, x0)]) = x86_64_linux.AT_RANDOM, pair(int_add(snd(L[int_add(0, x0)]), 8), 8), pair(0, 0)))
+  have fbv: all x0. x0 in int_sub(seq_len(L), 0) -> ite(fst(L[int_add(0, x0)]) = x86_64_linux.AT_RANDOM, pair(int_add(snd(L[int_add(0, x0)]), 8), 8), pair(0, 0)) in univ(1) proof
+    fix x0
+    assume _
+    show by simp(ha)
+  qed
+  have fbl := apply(build_list, (int_sub(seq_len(L), 0) in omega by arith(hl)), fbv)
+  have ar: mallocng.auxv_ranges(A) = seq_concat(seq_one(pair(A.auxv_at, int_mul(16, seq_len(L)))), FB) by defs(refl({mallocng.auxv_ranges(A)}), mallocng.auxv_ranges)
+  have dd := fn_build_dom[d := int_sub(seq_len(L), 0), v := x0. ite(fst(L[int_add(0, x0)]) = x86_64_linux.AT_RANDOM, pair(int_add(snd(L[int_add(0, x0)]), 8), 8), pair(0, 0))]
+  have fbn: seq_len(FB) = 0 by defs(arith(expand(dd, seq_len), expand(hl, seq_len)), seq_len)
+  have arl: seq_len(mallocng.auxv_ranges(A)) = 1 := rewrite(sym(ar), (seq_len(seq_concat(seq_one(pair(A.auxv_at, int_mul(16, seq_len(L)))), FB)) = 1 by arith(fbl, fbn)))
+  have ar0: mallocng.auxv_ranges(A)[0] = pair(A.auxv_at, int_mul(16, seq_len(L))) := rewrite(sym(ar), at({seq_concat(seq_one(pair(A.auxv_at, int_mul(16, seq_len(L)))), FB)[0]}, fbl))
+  have g: mallocng.in_ranges(x, mallocng.auxv_ranges(A)) -> false proof
+    assume hi
+    obtain k, hk hkl hr from expand(hi, mallocng.in_ranges)
+    have k0: k = 0 by arith(hk, hkl, arl)
+    have r0 := rewrite(ar0, rewrite(k0, hr))
+    have w: int_le(0, x) && int_lt(x, 0) by simp(expand(r0, mallocng.in_range), h0, hl)
+    show by arith(w)
+  qed
+  show by taut(g)
+qed
+
+// the auxiliary vector's bytes: the world's stack objects (none after the
+// allocator's first call)
+theorem mp.aux_all(c, A, vm, b, objs): A in mallocng.Abs -> mallocng.holds_m(c, A, vm, b) -> mallocng.shown_in(c, A, objs) ->
+  all x. x in omega -> mallocng.in_ranges(x, mallocng.auxv_ranges(A)) -> x in objs.live
+proof
+  assume ha hh hs
+  fix x
+  assume hx hi
+  have {H = inv} := expand(hh, mallocng.holds_m)
+  have {hn = normal} := expand(H, mallocng.holds)
+  have {ni = init} := expand(hn, mallocng.normal)
+  have {sa = aux} := expand(hs, mallocng.shown_in)
+  have c0: A.init_done = 0 -> x in objs.live proof
+    assume h0
+    show := mp(all_elim(mp(expand(sa, mallocng.aux_live), h0), {x}), hx, hi)
+  qed
+  have c1: !(A.init_done = 0) -> x in objs.live proof
+    assume h1
+    have l0 a0 := mp(ni, h1)
+    have n := apply(mp.aux_none[A := A, x := x], ha, l0, a0)
+    show by taut(n, hi)
+  qed
+  show by taut(c0, c1)
 qed
 
 // two views of a memory agreeing at every byte: the same
@@ -466,7 +608,7 @@ proof
   qed
   have ve := apply(mp.view_ext[vm := vm, vm2 := vm2, fp := FP], ag)
   have i2 := rewrite(sym(ek), rewrite(sym(ve), H))
-  have m2 := apply(mp.fpm_pages, hm, ep)
+  have m2 := apply(mp.fpm_pages, hm, ep, sym(rewrite(er, ut)), sym(rewrite(er, ul)))
   have fr2 := apply(mp.free_rw_pages[c := c, vm := vm, vm2 := vm2, F := mallocng.footprint(c, A, b)], hfr, ep)
   have rw2 := apply(mp.grp_rw_pg[c := c, A := A, vm := vm, vm2 := vm2, b := b], hrw, ep)
   show by defs(taut(i2, m2, fr2, rw2, rs2, mq2), mallocng.holds_m)
@@ -475,10 +617,11 @@ qed
 // the stack's free bytes changed, nothing else (a callee's dead frame and
 // objects): the invariant kept (its bytes none of them: mp.fp_nofree)
 theorem mp.free_holds(c, A, vm, vm2, b, objs): mallocng.holds_m(c, A, vm, b) ->
+  (all x. x in omega -> mallocng.in_ranges(x, mallocng.auxv_ranges(A)) -> x in objs.live) ->
   fn_update(vm2, "bytes", vm.bytes) = vm -> (all x. x in bits(64) -> !abi.stack_free(vm, objs, x) -> vm2.bytes[x] = vm.bytes[x]) ->
   mallocng.holds_m(c, A, vm2, b)
 proof
-  assume hh er eb
+  assume hh hx er eb
   have {H = inv, hm = mapped, hfr = free, hrw = rw, hrs = rsv, hmq = maps} := expand(hh, mallocng.holds_m)
   have up := mp(app_update_other[f := vm2, k := "bytes", v := vm.bytes, x := "pages"], (!("pages" = "bytes") by simp()))
   have ep: vm2.pages = vm.pages := sym(rewrite(er, up))
@@ -499,14 +642,14 @@ proof
       have lo := apply(mp.fp_low[c := c, A := A, vm := vm, b := b, a := a], hm, hff)
       have e: bits_of_int(64, a) = a by defs(arith(hao, lo), bits_of_int, pow2)
       have ab: a in bits(64) by arith(hao, lo)
-      have dm := apply(mp.fp_nofree[c := c, A := A, vm := vm, b := b, objs := objs, a := a], hm, hff)
+      have dm := apply(mp.fp_nofree[c := c, A := A, vm := vm, b := b, objs := objs, a := a], hm, hx, hff)
       show := rewrite(sym(e), mp(all_elim(eb, {a}), ab, dm))
     qed
     show := apply(mp.view_agree[vm := vm, vm2 := vm2, fp := FP, a := a], hao, bt, ep)
   qed
   have ve := apply(mp.view_ext[vm := vm, vm2 := vm2, fp := FP], ag)
   have i2 := rewrite(sym(ek), rewrite(sym(ve), H))
-  have m2 := apply(mp.fpm_pages, hm, ep)
+  have m2 := apply(mp.fpm_pages, hm, ep, sym(rewrite(er, ut)), sym(rewrite(er, ul)))
   have fr2 := apply(mp.free_rw_pages[c := c, vm := vm, vm2 := vm2, F := mallocng.footprint(c, A, b)], hfr, ep)
   have rw2 := apply(mp.grp_rw_pg[c := c, A := A, vm := vm, vm2 := vm2, b := b], hrw, ep)
   show by defs(taut(i2, m2, fr2, rw2, rs2, mq2), mallocng.holds_m)

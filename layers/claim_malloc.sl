@@ -11,10 +11,15 @@ proc[Machine] run_until(target: Addr) {
   while rip != target { step() }
 }
 
-// the heap at machine state `m`, with no live blocks, the stack's objects
-// `objs` (the program's data on the initial stack)
+// the machine's memory as the C world sees it: without the stack's pages
+// (abi.sl's world_pages)
+fn c_vm(vm: Vm) -> Vm = vm with { pages: (p: PageNo) => if stack_page(vm, p) { none } else { vm.pages[p] } }
+
+// the heap at machine state `m`, as the C world sees it, with no live
+// blocks, the stack's objects `objs` (the program's data on the initial
+// stack)
 fn empty_heap(m: Machine, objs: Set[nat]) -> Heap =
-  Heap { vm: m.vm, os: m.os, fs_base: m.fs_base, cpu: m.cpu, objs: objs_at(objs, m.fs_base), blocks: (p: Addr) => none }
+  Heap { vm: c_vm(m.vm), os: m.os, fs_base: m.fs_base, cpu: m.cpu, objs: objs_at(objs, m.fs_base), blocks: (p: Addr) => none }
 
 // Assumption of this claim: the program starts without privileges. musl's
 // startup then skips its secure path, whose system calls (poll, open) are

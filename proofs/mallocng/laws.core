@@ -113,7 +113,7 @@ qed
 
 theorem mallocng.mapped_pt(c, s, a):
   s in rec_and(abi.World, malloc.Heap.ghost) -> a in omega -> a in mallocng.owned(c)[s] ->
-    x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE))
+    x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) || a in s.objs.live
 proof
   assume hs ho ha
   obtain A, hA from mp(mp(mallocng.owned_mem[c := c, s := s, a := a], hs), ha)
@@ -127,10 +127,33 @@ proof
   have kin: k in omega by taut(hk)
   have klt: int_lt(k, seq_len(mallocng.fp_ranges(c, A))) by taut(hk)
   have kr: mallocng.in_range(a, mallocng.fp_ranges(c, A)[k]) by taut(hk)
-  have {hm = mem} := expand(r, mallocng.rep)
-  have fm: mallocng.fp_mapped(mallocng.fp_ranges(c, A), s.blocks, s.vm) by taut(expand(hm, mallocng.holds_m))
-  have inst := all_elim(all_elim(expand(fm, mallocng.fp_mapped), {k}), {a})
-  show x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) by taut(inst, kin, ho, klt, expand(kr, mallocng.in_range), nl)
+  have {hm = mem, rx = aux} := expand(r, mallocng.rep)
+  have {fm = mapped, H = inv} := expand(hm, mallocng.holds_m)
+  have ha: A in mallocng.Abs by taut(hA)
+  // (the auxiliary vector's: before the allocator's first call, live stack
+  // objects; after it, none)
+  have cx: mallocng.in_ranges(a, mallocng.auxv_ranges(A)) -> a in s.objs.live proof
+    assume x
+    have c0: A.init_done = 0 -> a in s.objs.live proof
+      assume h0
+      show := mp(all_elim(mp(expand(rx, mallocng.aux_live), h0), {a}), ho, x)
+    qed
+    have c1: !(A.init_done = 0) -> a in s.objs.live proof
+      assume h1
+      have {hn = normal} := expand(H, mallocng.holds)
+      have {ni = init} := expand(hn, mallocng.normal)
+      have l0 a0 := mp(ni, h1)
+      show by taut(x, apply(mp.aux_none[A := A, x := a], ha, l0, a0))
+    qed
+    show by taut(c0, c1)
+  qed
+  have r1 r2 := expand(kr, mallocng.in_range)
+  have cn: !mallocng.in_ranges(a, mallocng.auxv_ranges(A)) -> x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) proof
+    assume nx
+    have m _ := apply(mp.fpm_use, fm, kin, ho, klt, r1, r2, nl, nx)
+    show := m
+  qed
+  show by taut(cx, cn)
 qed
 
 theorem mallocng.law_owned_mapped(c): malloc.owned_mapped(mallocng.inv(c), mallocng.owned(c))
@@ -208,9 +231,10 @@ theorem mallocng.rep_frame(c, A, s, t):
     t.blocks = s.blocks -> t.vm.brk = s.vm.brk ->
     t.fs_base = s.fs_base -> t.vm.stack_top = s.vm.stack_top -> t.vm.stack_limit = s.vm.stack_limit ->
     mallocng.agree(c, s, t) -> (all x. x in omega -> x in malloc.live(s) ->
-      t.vm.pages[int_div(x, x86_64_linux.PAGE)] = s.vm.pages[int_div(x, x86_64_linux.PAGE)]) -> mallocng.rep(c, A, t)
+      t.vm.pages[int_div(x, x86_64_linux.PAGE)] = s.vm.pages[int_div(x, x86_64_linux.PAGE)]) ->
+    (all x. x in omega -> x in mallocng.owned(c)[s] && x in s.objs.live -> x in t.objs.live) -> mallocng.rep(c, A, t)
 proof
-  assume hc hu hs ha hr hb hk hfb htp hlm hg hl
+  assume hc hu hs ha hr hb hk hfb htp hlm hg hl hlv
   have rs0 := expand(hr, mallocng.rep)
   have {hm = mem} := rs0
   have rs := expand(hm, mallocng.holds_m)
@@ -234,16 +258,18 @@ proof
     by taut(rs)
   have H3 := rewrite(sym(hk), rewrite(sym(hb), rewrite(sym(ve), H)))
   // the footprint stays mapped: its pages are unchanged
-  have FM: mallocng.fp_mapped(mallocng.fp_ranges(c, A), s.blocks, s.vm) by taut(rs)
+  have {FM = mapped} := rs
   fix k x
   assume hko: k in omega && x in omega
-  assume hp: ((int_lt(k, seq_len(mallocng.fp_ranges(c, A))) && int_le(fst(mallocng.fp_ranges(c, A)[k]), x)) &&
-      int_lt(x, int_add(fst(mallocng.fp_ranges(c, A)[k]), snd(mallocng.fp_ranges(c, A)[k])))) && !(x in malloc.live_of(t.blocks))
+  assume hp: (((int_lt(k, seq_len(mallocng.fp_ranges(c, A))) && int_le(fst(mallocng.fp_ranges(c, A)[k]), x)) &&
+      int_lt(x, int_add(fst(mallocng.fp_ranges(c, A)[k]), snd(mallocng.fp_ranges(c, A)[k])))) && !(x in malloc.live_of(t.blocks))) &&
+      !mallocng.in_ranges(x, mallocng.auxv_ranges(A))
   have hp2 := rewrite(hb, hp)
-  have ms msk := mp(mp(all_elim(all_elim(expand(FM, mallocng.fp_mapped), {k}), {x}), hko), hp2)
   have kin: k in omega by taut(hko)
   have ho: x in omega by taut(hko)
   have klt: int_lt(k, seq_len(mallocng.fp_ranges(c, A))) by taut(hp)
+  have _ p1 p2 p3 p4 := hp2
+  have ms msk := apply(mp.fpm_use, FM, kin, ho, klt, p1, p2, p3, p4)
   have irk: mallocng.in_range(x, mallocng.fp_ranges(c, A)[k]) by defs(taut(hp), mallocng.in_range)
   have ir: mallocng.in_ranges(x, mallocng.fp_ranges(c, A)) by defs(ex_intro({k}, taut(kin, klt, irk)), mallocng.in_ranges)
   have nl: !(x in malloc.live_of(s.blocks)) by taut(hp2)
@@ -269,8 +295,8 @@ proof
   have mt: x86_64_linux.mapped(t.vm, int_div(x, x86_64_linux.PAGE))
     by defs(rewrite(sym(ep), expand(ms, x86_64_linux.mapped)), x86_64_linux.mapped)
   have mtk: !(snd(t.vm.pages[int_div(x, x86_64_linux.PAGE)]).kind = 2) := rewrite(sym(ep), msk)
-  have MT: mallocng.fp_mapped(mallocng.fp_ranges(c, A), t.blocks, t.vm)
-    by defs(gen(gen(discharge(discharge(conj(mt, mtk), hp), hko), x), k), mallocng.fp_mapped)
+  have MT := apply(mp.fpm_intro[RS := mallocng.fp_ranges(c, A), XS := mallocng.auxv_ranges(A), b := t.blocks, vm := t.vm],
+    gen(gen(discharge(discharge(conj(mt, mtk), hp), hko), x), k), apply(mp.fpm_low, FM, refl({mallocng.auxv_ranges(A)}), htp, hlm))
   // live blocks stay read-write: their pages are unchanged
   have LS: malloc.live_rw(s) by taut(rs0)
   fix p
@@ -426,7 +452,44 @@ proof
   have TL3 := rewrite(sym(hfb), TL)
   have ER3 := rewrite(sym(hfb), ER)
   have CN3 := rewrite(sym(hfb), CN)
-  show mallocng.rep(c, A, t) by defs(taut(HM3, NR, TK0, LT, TL3, ER3, CN3), mallocng.rep)
+  // the auxiliary vector (before the allocator's first call): owned, live
+  // stack objects -- so still
+  have {RX = aux} := rs0
+  have AX: mallocng.aux_live(A, t.objs) proof
+    have q: A.init_done = 0 -> (all x0. x0 in omega -> mallocng.in_ranges(x0, mallocng.auxv_ranges(A)) -> x0 in t.objs.live) proof
+      assume h0
+      fix y
+      assume hy hiy
+      have ly := mp(all_elim(mp(expand(RX, mallocng.aux_live), h0), {y}), hy, hiy)
+      have {hfr0 = fresh} := expand(H, mallocng.holds)
+      have {z4 = used} := mp(expand(hfr0, mallocng.fresh_ok), h0)
+      have bt := apply(mp.u_blocks_ty, hs)
+      have nly: !(y in malloc.live_of(s.blocks)) proof
+        assume hly
+        obtain g, hgu _ from apply(mp.live_grp[c := c, A := A, M := mallocng.mview(s.vm, mallocng.held(c, A, s.blocks)), b := s.blocks, brk := s.vm.brk, a := y], ha, bt, H, hly)
+        obtain kk, hkk hkkl _ from expand(hgu, mallocng.is_used)
+        show by arith(hkkl, z4, hkk)
+      qed
+      have nry: !mallocng.in_reserved(A, y) proof
+        assume h
+        obtain g i, hg hi _ hil hrs _ from expand(h, mallocng.in_reserved)
+        have ne := mp(all_elim(expand(NR0, mallocng.no_reserved), {g}, {i}), conj(hg, hi), hil)
+        show by taut(ne, hrs)
+      qed
+      have nty: !mallocng.in_taken(A, y) proof
+        assume h
+        obtain j, hj hjl _ _ from expand(h, mallocng.in_taken)
+        show by arith(hj, hjl, TK0)
+      qed
+      have {rd = rodata, xl = auxv} := apply(mp.front_pieces, hc, hu, ha)
+      have qy := apply(mp.ranges_r, rd, xl, hiy)
+      have fy := apply(mp.fp_intro[c := c, A := A, b := s.blocks, a := y], hc, hu, ha, hy, nly, nry, nty, taut(qy))
+      have oy := apply(mallocng.owned_intro[c := c, s := s, A := A, a := y], hs, ha, hr, hy, fy)
+      show := mp(all_elim(hlv, {y}), hy, conj(oy, ly))
+    qed
+    show by defs(q, mallocng.aux_live)
+  qed
+  show mallocng.rep(c, A, t) by defs(taut(HM3, NR, TK0, LT, TL3, ER3, CN3, AX), mallocng.rep)
 qed
 
 // with a unique representation, what t owns s owned
@@ -457,13 +520,14 @@ theorem mallocng.frame_pt(c, s, t):
     t.fs_base = s.fs_base -> t.vm.stack_top = s.vm.stack_top -> t.vm.stack_limit = s.vm.stack_limit ->
     mallocng.agree(c, s, t) -> (all x. x in omega -> x in malloc.live(s) ->
       t.vm.pages[int_div(x, x86_64_linux.PAGE)] = s.vm.pages[int_div(x, x86_64_linux.PAGE)]) ->
+    (all x. x in omega -> x in mallocng.owned(c)[s] && x in s.objs.live -> x in t.objs.live) ->
     t in mallocng.inv(c) && mallocng.owned(c)[t] = mallocng.owned(c)[s]
 proof
-  assume hc hs ht hi hb hk hfs htp hlm hg hl
+  assume hc hs ht hi hb hk hfs htp hlm hg hl hlv
   obtain A, hA from mp(mallocng.inv_rep[c := c, s := s], hi)
   have ha: A in mallocng.Abs by taut(hA)
   have hr: mallocng.rep(c, A, s) by taut(hA)
-  have rt := apply(mallocng.rep_frame[c := c, A := A, s := s, t := t], hc, apply(mallocng.abs_univ, ha), hs, ha, hr, hb, hk, hfs, htp, hlm, hg, hl)
+  have rt := apply(mallocng.rep_frame[c := c, A := A, s := s, t := t], hc, apply(mallocng.abs_univ, ha), hs, ha, hr, hb, hk, hfs, htp, hlm, hg, hl, hlv)
   have ti := mp(mp(mp(mallocng.inv_intro[c := c, s := t, A := A], ht), ha), rt)
   fix a
   have d1 := mp(mallocng.owned_sub[c := c, s := s, t := t, A := A, a := a], hc, hs, ht, ha, hr, rt, hb)
@@ -491,5 +555,6 @@ proof
   have hg: mallocng.agree(c, s, t) by defs(taut(h2), mallocng.agree)
   have hl: all x. x in omega -> x in malloc.live(s) ->
       t.vm.pages[int_div(x, x86_64_linux.PAGE)] = s.vm.pages[int_div(x, x86_64_linux.PAGE)] by taut(h2)
-  show := apply(mallocng.frame_pt[c := c, s := s, t := t], hc, hs, ht, hi, hb, hk, hfs, htp, hlm, hg, hl)
+  have hlv: all x. x in omega -> x in mallocng.owned(c)[s] && x in s.objs.live -> x in t.objs.live by taut(h2)
+  show := apply(mallocng.frame_pt[c := c, s := s, t := t], hc, hs, ht, hi, hb, hk, hfs, htp, hlm, hg, hl, hlv)
 qed

@@ -533,7 +533,7 @@ proof
   qed
   have r3: all x0. all x1. x0 in omega && x1 in omega -> (int_lt(x0, seq_len(mallocng.auxv_ranges(A2))) && int_le(fst(mallocng.auxv_ranges(A2)[x0]), x1)) &&
       int_lt(x1, int_add(fst(mallocng.auxv_ranges(A2)[x0]), snd(mallocng.auxv_ranges(A2)[x0]))) ->
-      (mallocng.m_mapped(M2, x1) && snd(mallocng.pg(M2, x1)).prot.r) && !(snd(mallocng.pg(M2, x1)).kind = 2) proof
+      mallocng.m_mapped(M2, x1) && !(snd(mallocng.pg(M2, x1)).kind = 2) -> snd(mallocng.pg(M2, x1)).prot.r proof
     fix k a
     assume ho h
     have hk _ := ho
@@ -674,24 +674,61 @@ proof
   have mq2 := apply(mp.maps_vm[A := A, A2 := A2, vm := vm, vm2 := V1], hmq, apply(mp.maps_um, (A2.used = A.used by simp()), (A2.metas = A.metas by simp())), ev)
   have {ep = pages} := apply(mp.fs_empty, P)
   have h2 := apply(mp.fs_holds, P)
-  // the owned bytes mapped: within the old ones, on the same pages
-  have mq: all x0. all x1. x0 in omega && x1 in omega -> ((int_lt(x0, seq_len(mallocng.fp_ranges(c, A2))) && int_le(fst(mallocng.fp_ranges(c, A2)[x0]), x1)) &&
-      int_lt(x1, int_add(fst(mallocng.fp_ranges(c, A2)[x0]), snd(mallocng.fp_ranges(c, A2)[x0])))) && !(x1 in malloc.live_of(b)) ->
+  // the owned bytes mapped: within the old ones, on the same pages (none
+  // of the auxiliary vector's, apart from them all)
+  have {h0 = init} := P
+  have {H0 = inv} := expand(hh, mallocng.holds_m)
+  have {hfr0 = fresh} := expand(H0, mallocng.holds)
+  have {fap = auxv_apart} := mp(expand(hfr0, mallocng.fresh_ok), h0)
+  have efa: mallocng.fixed_ranges(c, A2) = mallocng.fixed_ranges(c, fn_update(fn_update(A, "auxv", empty), "auxv_at", 0))
+    by defs(simp(), mallocng.fixed_ranges, mallocng.auxv_ranges)
+  // (A2's ranges: its fixed ones -- no group yet)
+  have {z4 = used} := apply(mp.fs_empty, P)
+  have {hc0 = cfg, hs0 = nat} := P
+  have {ta = abs, tu = univ} := apply(mp.first_type, ha, hs0)
+  have x2: mallocng.fixed_ranges(c, A2) in list_type(univ(1)) by defs(apply(mp.pre_list, hc0, tu, ta), mallocng.fixed_ranges)
+  have {g2 = groups} := apply(mp.fp_pieces, hc0, tu, ta)
+  have u2: seq_len(A2.used) = 0 by simp(z4)
+  have fxd: all x. mallocng.in_ranges(x, mallocng.fp_ranges(c, A2)) -> mallocng.in_ranges(x, mallocng.fixed_ranges(c, A2)) proof
+    fix x
+    assume ir
+    let G2 := fn_build(int_sub(seq_len(A2.used), 0), x0. mallocng.group_range(A2.metas[A2.used[int_add(0, x0)]]))
+    have c2 := apply(mp.ranges_cat[a := x, xs := mallocng.fixed_ranges(c, A2), ys := G2], x2, g2)
+    have i0: mallocng.in_ranges(x, seq_concat(mallocng.fixed_ranges(c, A2), G2)) by defs(ir, mallocng.fp_ranges)
+    have ng: !mallocng.in_ranges(x, G2) proof
+      assume h
+      obtain j, hj hjl _ from apply(mp.ranges_build_inv[a := x, n := seq_len(A2.used), r := y. mallocng.group_range(A2.metas[A2.used[y]])], (seq_len(A2.used) in omega by arith(u2)), h)
+      show by arith(hjl, u2, hj)
+    qed
+    show by taut(c2, i0, ng)
+  qed
+  have mq: all x0. all x1. x0 in omega && x1 in omega -> (((int_lt(x0, seq_len(mallocng.fp_ranges(c, A2))) && int_le(fst(mallocng.fp_ranges(c, A2)[x0]), x1)) &&
+      int_lt(x1, int_add(fst(mallocng.fp_ranges(c, A2)[x0]), snd(mallocng.fp_ranges(c, A2)[x0])))) && !(x1 in malloc.live_of(b))) && !mallocng.in_ranges(x1, mallocng.auxv_ranges(A2)) ->
       x86_64_linux.mapped(V1, int_div(x1, x86_64_linux.PAGE)) && !(snd(V1.pages[int_div(x1, x86_64_linux.PAGE)]).kind = 2) proof
     fix k a
     assume ho h
     have hk hao := ho
-    have hkl h1 h2 nl := h
+    have hkl h1 h2 nl _ := h
     have inr: mallocng.in_range(a, mallocng.fp_ranges(c, A2)[k]) by defs(taut(h1, h2), mallocng.in_range)
     have ir2: mallocng.in_ranges(a, mallocng.fp_ranges(c, A2)) by defs(ex_intro({k}, taut(hk, hkl, inr)), mallocng.in_ranges)
+    have nx: !mallocng.in_ranges(a, mallocng.auxv_ranges(A)) proof
+      assume x
+      show by taut(mp(all_elim(fap, {a}), hao, x), rewrite(efa, mp(all_elim(fxd, {a}), ir2)))
+    qed
     have ir1 := apply(mp.fs_fpr[c := c, A := A, vm := vm, V1 := V1, b := b, s := s, a := a], P, ir2)
     obtain k1, hk1 hk1l hr1 from expand(ir1, mallocng.in_ranges)
     have g1 g2 := expand(hr1, mallocng.in_range)
-    have mo mk := mp(all_elim(expand(hm, mallocng.fp_mapped), {k1}, {a}), conj(hk1, hao), taut(hk1l, g1, g2, nl))
+    have mo mk := apply(mp.fpm_use, hm, hk1, hao, hk1l, g1, g2, nl, nx)
     have mm: x86_64_linux.mapped(V1, int_div(a, x86_64_linux.PAGE)) by defs(rewrite(sym(ep), expand(mo, x86_64_linux.mapped)), x86_64_linux.mapped)
     show by taut(mm, rewrite(sym(ep), mk))
   qed
-  have m2: mallocng.fp_mapped(mallocng.fp_ranges(c, A2), b, V1) by defs(mq, mallocng.fp_mapped)
+  // (the new vector: none)
+  have lw: all x. x in omega -> mallocng.in_ranges(x, mallocng.auxv_ranges(A2)) -> mallocng.in_stack_space(V1, x) proof
+    fix x
+    assume _ w
+    show by taut(w, apply(mp.aux_none[A := A2, x := x], ta, (seq_len(A2.auxv) = 0 by simp()), (A2.auxv_at = 0 by simp())))
+  qed
+  have m2 := apply(mp.fpm_intro, mq, lw)
   // the free counters: owned by both
   have fm: all a. a in omega -> mallocng.ctx_free(c, a) -> (a in mallocng.footprint(c, A, b) <-> a in mallocng.footprint(c, A2, b)) proof
     fix a

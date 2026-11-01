@@ -21,11 +21,12 @@ record StartGlobals {
 
 fn span(a: Addr, n: nat) -> Set[nat] = {x: nat | uint(a) <= x && x < uint(a) + n}
 
-// what startup may write: libc's first 56 bytes (its TLS fields, auxv,
-// page size), the globals it sets, the static TLS area (the thread
-// descriptor in it), the stack protector's guard
+// what startup may write: libc's fields it sets (can_do_threads, auxv, its
+// TLS fields, page size -- not need_locks: single-threaded), the globals
+// it sets, the static TLS area (the thread descriptor in it), the stack
+// protector's guard
 fn start_writes(g: StartGlobals) -> Set[nat] =
-  {x: nat | x in span(g.libc, 56) || x in span(g.environ, 8) || x in span(g.hwcap, 8) || x in span(g.sysinfo, 8) ||
+  {x: nat | x in span(g.libc, 1) || x in span(g.libc + 8, 48) || x in span(g.environ, 8) || x in span(g.hwcap, 8) || x in span(g.sysinfo, 8) ||
      x in span(g.progname, 8) || x in span(g.progname_full, 8) || x in span(g.default_stacksize, 4) ||
      x in span(g.builtin_tls, 336) || x in span(g.main_tls, 48) || x in span(g.stack_chk_guard, 8)}
 

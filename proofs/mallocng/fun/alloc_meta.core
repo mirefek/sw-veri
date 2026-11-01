@@ -766,16 +766,18 @@ proof
   show by taut(us, trans(er, rewrite(la, fat)), lt)
 qed
 
-// (a byte of the auxiliary vector's ranges: held, readable, below the user
-// space's end, not the stack's)
-theorem mp.auxv_byte(c, A, vm, b, j, x): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> b in fn_space(bits(64), option(omega)) ->
-  mallocng.holds_m(c, A, vm, b) -> A.init_done = 0 -> j in omega -> int_lt(j, seq_len(mallocng.auxv_ranges(A))) -> x in omega ->
+// (a byte of the auxiliary vector's ranges: held, readable where on a page
+// of the world, the world's -- a live object --, in the user space)
+theorem mp.auxv_byte(c, A, vm, b, objs, j, x): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> b in fn_space(bits(64), option(omega)) ->
+  mallocng.holds_m(c, A, vm, b) -> mallocng.shown_in(c, A, objs) -> A.init_done = 0 -> j in omega -> int_lt(j, seq_len(mallocng.auxv_ranges(A))) -> x in omega ->
   mallocng.in_range(x, mallocng.auxv_ranges(A)[j]) ->
-  x in mallocng.held(c, A, b) && mallocng.m_mapped(mallocng.mview(vm, mallocng.held(c, A, b)), x) &&
-  snd(mallocng.pg(mallocng.mview(vm, mallocng.held(c, A, b)), x)).prot.r && !(snd(mallocng.pg(mallocng.mview(vm, mallocng.held(c, A, b)), x)).kind = 2)
+  ((((x in mallocng.held(c, A, b) &&
+  (mallocng.m_mapped(mallocng.mview(vm, mallocng.held(c, A, b)), x) && !(snd(mallocng.pg(mallocng.mview(vm, mallocng.held(c, A, b)), x)).kind = 2) ->
+     snd(mallocng.pg(mallocng.mview(vm, mallocng.held(c, A, b)), x)).prot.r)) &&
+  x in objs.c_bytes) && int_lt(x, int_pow(2, 64))) && x in objs.live) && int_lt(x, int_pow(2, 63))
 proof
-  assume hc hu ha hb hh h0 hj hjl hx hr
-  have {H = inv} := expand(hh, mallocng.holds_m)
+  assume hc hu ha hb hh hsh h0 hj hjl hx hr
+  have {H = inv, hm = mapped} := expand(hh, mallocng.holds_m)
   have {hpo = perms, hfr = fresh} := expand(H, mallocng.holds)
   have {fac = auxv_ctx} := mp(expand(hfr, mallocng.fresh_ok), h0)
   have {pa = auxv} := expand(hpo, mallocng.perms_ok)
@@ -791,8 +793,13 @@ proof
   have ir: mallocng.in_ranges(x, mallocng.auxv_ranges(A)) by defs(ex_intro({j}, taut(hj, hjl, hr)), mallocng.in_ranges)
   have q := apply(mp.ranges_r, rd, xl, ir)
   have xh := apply(mp.fresh_held[c := c, A := A, vm := vm, b := b, a := x], hc, hu, ha, hb, hh, h0, hx, q, ncf)
-  have m1 m2 m3 := mp(all_elim(pa, {j}, {x}), conj(hj, hx), taut(hjl, r1, r2))
-  show by taut(xh, m1, m2, m3)
+  have pr := mp(all_elim(pa, {j}, {x}), conj(hj, hx), taut(hjl, r1, r2))
+  have cb := mp(all_elim(apply(mp.held_vis[c := c, A := A, objs := objs, b := b], hsh), {x}), xh)
+  have lv := mp(all_elim(apply(mp.aux_all[c := c, A := A, vm := vm, b := b, objs := objs], ha, hh, hsh), {x}), hx, ir)
+  have {L = low} := expand(hm, mallocng.fp_mapped)
+  have _ _ lt := expand(mp(all_elim(L, {x}), hx, ir), mallocng.in_stack_space)
+  have l63: int_lt(x, int_pow(2, 63)) by arith(expand(lt, x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))
+  show by taut(xh, pr, cb, (int_lt(x, int_pow(2, 64)) by arith(l63)), lv, l63)
 qed
 
 // libc's auxiliary vector readable, as get_random_secret reads it (the
@@ -837,22 +844,32 @@ proof
       gimple.usable(vm, objs, p, n, false) && gimple.bytes_at(vm, p, n) = mallocng.rd(M, p, n) && int_le(int_add(p, n), int_pow(2, 63)) proof
     fix j p n
     assume hj hjl hp hn hn0 hn16 hin
-    have each: all i. i in omega -> int_lt(i, n) -> int_add(p, i) in F && mallocng.m_mapped(M, int_add(p, i)) &&
-        snd(mallocng.pg(M, int_add(p, i))).prot.r && !(snd(mallocng.pg(M, int_add(p, i))).kind = 2) proof
+    have each: all i. i in omega -> int_lt(i, n) -> ((((int_add(p, i) in F &&
+        (mallocng.m_mapped(M, int_add(p, i)) && !(snd(mallocng.pg(M, int_add(p, i))).kind = 2) -> snd(mallocng.pg(M, int_add(p, i))).prot.r)) &&
+        int_add(p, i) in objs.c_bytes) && int_lt(int_add(p, i), int_pow(2, 64))) && int_add(p, i) in objs.live) && int_lt(int_add(p, i), int_pow(2, 63)) proof
       fix i
       assume hi hil
-      show := apply(mp.auxv_byte[c := c, A := A, vm := vm, b := b, j := j, x := int_add(p, i)], hc, hu, ha, hb, hh, h0, hj, hjl, arith(hp, hi), mp(all_elim(hin, {i}), hi, hil))
+      show := apply(mp.auxv_byte[c := c, A := A, vm := vm, b := b, objs := objs, j := j, x := int_add(p, i)], hc, hu, ha, hb, hh, hsh, h0, hj, hjl, arith(hp, hi),
+        mp(all_elim(hin, {i}), hi, hil))
+    qed
+    have each2: all i. i in omega -> int_lt(i, n) -> ((((int_add(p, i) in F &&
+        (mallocng.m_mapped(M, int_add(p, i)) && !(snd(mallocng.pg(M, int_add(p, i))).kind = 2) -> snd(mallocng.pg(M, int_add(p, i))).prot.r)) &&
+        int_add(p, i) in objs.c_bytes) && int_lt(int_add(p, i), int_pow(2, 64))) && int_add(p, i) in objs.live) proof
+      fix i
+      assume hi hil
+      have e1 e2 e3 e4 e5 _ := mp(all_elim(each, {i}), hi, hil)
+      show by taut(e1, e2, e3, e4, e5)
     qed
     have inF: all i. i in omega -> int_lt(i, n) -> int_add(p, i) in F proof
       fix i
       assume hi hil
-      have e1 _ _ _ := mp(all_elim(each, {i}), hi, hil)
+      have e1 _ _ _ _ _ := mp(all_elim(each, {i}), hi, hil)
       show := e1
     qed
-    have us := apply(mp.view_usable[vm := vm, fp := F, objs := objs, a := p, n := n], hp, each, VS)
+    have us := apply(mp.view_usable_live[vm := vm, fp := F, objs := objs, a := p, n := n], hp, each2)
     have er := apply(mp.view_read[vm := vm, fp := F, a := p, n := n], hp, hn, arith(hn16), inF)
-    have _ ml _ _ := mp(all_elim(each, {int_sub(n, 1)}), arith(hn0, hn), arith(hn0))
-    have nb: int_le(int_add(p, n), int_pow(2, 63)) by arith(expand(ml, mallocng.m_mapped, x86_64_linux.TASK_SIZE, x86_64_linux.PAGE), hp, hn, hn0)
+    have _ _ _ _ _ ml := mp(all_elim(each, {int_sub(n, 1)}), arith(hn0, hn), arith(hn0))
+    have nb: int_le(int_add(p, n), int_pow(2, 63)) by arith(ml, hp, hn, hn0)
     show by taut(us, er, nb)
   qed
   have a0l: int_lt(0, seq_len(mallocng.auxv_ranges(A))) by arith(arl, lo)
@@ -1000,7 +1017,7 @@ proof
   qed
   have ve := apply(mp.view_ext[vm := vm, vm2 := vm2, fp := FP], ag)
   have i2 := rewrite(sym(ek), rewrite(sym(ve), H))
-  have m2 := apply(mp.fpm_pages, hm, ep)
+  have m2 := apply(mp.fpm_vm, hm, er)
   have fr2 := apply(mp.free_rw_pages[c := c, vm := vm, vm2 := vm2, F := mallocng.footprint(c, A, b)], hfr, ep)
   have rw2 := apply(mp.grp_rw_pg[c := c, A := A, vm := vm, vm2 := vm2, b := b], hrw, ep)
   show by defs(taut(i2, m2, fr2, rw2, rs2, mq2), mallocng.holds_m)
@@ -1044,9 +1061,9 @@ qed
 // (ranges no more than A's, the reserve A's)
 theorem mp.shown_ranges(c, A, A2, objs): mallocng.shown_in(c, A, objs) ->
   (all a. a in omega -> mallocng.in_ranges(a, mallocng.fp_ranges(c, A2)) -> mallocng.in_ranges(a, mallocng.fp_ranges(c, A))) ->
-  A2.reserve = A.reserve -> A2.reserve_cnt = A.reserve_cnt -> mallocng.shown_in(c, A2, objs)
+  A2.reserve = A.reserve -> A2.reserve_cnt = A.reserve_cnt -> mallocng.aux_live(A2, objs) -> mallocng.shown_in(c, A2, objs)
 proof
-  assume h hr e1 e2
+  assume h hr e1 e2 x2
   have {f0 = fp, r0 = rsv} := h
   have q: all a. a in omega -> mallocng.in_ranges(a, mallocng.fp_ranges(c, A2)) -> a in objs.c_bytes proof
     fix a
@@ -1054,7 +1071,7 @@ proof
     show := mp(all_elim(expand(f0, mallocng.fp_shown), {a}), ha, mp(all_elim(hr, {a}), ha, hi))
   qed
   have fp2: mallocng.fp_shown(mallocng.fp_ranges(c, A2), objs) by defs(q, mallocng.fp_shown)
-  show by defs(simp(fp2, r0, e1, e2, keep(mallocng.fp_shown)), mallocng.shown_in)
+  show by defs(simp(fp2, r0, e1, e2, x2, keep(mallocng.fp_shown, mallocng.aux_live)), mallocng.shown_in)
 qed
 
 // (a meta taken, the free list or the count changed: the same ranges)
@@ -1062,7 +1079,7 @@ theorem mp.shown_mstep(c, A, F, n, T, objs): mallocng.shown_in(c, A, objs) -> ma
 proof
   assume h
   have e: mallocng.fp_ranges(c, mp.mstep(A, F, n, T)) = mallocng.fp_ranges(c, A) by defs(simp(), mallocng.fp_ranges, mallocng.fixed_ranges, mallocng.auxv_ranges)
-  show := apply(mp.shown_same[c := c, A := A, A2 := mp.mstep(A, F, n, T), objs := objs], h, e, simp(), simp())
+  show := apply(mp.shown_same[c := c, A := A, A2 := mp.mstep(A, F, n, T), objs := objs], h, e, simp(), simp(), simp(), simp(), simp())
 qed
 
 // (initialized: the auxiliary vector's ranges gone)
@@ -1074,7 +1091,8 @@ proof
     assume _ hi
     show := apply(mp.fs_fpr[c := c, A := A, vm := vm, V1 := V1, b := b, s := s, a := a], P, hi)
   qed
-  show := apply(mp.shown_ranges[c := c, A := A, A2 := mp.first(A, s), objs := objs], h, q, simp(), simp())
+  show := apply(mp.shown_ranges[c := c, A := A, A2 := mp.first(A, s), objs := objs], h, q, simp(), simp(),
+    (mallocng.aux_live(mp.first(A, s), objs) by defs(simp(), mallocng.aux_live)))
 qed
 
 // (a new area: the reserve's first page, the rest the reserve)
@@ -1109,7 +1127,9 @@ proof
     show := mp(all_elim(r1, {a}), hao, (int_le(int_div(A.reserve, x86_64_linux.PAGE), int_div(a, x86_64_linux.PAGE)) &&
       int_lt(int_div(a, x86_64_linux.PAGE), int_add(int_div(A.reserve, x86_64_linux.PAGE), A.reserve_cnt)) by arith(w1, w2, kp, ro, rco, hao, c2)))
   qed
-  show by defs(taut(fp2, rs2), mallocng.shown_in)
+  have {sx = aux} := h
+  have sx2 := apply(mp.aux_same[A := A, A2 := mp.narea(A), objs := objs], sx, simp(), (mallocng.auxv_ranges(mp.narea(A)) = mallocng.auxv_ranges(A) by defs(simp(), mallocng.auxv_ranges)))
+  show by defs(taut(fp2, rs2, sx2), mallocng.shown_in)
 qed
 
 // (refilled: the reserve R2's K pages fresh -- the C world's bytes)
@@ -1147,7 +1167,10 @@ proof
     show := mp(all_elim(hq, {a}), hao, (int_le(int_mul(int_div(R2, x86_64_linux.PAGE), x86_64_linux.PAGE), a) &&
       int_lt(a, int_mul(int_add(int_div(R2, x86_64_linux.PAGE), K), x86_64_linux.PAGE)) by arith(w1, w2, kp, hal, hro, hko, hao)))
   qed
-  show by defs(taut(fp2, rs2), mallocng.shown_in)
+  have {sx = aux} := h
+  have sx2 := apply(mp.aux_same[A := A, A2 := mp.refill(A, R2, K, B), objs := objs], sx, simp(),
+    (mallocng.auxv_ranges(mp.refill(A, R2, K, B)) = mallocng.auxv_ranges(A) by defs(simp(), mallocng.auxv_ranges)))
+  show by defs(taut(fp2, rs2, sx2), mallocng.shown_in)
 qed
 
 // (the bytes of pages p .. p+n-1 the C world's: of a part of them too)
@@ -4216,7 +4239,8 @@ proof
     step e3 from e1 with mp.st64w_det, ms.st32_det using conj(w1W, w1u, kb, u0r, u8r, cv, hx, cnz)
     have fsl _ _ _ := expand(heo, mallocng_specs.errno_ok)
     // (the invariant, errno's place: so on Vr)
-    have hinr := apply(mp.free_holds[c := c, A := A, vm := V0, vm2 := Vr, b := B, objs := s.objs], hin, er, eb)
+    have hinr := apply(mp.free_holds[c := c, A := A, vm := V0, vm2 := Vr, b := B, objs := s.objs], hin,
+      apply(mp.aux_all[c := c, A := A, vm := V0, b := B, objs := s.objs], hat, hin, hsh), er, eb)
     have up := mp(app_update_other[f := Vr, k := "bytes", v := V0.bytes, x := "pages"], (!("pages" = "bytes") by simp()))
     have ep: Vr.pages = V0.pages := sym(rewrite(er, up))
     have hear: mallocng_specs.errno_apart(c, A, Vr, s.fs_base)

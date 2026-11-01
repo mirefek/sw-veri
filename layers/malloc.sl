@@ -82,7 +82,9 @@ law inv_wf(s: Heap): alloc_inv(s) -> heap_wf(s)
 
 law owned_private(s: Heap): alloc_inv(s) -> disjoint(alloc_owned(s), live(s))
 
-law owned_mapped(s: Heap): alloc_inv(s) -> all a: nat. a in alloc_owned(s) -> mapped(s.vm, a / PAGE)
+// (owned memory is mapped -- or a live stack object of the world: the
+// program's data on the initial stack, which the C world sees only so)
+law owned_mapped(s: Heap): alloc_inv(s) -> all a: nat. a in alloc_owned(s) -> mapped(s.vm, a / PAGE) || a in s.objs.live
 
 // The invariant depends only on what the allocator controls: a client that
 // changes other memory keeps it (and cannot corrupt the heap). The client
@@ -90,13 +92,15 @@ law owned_mapped(s: Heap): alloc_inv(s) -> all a: nat. a in alloc_owned(s) -> ma
 // the allocator's control, as does all of the allocator's own memory and
 // the program break (an allocator may extend it; musl's sbrk refuses to
 // move it). The thread pointer and the stack's place are the process's,
-// no client's to change.
+// no client's to change; owned bytes that are stack objects (the initial
+// stack's data) stay live.
 law frame(s: Heap, t: Heap):
   alloc_inv(s) && t.blocks = s.blocks && t.vm.brk = s.vm.brk &&
   t.fs_base = s.fs_base && t.vm.stack_top = s.vm.stack_top && t.vm.stack_limit = s.vm.stack_limit &&
   (all a: nat. a in alloc_owned(s) ->
      t.vm.bytes[bits[64](a)] = s.vm.bytes[bits[64](a)] &&
      t.vm.pages[a / PAGE] = s.vm.pages[a / PAGE]) &&
+  (all a: nat. a in alloc_owned(s) && a in s.objs.live -> a in t.objs.live) &&
   (all a: nat. a in live(s) -> t.vm.pages[a / PAGE] = s.vm.pages[a / PAGE]) ->
   alloc_inv(t) && alloc_owned(t) = alloc_owned(s)
 
