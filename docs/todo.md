@@ -35,10 +35,17 @@ The step left:
   `ui.until_run`, `ui.until_step`; the ELF's headers, `ui.elf`; the text
   loaded at exec, `ui.text_code`; exec's stack reserve, `ui.exec_reserve`
   (from exec.sl's growth-room clause); `_start`'s 5 steps, `ui.start4`,
-  `ui.start_call` -- the state `ui.s5` at `_start_c`'s entry). Left: the
-  bridge's entry facts at `ui.s5` (`abi.loaded` with the push, `tr.eok`
-  -- the reserve through `x86.stk_ext` --, `tr.objs_ok` and `tr.vok` with
-  exec's stack data as the callers' objects); `lk.start_impl` at `_start_c` (its outcome by `ui.until_run`:
+  `ui.start_call` -- the state `ui.s5` at `_start_c`'s entry; the
+  bridge's entry facts there: `ui.entry_loaded`, `ui.entry_eok`,
+  `ui.entry_objs` -- exec's stack data the callers' objects, `ui.iobjs`
+  --, the world's view `ui.wvm` with `ui.wvm_vok`; `_start_c`'s spec's
+  runs under its precondition, `ui.c_q`: an overflow or main entered with
+  startup's effect, to_main's havoc satisfiable by `ui.main_exists`).
+  Left: `lk.start_impl` applied at `ui.s5` with `ui.until_run` and `ui.c_q`
+  (no undefined behaviour and no return given the precondition); the
+  precondition `ui.c_pre` at the world's view from exec's stack layout
+  (the words, strings, program headers, globals, AT_RANDOM, ctors);
+  `lk.start_impl` at `_start_c` (its outcome by `ui.until_run`:
   no undefined behaviour, the spec never returns, so the stop at main);
   `mp.empty_rep`'s premises from the spec's world at main and exec's
   image; the owned bound. Exec to the C world at `_start` (its 5 instructions
