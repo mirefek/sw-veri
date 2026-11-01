@@ -4145,3 +4145,93 @@ proof
   have r3 := trans(apply(ui.rd_zero[M := ui.MV(m), a := ui.C.lock, n := 4], eval(), z3), (int_sum(0, 4, i. 0) = 0 by eval()))
   show by taut(z1, rewrite(sym(nl), z2), r3)
 qed
+
+// a byte of the image (below its globals' end), not startup's write: at
+// main exec's, its page the load's last on it
+theorem ui.mm_any: all m0 s lo top argv envp auxv m V fs i a. ui.MX(m0, s, lo, top, argv, envp, auxv, m, V, fs) -> i in omega -> a in omega ->
+  ui.TAB(i, int_div(a, x86_64_linux.PAGE)) -> int_lt(a, 4228696) -> !(a in startup_specs.start_writes(ui.G)) ->
+  mallocng.b8(ui.MV(m), a) = m0.vm.bytes[a] &&
+  mallocng.pg(ui.MV(m), a) = some(fn_update(fn_update(empty, "prot", x86_64_linux.seg_prot(x86_64_linux.segment(musl_malloc.file, i))), "kind", 0))
+proof
+  fix m0 s lo top argv envp auxv m V fs i a
+  assume h hi ha ht hlt hw
+  have hx hat := expand(h, ui.MX)
+  have hc hlo .. := expand(hx, ui.SX)
+  have he := expand(hx, ui.SX).10
+  have _ _ _ _ hl .. := expand(hc, ui.ctx)
+  let p := int_div(a, x86_64_linux.PAGE)
+  let PG := fn_update(fn_update(empty, "prot", x86_64_linux.seg_prot(x86_64_linux.segment(musl_malloc.file, i))), "kind", 0)
+  have ab: a in bits(64) by arith(ha, hlt)
+  have bi: bits_of_int(64, a) = a := apply(nf.boi_in[n := 64, x := a], eval(), ab)
+  have po: p in omega by arith(ha)
+  have pl: int_lt(p, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) by arith(ha, hlt)
+  have ep := apply(ui.img_pg[argv := argv, envp := envp, m0 := m0, i := i, p := p], he, hi, po, apply(ui.last_tab[i := i, p := p], hi, po, ht))
+  have mq: x86_64_linux.mapped(m0.vm, p) by defs(taut(pl, rewrite(sym(ep), ui.some_nn[x := PG])), x86_64_linux.mapped)
+  have ew := apply(ui.w_low[m0 := m0, s := s, lo := lo, top := top, p := p], hc, po, arith(ht, hlo), mq)
+  have mw := apply(ui.mapped_eq[v1 := m0.vm, v2 := ui.wvm(s.vm), p := p], sym(ew), mq)
+  have sn: snd(ui.wvm(s.vm).pages[p]) = PG := rewrite(sym(trans(ew, ep)), ui.snd_some[x := PG])
+  have kd: !(snd(ui.wvm(s.vm).pages[p]).kind = 2) := rewrite(sym(sn), (!(PG.kind = 2) by rsimp()))
+  have pq: x86_64_linux.page_of(a) = p by defs(rsimp(ab), x86_64_linux.page_of)
+  have b1 := apply(ui.main_byte[s := s, objs := ui.iobjs(m0.gpr[4], top), m := m, a := m0.gpr[4], V := V, fs := fs, x := a], hat, ab, mw, kd, hw)
+  have b2 := apply(ui.w_byte[m0 := m0, s := s, lo := lo, top := top, a := a], hc, ab, rewrite(sym(pq), mq), (!(int_le(int_sub(m0.gpr[4], 8), a) && int_lt(a, m0.gpr[4])) by arith(hl, hlo, hlt)))
+  have g1 g2 := apply(ui.main_pg[s := s, objs := ui.iobjs(m0.gpr[4], top), m := m, a := m0.gpr[4], V := V, fs := fs, p := p], hat, po, pl)
+  have mv1 mv2 := apply(ui.mview_at[vm := ui.wvm(m.vm), a := a], ha)
+  have wb: ui.wvm(m.vm).bytes[a] = m.vm.bytes[a] by rsimp()
+  have r1: mallocng.b8(ui.MV(m), a) = m0.vm.bytes[a] := trans(rewrite(bi, mv1), trans(wb, trans(b1, b2)))
+  have r2: mallocng.pg(ui.MV(m), a) = some(PG) := trans(mv2, trans(g1, trans(apply(ui.app_eq[k := p], g2), trans(ew, ep))))
+  show := conj(r1, r2)
+qed
+
+// a read-only load (its header's values; its bytes all the file's, on
+// its own pages): at main as exec mapped it
+theorem ui.ro_seg: all m0 s lo top argv envp auxv m V fs j fl of va n. ui.MX(m0, s, lo, top, argv, envp, auxv, m, V, fs) -> j in omega -> int_le(j, 3) ->
+  ui.segis(musl_malloc.file, j, 1, fl, of, va, n, n) -> of in omega -> va in omega -> int_le(int_add(va, n), 4227080) ->
+  (all x. x in omega -> int_le(va, x) -> int_lt(x, int_add(va, n)) -> ui.TAB(j, int_div(x, x86_64_linux.PAGE))) ->
+  mallocng.ro_segment_ok(musl_malloc.file, j, x86_64_linux.segment(musl_malloc.file, j), ui.MV(m))
+proof
+  fix m0 s lo top argv envp auxv m V fs j fl of va n
+  assume h hj hj3 hg ho hv hend htab
+  have hx _ := expand(h, ui.MX)
+  have he := expand(hx, ui.SX).10
+  let F := musl_malloc.file
+  have _ ef eo ev efs ems := expand(hg, ui.segis)
+  have dat _ := apply(ui.seg_bytes[argv := argv, envp := envp, m0 := m0, j := j, ty := 1, fl := fl, of := of, va := va, fs := n, ms := n], he, hj, hj3, hg)
+  have one: all x. x in omega -> int_le(va, x) -> int_lt(x, int_add(va, n)) ->
+      mallocng.b8(ui.MV(m), x) = F[int_add(of, int_sub(x, va))] &&
+      mallocng.pg(ui.MV(m), x) = some(fn_update(fn_update(empty, "prot", x86_64_linux.seg_prot(x86_64_linux.segment(F, j))), "kind", 0)) proof
+    fix x
+    assume hxo h1 h2
+    have nw: !(x in startup_specs.start_writes(ui.G)) proof
+      assume hw
+      have _ b _ := apply(ui.sw_range[x := x], hw)
+      show by arith(b, h2, hend)
+    qed
+    have b1 p1 := apply(ui.mm_any[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs, i := j, a := x], h, hj, hxo,
+      mp(all_elim(htab, {x}), hxo, h1, h2), arith(h2, hend), nw)
+    have d := mp(all_elim(dat, {x}), hxo, h1, h2)
+    have bi: bits_of_int(64, x) = x := apply(nf.boi_in[n := 64, x := x], eval(), (x in bits(64) by arith(hxo, h2, hend)))
+    show := conj(trans(b1, rewrite(bi, d)), p1)
+  qed
+  unfold mallocng.ro_segment_ok
+  assume _
+  have c1: all x0. x0 in omega -> int_le(x86_64_linux.segment(F, j).vaddr, x0) && int_lt(x0, int_add(x86_64_linux.segment(F, j).vaddr, x86_64_linux.segment(F, j).memsz)) ->
+      mallocng.b8(ui.MV(m), x0) = ite(int_lt(x0, int_add(x86_64_linux.segment(F, j).vaddr, x86_64_linux.segment(F, j).filesz)),
+        F[int_add(x86_64_linux.segment(F, j).offset, int_sub(x0, x86_64_linux.segment(F, j).vaddr))], 0) proof
+    fix x0
+    assume hxo hr
+    have r1 r2 := rewrite(ev, rewrite(ems, hr))
+    have b _ := mp(all_elim(one, {x0}), hxo, r1, r2)
+    have it := mp(ite_t[c := int_lt(x0, int_add(va, n)), a := F[int_add(of, int_sub(x0, va))], b := 0], r2)
+    show := rewrite(sym(ev), rewrite(sym(efs), rewrite(sym(eo), trans(b, sym(it)))))
+  qed
+  have c2: all x0. x0 in omega -> (int_le(x86_64_linux.segment(F, j).vaddr, x0) && int_lt(x0, int_add(x86_64_linux.segment(F, j).vaddr, x86_64_linux.segment(F, j).memsz))) &&
+      x86_64_linux.last_on_page(F, j, int_div(x0, x86_64_linux.PAGE)) ->
+      mallocng.pg(ui.MV(m), x0) = some(fn_update(fn_update(empty, "prot", x86_64_linux.seg_prot(x86_64_linux.segment(F, j))), "kind", 0)) proof
+    fix x0
+    assume hxo hr
+    have r1 r2 _ := rewrite(ev, rewrite(ems, hr))
+    have _ p := mp(all_elim(one, {x0}), hxo, r1, r2)
+    show := p
+  qed
+  show by taut(c1, c2)
+qed
