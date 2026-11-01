@@ -32,11 +32,13 @@ addresses (`lk.pok`).
 The step left:
 - (d) The top (proofs/mallocng/init.core; done: the empty heap's `rep`
   from memory facts, `mp.empty_rep`; the claim's run as a stopped run,
-  `ui.until_run`, `ui.until_step`; the ELF's headers, `ui.elf`). Left:
-  the text loaded at exec (`code_at` from `image_loaded` by `ui.elf`, the
-  text's bytes the file's by evaluation); `_start`'s steps
-  (`ui.until_step` with its decode facts; the call's push may grow the
-  stack); `lk.start_impl` at `_start_c` (its outcome by `ui.until_run`:
+  `ui.until_run`, `ui.until_step`; the ELF's headers, `ui.elf`; the text
+  loaded at exec, `ui.text_code`; exec's stack reserve, `ui.exec_reserve`
+  (from exec.sl's growth-room clause); `_start`'s 5 steps, `ui.start4`,
+  `ui.start_call` -- the state `ui.s5` at `_start_c`'s entry). Left: the
+  bridge's entry facts at `ui.s5` (`abi.loaded` with the push, `tr.eok`
+  -- the reserve through `x86.stk_ext` --, `tr.objs_ok` and `tr.vok` with
+  exec's stack data as the callers' objects); `lk.start_impl` at `_start_c` (its outcome by `ui.until_run`:
   no undefined behaviour, the spec never returns, so the stop at main);
   `mp.empty_rep`'s premises from the spec's world at main and exec's
   image; the owned bound. Exec to the C world at `_start` (its 5 instructions
