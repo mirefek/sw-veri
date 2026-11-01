@@ -4965,3 +4965,105 @@ proof
   qed
   show := apply(mp.fpm_intro[RS := RS, XS := XS, b := b, vm := ui.wvm(m.vm)], k1, k2)
 qed
+
+// (a read of a memory whose bytes there are a machine's: the machine's)
+theorem ui.rd_vm: all M vm a n. a in omega -> n in omega -> int_le(int_add(a, n), 18446744073709551616) ->
+  (all i. i in omega -> int_lt(i, n) -> mallocng.b8(M, int_add(a, i)) = vm.bytes[int_add(a, i)]) -> mallocng.rd(M, a, n) = gimple.bytes_at(vm, a, n)
+proof
+  fix M vm a n
+  assume ha hn hl hs
+  have pw: all j. j in omega -> int_le(0, j) -> int_lt(j, n) ->
+      int_mul(mallocng.b8(M, int_add(a, j)), int_pow(256, j)) = int_mul(vm.bytes[bits_add(64, a, bits_of_int(64, j))], int_pow(256, j)) proof
+    fix j
+    assume hj _ hjl
+    have ba: bits_add(64, a, bits_of_int(64, j)) = int_add(a, j) by defs(arith(ha, hj, hjl, hl), bits_add, bits_of_int, pow2)
+    show by rsimp(ba, mp(all_elim(hs, {j}), hj, hjl))
+  qed
+  have e := mp(int_sum_ext[a := 0, b := n, f := j. int_mul(mallocng.b8(M, int_add(a, j)), int_pow(256, j)),
+    g := j. int_mul(vm.bytes[bits_add(64, a, bits_of_int(64, j))], int_pow(256, j))], eval(), hn, pw)
+  show by defs(e, mallocng.rd, gimple.bytes_at)
+qed
+
+// a word of exec's stack data at main: exec's
+theorem ui.mm_word: all m0 s lo top argv envp auxv m V fs X. ui.MX(m0, s, lo, top, argv, envp, auxv, m, V, fs) -> X in omega ->
+  int_le(m0.gpr[4], X) -> int_le(int_add(X, 8), int_mul(top, x86_64_linux.PAGE)) ->
+  mallocng.rd(ui.MV(m), X, 8) = x86_64_linux.le(m0.vm.bytes, bits_of_int(64, X), 8)
+proof
+  fix m0 s lo top argv envp auxv m V fs X
+  assume h hX h1 h2
+  have hx _ := expand(h, ui.MX)
+  have hc .. := expand(hx, ui.SX)
+  have hM _ _ hs .. := expand(hc, ui.ctx)
+  have s1 s2 .. := expand(hs, x86_64_linux.stack_pages)
+  have bt: m0.vm.bytes in fn_space(bits(64), bits(8)) by simp(expand(apply(x86i.parts, hM).4, x86_64_linux.Vm))
+  have ab: bits_of_int(64, X) = X := apply(nf.boi_in[n := 64, x := X], eval(), (X in bits(64) by arith(hX, h2, s2)))
+  have pb: all i. i in omega -> int_lt(i, 8) -> mallocng.b8(ui.MV(m), int_add(X, i)) = m0.vm.bytes[int_add(X, i)] proof
+    fix i
+    assume hi hil
+    show := apply(ui.mm_stk[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs, x := int_add(X, i)], h,
+      arith(hX, hi), arith(h1, hi), arith(h2, hil))
+  qed
+  have r := apply(ui.rd_vm[M := ui.MV(m), vm := m0.vm, a := X, n := 8], hX, eval(), arith(h2, s2), pb)
+  have l8 := mp(x86.le8_nat[vm := m0.vm, a := X], bt)
+  show := subst({y. mallocng.rd(ui.MV(m), X, 8) = x86_64_linux.le(m0.vm.bytes, y, 8)}, sym(ab), trans(r, sym(l8)))
+qed
+
+// libc's vector pointer at main: the vector's address (past envp's words)
+theorem ui.mm_libc: all m0 s lo top argv envp auxv m V fs. ui.MX(m0, s, lo, top, argv, envp, auxv, m, V, fs) ->
+  mallocng.rd(ui.MV(m), int_add(ui.C.libc, 8), 8) = ui.AT(m0, argv, envp)
+proof
+  fix m0 s lo top argv envp auxv m V fs
+  assume h
+  have hx ha := expand(h, ui.MX)
+  have hc hlo hna hne hel hla hsl hao hsd he hu h31 := expand(hx, ui.SX)
+  have hM _ _ hs .. := expand(hc, ui.ctx)
+  have s1 s2 .. := expand(hs, x86_64_linux.stack_pages)
+  have r0 := apply(x86i.rsp_typed, hM)
+  let R := m0.gpr[4]
+  let OB := ui.iobjs(R, top)
+  let la := seq_len(argv)
+  have _ _ hm2 _ _ _ _ hvok := expand(ha, ui.at_main)
+  have cl: ui.C.libc = 4227136 by eval()
+  have gl: ui.G.libc = 4227136 by eval()
+  // (the bytes: the view's, libc's data page in the C world's domain)
+  have _ wm := expand(hvok, tr.vok)
+  have {wb = bytes} := expand(wm, tr.wmc)
+  have pb: all i. i in omega -> int_lt(i, 8) -> mallocng.b8(ui.MV(m), int_add(int_add(4227136, 8), i)) = V.bytes[int_add(int_add(4227136, 8), i)] proof
+    fix i
+    assume hi hil
+    let x := int_add(int_add(4227136, 8), i)
+    let p := int_div(x, x86_64_linux.PAGE)
+    have xo: x in omega by arith(cl, hi)
+    have xb: x in bits(64) by arith(cl, hi, hil)
+    have bi: bits_of_int(64, x) = x := apply(nf.boi_in[n := 64, x := x], eval(), xb)
+    have mq pk := apply(ui.mm_map[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs, i := 3, a := x], h, eval(), xo,
+      (ui.TAB(3, p) by arith(cl, hi, hil)))
+    have g1 _ := apply(ui.main_pg[s := s, objs := OB, m := m, a := R, V := V, fs := fs, p := p], ha, arith(xo), arith(cl, hi, hil))
+    have vm: x86_64_linux.mapped(V, p) by defs(rewrite(g1, expand(mq, x86_64_linux.mapped)), x86_64_linux.mapped)
+    have vk: !(snd(V.pages[p]).kind = 2) := rewrite(g1, pk)
+    have cs: x in abi.cball by sel(conj(xo, (!(x in empty) by taut(empty_mem[x := x]))))
+    have ce: abi.wob(OB, tr.cbm(false, m.fs_base)).c_bytes = abi.cball by rsimp()
+    have cb: x in abi.wob(OB, tr.cbm(false, m.fs_base)).c_bytes := rewrite(sym(ce), cs)
+    have dm: abi.in_domain(V, abi.wob(OB, tr.cbm(false, m.fs_base)), x) by defs(taut(vm, vk, cb), abi.in_domain)
+    have mb := mp(all_elim(wb, {x}), xb, dm)
+    have mv1 _ := apply(ui.mview_at[vm := ui.wvm(m.vm), a := x], xo)
+    have wb2: ui.wvm(m.vm).bytes[x] = m.vm.bytes[x] by rsimp()
+    show := trans(rewrite(bi, mv1), trans(wb2, mb))
+  qed
+  have rv := apply(ui.rd_vm[M := ui.MV(m), vm := V, a := int_add(4227136, 8), n := 8], eval(), eval(), eval(), pb)
+  // (the startup's value: envp's end past its NULL word)
+  have a0 .. := expand(hsl, x86_64_linux.stack_layout)
+  have _ ib .. := expand(hsd, x86_64_linux.stack_data, x86_64_linux.in_stack)
+  have nl: seq_len(auxv) in omega by defs(simp(expand(hla, list_type)), seq_len)
+  have ro: R in omega by arith(r0)
+  have top8: int_le(int_add(int_add(R, 16), int_mul(8, int_add(la, 1))), int_mul(top, x86_64_linux.PAGE)) by arith(ib, hna, hne, nl, r0)
+  have w0 := apply(ui.w_word[m0 := m0, s := s, lo := lo, top := top, a := R], hc, ro, arith(r0), arith(top8, hna, r0))
+  have ac: gimple.bytes_at(ui.wvm(s.vm), R, 8) = la := trans(w0, expand(a0, x86_64_linux.u64_at))
+  let E := int_add(int_add(R, 16), int_mul(8, la))
+  have eE: bits_add(64, R, int_mul(8, int_add(la, 2))) = E := trans(apply(x86.add_nowrap[a := R, b := int_mul(8, int_add(la, 2))], ro, arith(hna), arith(top8, s2, hna, r0)),
+    (int_add(R, int_mul(8, int_add(la, 2))) = E by arith()))
+  have ev := apply(ui.env_view[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, E := E], hc, hna, hne, hla, hsl, hsd, refl({E}))
+  have q := mp(all_elim(rewrite(eE, rewrite(ac, hm2)), {seq_len(envp)}), hne, ev)
+  have e: mallocng.rd(ui.MV(m), int_add(4227136, 8), 8) = ui.AT(m0, argv, envp) by arith(trans(rv, rewrite(gl, q)))
+  show := rewrite(sym(cl), e)
+qed
