@@ -2873,3 +2873,136 @@ proof
   show by defs(ex_intro({1}, taut((1 in omega by eval()), (ui.P.init_array_end = int_add(ui.P.init_array, int_mul(8, 1)) by eval()),
     (int_lt(ui.P.init_array_end, int_pow(2, 63)) by eval()), c)), startup_specs.ctors_ok)
 qed
+
+// ----------------------------------------------------------------------
+//  Exec's stack data as startup reads it
+
+// exec's process (unprivileged), its stack [lo, top) above the image, the
+// stack's data, the entry s
+def ui.SX(m0, s, lo, top, argv, envp, auxv) := ui.ctx(m0, s, lo, top) && int_lt(1032, lo) && seq_len(argv) in omega && seq_len(envp) in omega &&
+  (all i. i in omega -> int_lt(i, seq_len(argv)) -> seq_len(argv[i]) in omega) && auxv in list_type(cart(omega, omega)) &&
+  x86_64_linux.stack_layout(m0.vm, m0.gpr[4], argv, envp, auxv) && x86_64_linux.auxv_ok(musl_malloc.file, m0.vm, m0.os, auxv) &&
+  x86_64_linux.stack_data(m0.vm, m0.gpr[4], int_mul(top, x86_64_linux.PAGE), argv, envp, auxv) &&
+  x86_64_linux.exec_state(musl_malloc.file, argv, envp, m0) && claim_malloc.unprivileged(m0.os)
+
+// (a word of exec's memory: a number below 2^64)
+theorem ui.le_nat: all m0 a. m0 in x86_64_linux.Machine -> x86_64_linux.le(m0.vm.bytes, a, 8) in omega && int_lt(x86_64_linux.le(m0.vm.bytes, a, 8), 18446744073709551616)
+proof
+  fix m0 a
+  assume hM
+  have bt: m0.vm.bytes in fn_space(bits(64), bits(8)) by simp(expand(apply(x86i.parts, hM).4, x86_64_linux.Vm))
+  have l8 := mp(x86.le8_nat[vm := m0.vm, a := a], bt)
+  have qo ql := apply(g.bytes_bound[vm := m0.vm, a := a, n := 8], bt, eval())
+  show := rewrite(sym(l8), conj(qo, rewrite((int_pow(256, 8) = 18446744073709551616 by eval()), ql)))
+qed
+
+// argv[0] (the program's name; none: argc 0, the null word): a C string
+// on the stack
+theorem ui.pn_cstr: all m0 s lo top argv envp auxv pn. ui.SX(m0, s, lo, top, argv, envp, auxv) ->
+  pn = bits_of_int(64, x86_64_linux.le(m0.vm.bytes, bits_of_int(64, int_add(m0.gpr[4], 8)), 8)) -> !(pn = 0) ->
+  startup_specs.cstr(ui.wvm(s.vm), ui.wob0(m0.gpr[4], top), pn, startup_specs.start_writes(ui.G))
+proof
+  fix m0 s lo top argv envp auxv pn
+  assume hx hpn hnz
+  have hc hlo hna hne hel hla hsl hao hsd .. := expand(hx, ui.SX)
+  have hM _ _ hs hl _ h16 _ := expand(hc, ui.ctx)
+  have r0 := apply(x86i.rsp_typed, hM)
+  let R := m0.gpr[4]
+  have _ ia z1 .. := expand(hsl, x86_64_linux.stack_layout, x86_64_linux.cstring, x86_64_linux.u64_at)
+  have _ _ sa .. := expand(hsd, x86_64_linux.stack_data, x86_64_linux.in_stack, x86_64_linux.u64_at)
+  let Q := x86_64_linux.le(m0.vm.bytes, bits_of_int(64, int_add(R, 8)), 8)
+  have qo ql := mp(ui.le_nat[m0 := m0, a := bits_of_int(64, int_add(R, 8))], hM)
+  have e0: int_add(int_add(R, 8), int_mul(8, 0)) = int_add(R, 8) by arith(r0)
+  have c0: seq_len(argv) = 0 -> false proof
+    assume h0
+    have z := rewrite(e0, rewrite(h0, z1))
+    have qz := subst({y. bits_of_int(64, Q) = bits_of_int(64, y)}, z, refl({bits_of_int(64, Q)}))
+    have p0: pn = 0 := trans(hpn, trans(qz, (bits_of_int(64, 0) = 0 by eval())))
+    show by taut(p0, hnz)
+  qed
+  have c1: int_lt(0, seq_len(argv)) -> startup_specs.cstr(ui.wvm(s.vm), ui.wob0(R, top), pn, startup_specs.start_writes(ui.G)) proof
+    assume hp
+    have _ zb _ := rewrite(e0, mp(all_elim(ia, {0}), eval(), hp))
+    have b1 b2 := rewrite(e0, mp(all_elim(sa, {0}), eval(), hp))
+    have L0 := mp(all_elim(hel, {0}), eval(), hp)
+    have cq := apply(ui.cstr_stk[m0 := m0, s := s, lo := lo, top := top, q := Q, L := seq_len(argv[0])], hc, hlo, qo, L0, zb, b1, b2)
+    have qb: bits_of_int(64, Q) = Q := apply(nf.boi_in[n := 64, x := Q], eval(), (Q in bits(64) by arith(qo, ql)))
+    show := rewrite(sym(trans(hpn, qb)), cq)
+  qed
+  show by taut(c0, c1, (seq_len(argv) = 0 || int_lt(0, seq_len(argv)) by arith(hna)))
+qed
+
+// aux[AT_EXECFN] (the executable's name): a C string on the stack
+theorem ui.execfn: all m0 s lo top argv envp auxv. ui.SX(m0, s, lo, top, argv, envp, auxv) ->
+  all v. v in omega -> startup_specs.aux_is(auxv, x86_64_linux.AT_EXECFN, v) -> !(v = 0) ->
+    startup_specs.cstr(ui.wvm(s.vm), ui.wob0(m0.gpr[4], top), v, startup_specs.start_writes(ui.G))
+proof
+  fix m0 s lo top argv envp auxv
+  assume hx
+  fix v
+  assume hv ha hnz
+  have hc hlo hna hne hel hla hsl hao hsd .. := expand(hx, ui.SX)
+  have uq := expand(hao, x86_64_linux.auxv_ok).12
+  have _ _ _ _ _ ix := expand(hsd, x86_64_linux.stack_data, x86_64_linux.in_stack, x86_64_linux.aux)
+  obtain q str, hq hs hk hcs b1 b2 from ix
+  have vq := apply(ui.aux_eq[auxv := auxv, key := x86_64_linux.AT_EXECFN, q := q, v := v], uq, (!(x86_64_linux.AT_EXECFN = x86_64_linux.AT_NULL) by defs(eval(), x86_64_linux.AT_EXECFN, x86_64_linux.AT_NULL)), hk, ha)
+  have _ zb := expand(hcs, x86_64_linux.cstring)
+  have L0: seq_len(str) in omega by defs(simp(expand(hs, list_type)), seq_len)
+  have cq := apply(ui.cstr_stk[m0 := m0, s := s, lo := lo, top := top, q := q, L := seq_len(str)], hc, hlo, hq, L0, zb, b1, b2)
+  show := rewrite(sym(vq), cq)
+qed
+
+// aux[AT_RANDOM] (16 random bytes): on the stack, startup writing none
+theorem ui.random: all m0 s lo top argv envp auxv. ui.SX(m0, s, lo, top, argv, envp, auxv) ->
+  all e. e in omega -> startup_specs.aux_is(auxv, x86_64_linux.AT_RANDOM, e) -> !(e = 0) ->
+    gimple.usable(ui.wvm(s.vm), ui.wob0(m0.gpr[4], top), e, 8, false) && int_lt(int_add(e, 8), int_pow(2, 63)) &&
+    (all i. i in omega -> int_lt(i, 8) -> !(int_add(e, i) in startup_specs.start_writes(ui.G)))
+proof
+  fix m0 s lo top argv envp auxv
+  assume hx
+  fix e
+  assume he ha hnz
+  have hc hlo hna hne hel hla hsl hao hsd .. := expand(hx, ui.SX)
+  have hM _ _ hs .. := expand(hc, ui.ctx)
+  have s1 s2 .. := expand(hs, x86_64_linux.stack_pages)
+  have uq := expand(hao, x86_64_linux.auxv_ok).12
+  have _ _ _ _ ir _ := expand(hsd, x86_64_linux.stack_data, x86_64_linux.in_stack, x86_64_linux.aux)
+  obtain q, hq hk b1 b2 from ir
+  have eq := apply(ui.aux_eq[auxv := auxv, key := x86_64_linux.AT_RANDOM, q := q, v := e], uq, (!(x86_64_linux.AT_RANDOM = x86_64_linux.AT_NULL) by defs(eval(), x86_64_linux.AT_RANDOM, x86_64_linux.AT_NULL)), hk, ha)
+  have us := apply(ui.us_stack[m0 := m0, s := s, lo := lo, top := top, x := q, n := 8, w := false], hc, hq, eval(), b1, arith(b2, hq))
+  have nw: all i. i in omega -> int_lt(i, 8) -> !(int_add(q, i) in startup_specs.start_writes(ui.G)) proof
+    fix i
+    assume hi hil
+    show := apply(ui.stk_nw[m0 := m0, s := s, lo := lo, top := top, x := int_add(q, i)], hc, hlo, arith(hq, hi), arith(b1, hq, hi))
+  qed
+  show := rewrite(sym(eq), conj(conj(us, (int_lt(int_add(q, 8), int_pow(2, 63)) by arith(b2, hq, s2))), nw))
+qed
+
+// the vector's other entries musl reads: the headers', the credentials
+// (unprivileged: real and effective the same), not secure
+theorem ui.auxs: all m0 s lo top argv envp auxv. ui.SX(m0, s, lo, top, argv, envp, auxv) ->
+  (startup_specs.aux_is(auxv, x86_64_linux.AT_PHDR, 4194368) && startup_specs.aux_is(auxv, x86_64_linux.AT_PHENT, 56) &&
+   startup_specs.aux_is(auxv, x86_64_linux.AT_PHNUM, 8)) &&
+  (startup_specs.aux_is(auxv, x86_64_linux.AT_UID, m0.os.creds.uid) && startup_specs.aux_is(auxv, x86_64_linux.AT_EUID, m0.os.creds.uid) &&
+   startup_specs.aux_is(auxv, x86_64_linux.AT_GID, m0.os.creds.gid) && startup_specs.aux_is(auxv, x86_64_linux.AT_EGID, m0.os.creds.gid)) &&
+  startup_specs.aux_is(auxv, x86_64_linux.AT_SECURE, 0)
+proof
+  fix m0 s lo top argv envp auxv
+  assume hx
+  have hc hlo hna hne hel hla hsl hao hsd he hu := expand(hx, ui.SX)
+  have ns eu eg := expand(hu, claim_malloc.unprivileged)
+  have _ _ k3 k4 k5 k6 k7 k8 k9 k10 _ _ := expand(hao, x86_64_linux.auxv_ok, x86_64_linux.aux)
+  obtain q, hq hk hph _ _ from k10
+  have q0 := apply(ui.phdr_q[q := q], hph)
+  have {pn = phnum} := ui.elf
+  have a1 := apply(ui.aux_is, rewrite(q0, hk))
+  have a2 := apply(ui.aux_is, k3)
+  have a3 := apply(ui.aux_is, rewrite(pn, k4))
+  have a4 := apply(ui.aux_is, k6)
+  have a5 := apply(ui.aux_is, rewrite(sym(eu), k7))
+  have a6 := apply(ui.aux_is, k8)
+  have a7 := apply(ui.aux_is, rewrite(sym(eg), k9))
+  have i0: ite(m0.os.secure, 1, 0) = 0 := mp(ite_f[c := m0.os.secure, a := 1, b := 0], ns)
+  have a8 := apply(ui.aux_is, rewrite(i0, k5))
+  show by taut(a1, a2, a3, a4, a5, a6, a7, a8)
+qed
