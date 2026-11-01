@@ -2503,3 +2503,49 @@ proof
   have c5: gimple.bytes_at(V, bits_of_int(64, int_add(E, int_mul(8, n))), 8) = 0 := trans(e5, rewrite(sym(hE), z2))
   show by defs(taut(c1, c2, c3, c4, c5), startup_specs.env_at)
 qed
+
+// ----------------------------------------------------------------------
+//  The image in the view: startup's globals, the empty string, the
+//  program headers, the constructors
+
+// (a stack page: the stack's kind)
+theorem ui.sp_kind: all vm p. abi.stack_page(vm, p) -> snd(vm.pages[p]).kind = 2
+proof
+  fix vm p
+  assume h
+  have _ k := expand(h, abi.stack_page)
+  show := k
+qed
+
+// startup's globals: on the data's pages, usable
+theorem ui.globals: all argv envp m0 s lo top. x86_64_linux.exec_state(musl_malloc.file, argv, envp, m0) -> ui.ctx(m0, s, lo, top) -> int_lt(1032, lo) ->
+  startup_specs.globals_ok(ui.wvm(s.vm), ui.wob0(m0.gpr[4], top), ui.G)
+proof
+  fix argv envp m0 s lo top
+  assume he hc hlo
+  let V := ui.wvm(s.vm)
+  have c1: all x. x in omega -> x in startup_specs.start_writes(ui.G) -> gimple.usable(V, ui.wob0(m0.gpr[4], top), x, 1, true) &&
+      gimple.usable(V, ui.wob0(m0.gpr[4], top), x, 1, false) && x86_64_linux.mapped(V, int_div(x, x86_64_linux.PAGE)) &&
+      snd(V.pages[int_div(x, x86_64_linux.PAGE)]).prot.r && snd(V.pages[int_div(x, x86_64_linux.PAGE)]).prot.w &&
+      !abi.stack_page(V, int_div(x, x86_64_linux.PAGE)) proof
+    fix x
+    assume hx hw
+    have _ b1 b2 := apply(ui.sw_range[x := x], hw)
+    have pg: all w i. i in omega -> int_lt(i, 1) -> ui.img_page(int_div(int_add(x, i), x86_64_linux.PAGE), w) proof
+      fix w i
+      assume hi hil
+      show by arith(hi, hil, b1, b2, hx)
+    qed
+    have u1 := apply(ui.us_img[argv := argv, envp := envp, m0 := m0, s := s, lo := lo, top := top, x := x, n := 1, w := true], he, hc, hlo, hx, all_elim(pg, {true}))
+    have u2 := apply(ui.us_img[argv := argv, envp := envp, m0 := m0, s := s, lo := lo, top := top, x := x, n := 1, w := false], he, hc, hlo, hx, all_elim(pg, {false}))
+    have mw kd pr pw _ := apply(ui.w_img[argv := argv, envp := envp, m0 := m0, s := s, lo := lo, top := top, p := int_div(x, x86_64_linux.PAGE), w := true], he, hc, hlo,
+      arith(hx), (ui.img_page(int_div(x, x86_64_linux.PAGE), true) by arith(b1, b2, hx)))
+    have ns: !abi.stack_page(V, int_div(x, x86_64_linux.PAGE)) proof
+      assume h
+      show by taut(apply(ui.sp_kind[vm := V, p := int_div(x, x86_64_linux.PAGE)], h), kd)
+    qed
+    show by taut(u1, u2, mw, pr, mp(pw, taut()), ns)
+  qed
+  show by defs(taut(c1, (int_lt(int_add(ui.G.libc, 56), int_pow(2, 63)) by eval()), (!(ui.G.builtin_tls = 0) by eval()),
+    (int_lt(int_add(ui.G.builtin_tls, 336), int_pow(2, 63)) by eval())), startup_specs.globals_ok)
+qed
