@@ -4345,19 +4345,152 @@ proof
   show by defs(ext, mallocng.rd, x86_64_linux.le_at)
 qed
 
+// (a table check: the count of the n entries of w bytes from off that
+// differ from T's)
+abbrev ui.tchk(B, off, w, T, n) := int_sum(0, n, k. ite(ui.le_b(B, int_add(off, int_mul(w, k)), w) = ui.le_b(T, int_mul(w, k), w), 0, 1))
+
+theorem ui.tchk_ok: all B off w T n. n in omega -> ui.tchk(B, off, w, T, n) = 0 ->
+  all i. i in omega -> int_lt(i, n) -> ui.le_b(B, int_add(off, int_mul(w, i)), w) = ui.le_b(T, int_mul(w, i), w)
+proof
+  fix B off w T
+  let P(n) := ui.tchk(B, off, w, T, n) = 0 -> (all i. i in omega -> int_lt(i, n) -> ui.le_b(B, int_add(off, int_mul(w, i)), w) = ui.le_b(T, int_mul(w, i), w))
+  have base: P(0) proof
+    assume _
+    fix i
+    assume hi hil
+    show by arith(hi, hil)
+  qed
+  have step: all n. n in omega -> P(n) -> P(int_add(n, 1)) proof
+    fix n
+    assume hn ih hz
+    let M(k) := ui.le_b(B, int_add(off, int_mul(w, k)), w) = ui.le_b(T, int_mul(w, k), w)
+    let G(k) := ite(M(k), 0, 1)
+    have gn: all k. k in omega -> G(k) in omega proof
+      fix k
+      assume hk
+      have d1: M(k) -> G(k) in omega proof
+        assume h
+        show := rewrite(sym(mp(ite_t[c := M(k), a := 0, b := 1], h)), (0 in omega by eval()))
+      qed
+      have d2: !M(k) -> G(k) in omega proof
+        assume h
+        show := rewrite(sym(mp(ite_f[c := M(k), a := 0, b := 1], h)), (1 in omega by eval()))
+      qed
+      show by taut(d1, d2)
+    qed
+    have uS: int_sum(0, int_add(n, 1), k. G(k)) = int_add(int_sum(0, n, k. G(k)), G(n))
+      by defs(simp(hn, rec({nat_rec(empty, k v. int_add(v, G(int_add(0, k))), int_add(n, 1))}, hn)), int_sum)
+    have sn := mp(int_sum_nat[a := 0, b := n, f := k. G(k)], eval(), hn, gn)
+    have gn0 := mp(all_elim(gn, {n}), hn)
+    have z0: ui.tchk(B, off, w, T, n) = 0 by arith(trans(sym(uS), hz), sn, gn0)
+    have gz: G(n) = 0 by arith(trans(sym(uS), hz), sn, gn0)
+    have mn: M(n) proof
+      have c: !M(n) -> false proof
+        assume nm
+        show by arith(trans(sym(mp(ite_f[c := M(n), a := 0, b := 1], nm)), gz))
+      qed
+      show by taut(c)
+    qed
+    have ihn := mp(ih, z0)
+    fix i
+    assume hi hil
+    have c1: int_lt(i, n) -> M(i) proof
+      assume h
+      show := mp(all_elim(ihn, {i}), hi, h)
+    qed
+    have c2: i = n -> M(i) proof
+      assume e
+      show := subst({y. ui.le_b(B, int_add(off, int_mul(w, y)), w) = ui.le_b(T, int_mul(w, y), w)}, sym(e), mn)
+    qed
+    show by taut(c1, c2, (int_lt(i, n) || i = n by arith(hi, hil, hn)))
+  qed
+  show := mp(nat_ind[p := n. P(n)], base, step)
+qed
+
 // (a table in the file: its entries, by evaluating the file's literal)
-theorem ui.le_tab(n, off, w, x. T): all F B. F = bytes_seq(B) -> bytes_len(B) in omega -> n in omega -> off in omega -> w in omega ->
-  (all i. i in omega -> int_lt(i, n) -> int_le(int_add(int_add(off, int_mul(w, i)), w), bytes_len(B))) ->
-  fn_build(n, i. ui.le_b(B, int_add(off, int_mul(w, i)), w)) = fn_build(n, i. T(i)) ->
-  all i. i in omega -> int_lt(i, n) -> x86_64_linux.le_at(F, int_add(off, int_mul(w, i)), w) = T(i)
+theorem ui.le_tab(n, off, w, T): all F B. F = bytes_seq(B) -> bytes_len(B) in omega -> n in omega -> off in omega -> w in omega ->
+  (w = 1 || w = 2) -> int_le(int_add(off, int_mul(w, n)), bytes_len(B)) -> ui.tchk(B, off, w, T, n) = 0 ->
+  all i. i in omega -> int_lt(i, n) -> x86_64_linux.le_at(F, int_add(off, int_mul(w, i)), w) = ui.le_b(T, int_mul(w, i), w)
 proof
   fix F B
-  assume e hb hn ho hw hl ht
+  assume e hb hn ho hw hw12 hl0 ht
   fix i
   assume hi hil
-  have im := mp(nat_lt_mem[k := i, n := n], hi, hn, hil)
-  have a1 := mp(app_fn_build[d := n, v := j. ui.le_b(B, int_add(off, int_mul(w, j)), w), a := i], im)
-  have a2 := mp(app_fn_build[d := n, v := j. T(j), a := i], im)
-  have v := trans(sym(a1), trans(apply(ui.app_eq[k := i], ht), a2))
-  show := apply(ui.le_val[F := F, B := B, off := int_add(off, int_mul(w, i)), n := w, v := T(i)], e, arith(ho, hw, hi), hw, hb, mp(all_elim(hl, {i}), hi, hil), v)
+  let L := bytes_len(B)
+  have b1: w = 1 -> int_le(int_add(int_add(off, int_mul(w, i)), w), L) proof
+    assume e1
+    have q := rewrite(e1, hl0)
+    show := subst({y. int_le(int_add(int_add(off, int_mul(y, i)), y), L)}, sym(e1), (int_le(int_add(int_add(off, int_mul(1, i)), 1), L) by arith(q, hi, hil, hn, ho)))
+  qed
+  have b2: w = 2 -> int_le(int_add(int_add(off, int_mul(w, i)), w), L) proof
+    assume e1
+    have q := rewrite(e1, hl0)
+    show := subst({y. int_le(int_add(int_add(off, int_mul(y, i)), y), L)}, sym(e1), (int_le(int_add(int_add(off, int_mul(2, i)), 2), L) by arith(q, hi, hil, hn, ho)))
+  qed
+  have bnd: int_le(int_add(int_add(off, int_mul(w, i)), w), L) by taut(hw12, b1, b2)
+  have v := mp(all_elim(apply(ui.tchk_ok[B := B, off := off, w := w, T := T, n := n], hn, ht), {i}), hi, hil)
+  show := apply(ui.le_val[F := F, B := B, off := int_add(off, int_mul(w, i)), n := w, v := ui.le_b(T, int_mul(w, i), w)], e, arith(ho, hw, hi), hw, hb, bnd, v)
+qed
+
+// the file's tables (in the read-only data): the size classes, the slot
+// counts, a_ctz_32's de Bruijn table
+theorem ui.tab_mcnt: all i. i in omega -> int_lt(i, 4) -> x86_64_linux.le_at(musl_malloc.file, int_add(24731, int_mul(1, i)), 1) = mallocng.med_cnt_tab[i]
+proof
+  let T := bytes"1c181420"
+  have f := apply(ui.le_tab[n := 4, off := 24731, w := 1, T := T], unfold(musl_malloc.file), eval(), eval(), eval(), eval(), eval(), eval(), eval())
+  fix i
+  assume hi hil
+  have e0: ui.le_b(T, 0, 1) = 28 by eval()
+  have e1: ui.le_b(T, 1, 1) = 24 by eval()
+  have e2: ui.le_b(T, 2, 1) = 20 by eval()
+  have e3: ui.le_b(T, 3, 1) = 32 by eval()
+  have l: ui.le_b(T, int_mul(1, i), 1) = mallocng.med_cnt_tab[i] by cases({i}, {0}, {4}, simp(at({mallocng.med_cnt_tab[i]}), e0, e1, e2, e3), hi, hil)
+  show := trans(mp(all_elim(f, {i}), hi, hil), l)
+qed
+
+theorem ui.tab_sct: all i. i in omega -> int_lt(i, 48) -> x86_64_linux.le_at(musl_malloc.file, int_add(24608, int_mul(2, i)), 2) = mallocng.size_classes[i]
+proof
+  let T := bytes"0100020003000400050006000700080009000a000c000f001200140019001f0024002a0032003f004800540066007f009200aa00cc00ff00240154019901ff014802aa023203ff03910454056506ff072409aa0acc0cff0f481254159819ff1f"
+  have f := apply(ui.le_tab[n := 48, off := 24608, w := 2, T := T], unfold(musl_malloc.file), eval(), eval(), eval(), eval(), eval(), eval(), eval())
+  fix i
+  assume hi hil
+  have v: (ui.le_b(T, 0, 2) = 1 && ui.le_b(T, 2, 2) = 2 && ui.le_b(T, 4, 2) = 3 && ui.le_b(T, 6, 2) = 4 && ui.le_b(T, 8, 2) = 5 && ui.le_b(T, 10, 2) = 6 && ui.le_b(T, 12, 2) = 7 && ui.le_b(T, 14, 2) = 8 &&
+    ui.le_b(T, 16, 2) = 9 && ui.le_b(T, 18, 2) = 10 && ui.le_b(T, 20, 2) = 12 && ui.le_b(T, 22, 2) = 15 && ui.le_b(T, 24, 2) = 18 && ui.le_b(T, 26, 2) = 20 && ui.le_b(T, 28, 2) = 25 && ui.le_b(T, 30, 2) = 31 &&
+    ui.le_b(T, 32, 2) = 36 && ui.le_b(T, 34, 2) = 42 && ui.le_b(T, 36, 2) = 50 && ui.le_b(T, 38, 2) = 63 && ui.le_b(T, 40, 2) = 72 && ui.le_b(T, 42, 2) = 84 && ui.le_b(T, 44, 2) = 102 && ui.le_b(T, 46, 2) = 127 &&
+    ui.le_b(T, 48, 2) = 146 && ui.le_b(T, 50, 2) = 170 && ui.le_b(T, 52, 2) = 204 && ui.le_b(T, 54, 2) = 255 && ui.le_b(T, 56, 2) = 292 && ui.le_b(T, 58, 2) = 340 && ui.le_b(T, 60, 2) = 409 && ui.le_b(T, 62, 2) = 511 &&
+    ui.le_b(T, 64, 2) = 584 && ui.le_b(T, 66, 2) = 682 && ui.le_b(T, 68, 2) = 818 && ui.le_b(T, 70, 2) = 1023 && ui.le_b(T, 72, 2) = 1169 && ui.le_b(T, 74, 2) = 1364 && ui.le_b(T, 76, 2) = 1637 && ui.le_b(T, 78, 2) = 2047 &&
+    ui.le_b(T, 80, 2) = 2340 && ui.le_b(T, 82, 2) = 2730 && ui.le_b(T, 84, 2) = 3276 && ui.le_b(T, 86, 2) = 4095 && ui.le_b(T, 88, 2) = 4680 && ui.le_b(T, 90, 2) = 5460 && ui.le_b(T, 92, 2) = 6552 && ui.le_b(T, 94, 2) = 8191
+    ) by eval()
+  have l: ui.le_b(T, int_mul(2, i), 2) = mallocng.size_classes[i] by cases({i}, {0}, {48}, simp(at({mallocng.size_classes[i]}), v), hi, hil)
+  show := trans(mp(all_elim(f, {i}), hi, hil), l)
+qed
+
+theorem ui.tab_scnt: all i. i in omega -> int_lt(i, 27) -> x86_64_linux.le_at(musl_malloc.file, int_add(24704, int_mul(1, i)), 1) = mallocng.small_cnt_tab[i]
+proof
+  let T := bytes"1e1e1e1f0f0f140a0a1f0f07190c06150a051208041f0f071c0e06"
+  have f := apply(ui.le_tab[n := 27, off := 24704, w := 1, T := T], unfold(musl_malloc.file), eval(), eval(), eval(), eval(), eval(), eval(), eval())
+  fix i
+  assume hi hil
+  have v: (ui.le_b(T, 0, 1) = 30 && ui.le_b(T, 1, 1) = 30 && ui.le_b(T, 2, 1) = 30 && ui.le_b(T, 3, 1) = 31 && ui.le_b(T, 4, 1) = 15 && ui.le_b(T, 5, 1) = 15 && ui.le_b(T, 6, 1) = 20 && ui.le_b(T, 7, 1) = 10 &&
+    ui.le_b(T, 8, 1) = 10 && ui.le_b(T, 9, 1) = 31 && ui.le_b(T, 10, 1) = 15 && ui.le_b(T, 11, 1) = 7 && ui.le_b(T, 12, 1) = 25 && ui.le_b(T, 13, 1) = 12 && ui.le_b(T, 14, 1) = 6 && ui.le_b(T, 15, 1) = 21 &&
+    ui.le_b(T, 16, 1) = 10 && ui.le_b(T, 17, 1) = 5 && ui.le_b(T, 18, 1) = 18 && ui.le_b(T, 19, 1) = 8 && ui.le_b(T, 20, 1) = 4 && ui.le_b(T, 21, 1) = 31 && ui.le_b(T, 22, 1) = 15 && ui.le_b(T, 23, 1) = 7 &&
+    ui.le_b(T, 24, 1) = 28 && ui.le_b(T, 25, 1) = 14 && ui.le_b(T, 26, 1) = 6
+    ) by eval()
+  have l: ui.le_b(T, int_mul(1, i), 1) = mallocng.small_cnt_tab[i] by cases({i}, {0}, {27}, simp(at({mallocng.small_cnt_tab[i]}), v), hi, hil)
+  show := trans(mp(all_elim(f, {i}), hi, hil), l)
+qed
+
+theorem ui.tab_dbj: all i. i in omega -> int_lt(i, 32) -> x86_64_linux.le_at(musl_malloc.file, int_add(24736, int_mul(1, i)), 1) = mallocng.debruijn32_tab[i]
+proof
+  let T := bytes"000117021d1813031e1b190b1408040d1f161c121a0a070c1511090610050f0e"
+  have f := apply(ui.le_tab[n := 32, off := 24736, w := 1, T := T], unfold(musl_malloc.file), eval(), eval(), eval(), eval(), eval(), eval(), eval())
+  fix i
+  assume hi hil
+  have v: (ui.le_b(T, 0, 1) = 0 && ui.le_b(T, 1, 1) = 1 && ui.le_b(T, 2, 1) = 23 && ui.le_b(T, 3, 1) = 2 && ui.le_b(T, 4, 1) = 29 && ui.le_b(T, 5, 1) = 24 && ui.le_b(T, 6, 1) = 19 && ui.le_b(T, 7, 1) = 3 &&
+    ui.le_b(T, 8, 1) = 30 && ui.le_b(T, 9, 1) = 27 && ui.le_b(T, 10, 1) = 25 && ui.le_b(T, 11, 1) = 11 && ui.le_b(T, 12, 1) = 20 && ui.le_b(T, 13, 1) = 8 && ui.le_b(T, 14, 1) = 4 && ui.le_b(T, 15, 1) = 13 &&
+    ui.le_b(T, 16, 1) = 31 && ui.le_b(T, 17, 1) = 22 && ui.le_b(T, 18, 1) = 28 && ui.le_b(T, 19, 1) = 18 && ui.le_b(T, 20, 1) = 26 && ui.le_b(T, 21, 1) = 10 && ui.le_b(T, 22, 1) = 7 && ui.le_b(T, 23, 1) = 12 &&
+    ui.le_b(T, 24, 1) = 21 && ui.le_b(T, 25, 1) = 17 && ui.le_b(T, 26, 1) = 9 && ui.le_b(T, 27, 1) = 6 && ui.le_b(T, 28, 1) = 16 && ui.le_b(T, 29, 1) = 5 && ui.le_b(T, 30, 1) = 15 && ui.le_b(T, 31, 1) = 14
+    ) by eval()
+  have l: ui.le_b(T, int_mul(1, i), 1) = mallocng.debruijn32_tab[i] by cases({i}, {0}, {32}, simp(at({mallocng.debruijn32_tab[i]}), v), hi, hil)
+  show := trans(mp(all_elim(f, {i}), hi, hil), l)
 qed
