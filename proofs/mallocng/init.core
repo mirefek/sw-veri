@@ -4532,3 +4532,138 @@ proof
   have r: mallocng.ro_ranges(F)[2] = pair(4218880, 304) by defs(rsimp(e, v2, m2), mallocng.ro_ranges)
   show := rewrite(sym(fe), r)
 qed
+
+// (the file's length; a byte of it typed)
+theorem ui.seq_len_bs: all F B. F = bytes_seq(B) -> seq_len(F) = bytes_len(B)
+proof
+  fix F B
+  assume e
+  show := rewrite(sym(e), (seq_len(bytes_seq(B)) = bytes_len(B) by defs(fn_build_dom[d := bytes_len(B), v := i. bytes_at(B, i)], seq_len, bytes_seq)))
+qed
+
+theorem ui.file_len: seq_len(musl_malloc.file) = 37016
+proof
+  have d := apply(ui.seq_len_bs[F := musl_malloc.file], unfold(musl_malloc.file))
+  show by arith(d)
+qed
+
+// (a byte of the file: typed)
+theorem ui.file_byte: all k. k in omega -> int_lt(k, 37016) -> musl_malloc.file[k] in omega && int_lt(musl_malloc.file[k], 256)
+proof
+  fix k
+  assume hk hl
+  have t := mp(at_type[l := musl_malloc.file, t := bits(8), i := k], ui.file_list, hk, rewrite(sym(ui.file_len), hl))
+  show by arith(t)
+qed
+
+// (a range inside the read-only data: within header 2's range)
+theorem ui.in_ro2: all a n. int_le(4218880, a) -> int_le(int_add(a, n), 4219184) ->
+  ex x0. x0 in omega && ((int_lt(x0, x86_64_linux.phnum(ui.C.file)) && int_le(fst(mallocng.ro_ranges(ui.C.file)[x0]), a)) &&
+    int_le(int_add(a, n), int_add(fst(mallocng.ro_ranges(ui.C.file)[x0]), snd(mallocng.ro_ranges(ui.C.file)[x0]))))
+proof
+  fix a n
+  assume h1 h2
+  have {pn = phnum} := ui.elf
+  have fe: ui.C.file = musl_malloc.file by rsimp()
+  have r := ui.ro2_range
+  have f: fst(mallocng.ro_ranges(ui.C.file)[2]) = 4218880 := rewrite(sym(r), (fst(pair(4218880, 304)) = 4218880 by rsimp()))
+  have s: snd(mallocng.ro_ranges(ui.C.file)[2]) = 304 := rewrite(sym(r), (snd(pair(4218880, 304)) = 304 by rsimp()))
+  show by ex_intro({2}, taut((2 in omega by eval()), (int_lt(2, x86_64_linux.phnum(ui.C.file)) by arith(rewrite(sym(fe), pn))),
+    (int_le(fst(mallocng.ro_ranges(ui.C.file)[2]), a) by arith(f, h1)),
+    (int_le(int_add(a, n), int_add(fst(mallocng.ro_ranges(ui.C.file)[2]), snd(mallocng.ro_ranges(ui.C.file)[2]))) by arith(f, s, h2))))
+qed
+
+// the allocator's constant tables at main: as the source has them, in
+// the read-only data
+theorem ui.tables_main: all m0 s lo top argv envp auxv m V fs. ui.MX(m0, s, lo, top, argv, envp, auxv, m, V, fs) ->
+  mallocng.classes_ok(ui.C, ui.MV(m)) && mallocng.debruijn_ok(ui.C, ui.MV(m))
+proof
+  fix m0 s lo top argv envp auxv m V fs
+  assume h
+  let M := ui.MV(m)
+  have cs: ui.C.sct = 4218912 by eval()
+  have cn: ui.C.scnt = 4219008 by eval()
+  have cm: ui.C.mcnt = 4219035 by eval()
+  have cd: ui.C.dbj = 4219040 by eval()
+  // (n bytes of the read-only data: their number the file's)
+  have rd: all a n. a in omega -> n in omega -> int_le(4218880, a) -> int_le(int_add(a, n), 4219184) ->
+      mallocng.rd(M, a, n) = x86_64_linux.le_at(musl_malloc.file, int_add(24576, int_sub(a, 4218880)), n) proof
+    fix a n
+    assume ha hn h1 h2
+    show := apply(ui.ro2_rd[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs, a := a, n := n], h, ha, hn, h1, h2)
+  qed
+  have b1: all a. a in omega -> int_le(4218880, a) -> int_lt(a, 4219184) -> mallocng.b8(M, a) = mallocng.rd(M, a, 1) proof
+    fix a
+    assume ha h1 h2
+    have t0: int_add(a, 0) = a by arith(ha)
+    have bv _ := apply(ui.ro2_byte[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs, x := a], h, ha, h1, h2)
+    have fb _ := apply(ui.file_byte[k := int_add(24576, int_sub(a, 4218880))], arith(ha, h1), arith(h2, ha, h1))
+    have bo: mallocng.b8(M, a) in omega := rewrite(sym(bv), fb)
+    show by defs(simp(t0, bo), mallocng.rd)
+  qed
+  have pg: all a. a in omega -> int_le(4218880, a) -> int_lt(a, 4219184) ->
+      mallocng.m_mapped(M, a) && snd(mallocng.pg(M, a)).prot.r && !(snd(mallocng.pg(M, a)).kind = 2) proof
+    fix a
+    assume ha h1 h2
+    show := apply(ui.ro2_page[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := m, V := V, fs := fs, x := a], h, ha, h1, h2)
+  qed
+  // the size classes
+  have k1: all i. i in omega -> int_lt(i, 48) -> mallocng.rd(M, int_add(ui.C.sct, int_mul(2, i)), 2) = mallocng.size_classes[i] proof
+    fix i
+    assume hi hil
+    have e := mp(all_elim(rd, {int_add(ui.C.sct, int_mul(2, i))}, {2}), arith(cs, hi), eval(), arith(cs, hi), arith(cs, hi, hil))
+    have ix: int_add(24576, int_sub(int_add(ui.C.sct, int_mul(2, i)), 4218880)) = int_add(24608, int_mul(2, i)) by arith(cs, hi)
+    show := trans(rewrite(ix, e), mp(all_elim(ui.tab_sct, {i}), hi, hil))
+  qed
+  have k2: all x0. x0 in omega -> int_le(ui.C.sct, x0) && int_lt(x0, int_add(ui.C.sct, int_mul(2, 48))) ->
+      (mallocng.m_mapped(M, x0) && snd(mallocng.pg(M, x0)).prot.r) && !(snd(mallocng.pg(M, x0)).kind = 2) proof
+    fix x0
+    assume hx hr
+    show by taut(mp(all_elim(pg, {x0}), hx, arith(hr, cs), arith(hr, cs)))
+  qed
+  have k3 := apply(ui.in_ro2[a := ui.C.sct, n := int_mul(2, 48)], arith(cs), arith(cs))
+  // the slot counts
+  have c1: all i. i in omega -> int_lt(i, 27) -> mallocng.b8(M, int_add(ui.C.scnt, i)) = mallocng.small_cnt_tab[i] proof
+    fix i
+    assume hi hil
+    have e := mp(all_elim(rd, {int_add(ui.C.scnt, i)}, {1}), arith(cn, hi), eval(), arith(cn, hi), arith(cn, hi, hil))
+    have ix: int_add(24576, int_sub(int_add(ui.C.scnt, i), 4218880)) = int_add(24704, int_mul(1, i)) by arith(cn, hi)
+    have bb := mp(all_elim(b1, {int_add(ui.C.scnt, i)}), arith(cn, hi), arith(cn, hi), arith(cn, hi, hil))
+    show := trans(bb, trans(rewrite(ix, e), mp(all_elim(ui.tab_scnt, {i}), hi, hil)))
+  qed
+  have c2: all i. i in omega -> int_lt(i, 4) -> mallocng.b8(M, int_add(ui.C.mcnt, i)) = mallocng.med_cnt_tab[i] proof
+    fix i
+    assume hi hil
+    have e := mp(all_elim(rd, {int_add(ui.C.mcnt, i)}, {1}), arith(cm, hi), eval(), arith(cm, hi), arith(cm, hi, hil))
+    have ix: int_add(24576, int_sub(int_add(ui.C.mcnt, i), 4218880)) = int_add(24731, int_mul(1, i)) by arith(cm, hi)
+    have bb := mp(all_elim(b1, {int_add(ui.C.mcnt, i)}), arith(cm, hi), arith(cm, hi), arith(cm, hi, hil))
+    show := trans(bb, trans(rewrite(ix, e), mp(all_elim(ui.tab_mcnt, {i}), hi, hil)))
+  qed
+  have c3: all x0. x0 in omega -> ((int_le(ui.C.scnt, x0) && int_lt(x0, int_add(ui.C.scnt, 27))) || (int_le(ui.C.mcnt, x0) && int_lt(x0, int_add(ui.C.mcnt, 4)))) ->
+      (mallocng.m_mapped(M, x0) && snd(mallocng.pg(M, x0)).prot.r) && !(snd(mallocng.pg(M, x0)).kind = 2) proof
+    fix x0
+    assume hx hr
+    show by taut(mp(all_elim(pg, {x0}), hx, arith(hr, cn, cm), arith(hr, cn, cm)))
+  qed
+  have c4 := apply(ui.in_ro2[a := ui.C.scnt, n := 27], arith(cn), arith(cn))
+  have c5 := apply(ui.in_ro2[a := ui.C.mcnt, n := 4], arith(cm), arith(cm))
+  have co: mallocng.counts_ok(ui.C, M) by defs(taut(c1, c2, c3, c4, c5), mallocng.counts_ok)
+  have cl: mallocng.classes_ok(ui.C, M) by defs(taut(k1, k2, k3, co), mallocng.classes_ok)
+  // the de Bruijn table
+  have d1: all i. i in omega -> int_lt(i, 32) -> mallocng.rd(M, int_add(ui.C.dbj, i), 1) = mallocng.debruijn32_tab[i] proof
+    fix i
+    assume hi hil
+    have e := mp(all_elim(rd, {int_add(ui.C.dbj, i)}, {1}), arith(cd, hi), eval(), arith(cd, hi), arith(cd, hi, hil))
+    have ix: int_add(24576, int_sub(int_add(ui.C.dbj, i), 4218880)) = int_add(24736, int_mul(1, i)) by arith(cd, hi)
+    show := trans(rewrite(ix, e), mp(all_elim(ui.tab_dbj, {i}), hi, hil))
+  qed
+  have d2: all x0. x0 in omega -> int_le(ui.C.dbj, x0) && int_lt(x0, int_add(ui.C.dbj, 32)) ->
+      (mallocng.m_mapped(M, x0) && snd(mallocng.pg(M, x0)).prot.r) && !(snd(mallocng.pg(M, x0)).kind = 2) proof
+    fix x0
+    assume hx hr
+    show by taut(mp(all_elim(pg, {x0}), hx, arith(hr, cd), arith(hr, cd)))
+  qed
+  have d3 := apply(ui.in_ro2[a := ui.C.dbj, n := 32], arith(cd), arith(cd))
+  have db: mallocng.debruijn_ok(ui.C, M) by defs(taut(d1, d2, d3), mallocng.debruijn_ok)
+  show := conj(cl, db)
+qed
