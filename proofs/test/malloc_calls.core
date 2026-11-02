@@ -1,0 +1,94 @@
+// main's callees as malloc.sl has them (layers/malloc.sl): malloc's
+// outcomes (malloc_client.core's, and those through set_errno's loop),
+// the call rules for musl's malloc and free at main's calls.
+
+// set_errno's run from W: errno's four bytes written, nothing else
+theorem malloc.seterr_run(e, x, W, t, v): fn_update(W, "vm", W.vm) = W -> W.vm in x86_64_linux.Vm -> runs(malloc.set_errno(e, x), W, ok(t, v)) ->
+  t = fn_update(W, "vm", t.vm) && fn_update(t.vm, "bytes", W.vm.bytes) = W.vm &&
+  (all a. a in bits(64) -> (all j. j in omega -> int_lt(j, 4) -> !(a = bits_add(64, bits_add(64, W.fs_base, bits_of_int(64, e[empty])), bits_of_int(64, j)))) ->
+     t.vm.bytes[a] = W.vm.bytes[a])
+proof
+  assume hw0 hv hr
+  step h1 from hr
+  obtain r, wl kr from h1
+  let BODY(l, y) := loop_body(wl)
+  let EA(j) := bits_add(64, bits_add(64, W.fs_base, bits_of_int(64, e[empty])), bits_of_int(64, j))
+  let FR(U) := fn_update(U, "bytes", W.vm.bytes) = W.vm && (all a. a in bits(64) -> (all j. j in omega -> int_lt(j, 4) -> !(a = EA(j))) -> U.bytes[a] = W.vm.bytes[a])
+  let PI(l) := ex k U. ((k in omega && int_le(k, 4)) && FR(U)) && l = pair(fn_update(W, "vm", U), k)
+  let M(l) := int_sub(4, snd(l))
+  have f0: FR(W.vm) proof
+    have a1: fn_update(W.vm, "bytes", W.vm.bytes) = W.vm by simp(hv)
+    have a2: all a. a in bits(64) -> (all j. j in omega -> int_lt(j, 4) -> !(a = EA(j))) -> W.vm.bytes[a] = W.vm.bytes[a] proof
+      fix a
+      assume _ _
+      show := refl({W.vm.bytes[a]})
+    qed
+    show by taut(a1, a2)
+  qed
+  have p0: PI(pair(W, 0)) by ex_intro({0}, {W.vm}, taut((0 in omega by simp()), (int_le(0, 4) by arith()), f0, (pair(W, 0) = pair(fn_update(W, "vm", W.vm), 0) by simp(hw0))))
+  have pm: all l. PI(l) -> M(l) in omega proof
+    fix l
+    assume hp
+    obtain k U, hk hk4 _ _ hx from hp
+    show by simp(hx, (int_sub(4, k) in omega by arith(hk, hk4)))
+  qed
+  have nx: all l l2. PI(l) -> BODY(l, ok(l2, empty)) -> PI(l2) && int_lt(M(l2), M(l)) proof
+    fix l l2
+    assume hp hb
+    obtain k U, hk hk4 f1 f2 hx from hp
+    let V8 := bits_of_int(8, int_div(x, int_pow(256, k)))
+    let U2 := fn_update(U, "bytes", fn_update(U.bytes, EA(k), V8))
+    have kl e2 := (int_lt(k, 4) && l2 = pair(fn_update(W, "vm", U2), int_add(k, 1)) by simp(rewrite(hx, hb)))
+    have g1: fn_update(U2, "bytes", W.vm.bytes) = W.vm := trans((fn_update(U2, "bytes", W.vm.bytes) = fn_update(U, "bytes", W.vm.bytes) by simp()), f1)
+    have g2: all a. a in bits(64) -> (all j. j in omega -> int_lt(j, 4) -> !(a = EA(j))) -> U2.bytes[a] = W.vm.bytes[a] proof
+      fix a
+      assume ha hn
+      have ne := mp(all_elim(hn, {k}), hk, kl)
+      have q := mp(app_update_other[f := U.bytes, k := EA(k), v := V8, x := a], ne)
+      have q2: U2.bytes[a] = U.bytes[a] by simp(q)
+      show := trans(q2, mp(all_elim(f2, {a}), ha, hn))
+    qed
+    have p2: PI(l2) by ex_intro({int_add(k, 1)}, {U2}, taut((int_add(k, 1) in omega by arith(hk)), (int_le(int_add(k, 1), 4) by arith(kl)), g1, g2, e2))
+    have m2: int_lt(M(l2), M(l)) by simp(e2, hx, (int_lt(int_sub(4, int_add(k, 1)), int_sub(4, k)) by arith(hk)))
+    show by taut(p2, m2)
+  qed
+  have wv := apply(g.loop[b := l y. BODY(l, y), p := l. PI(l), m := l. M(l)], p0, pm, nx, wl)
+  obtain l, hpl bb nk from wv
+  obtain k U, hk hk4 f1 f2 hx from hpl
+  have ok1: !(int_lt(k, 4)) proof
+    assume kl
+    have e3: r = ok(pair(fn_update(W, "vm", fn_update(U, "bytes", fn_update(U.bytes, EA(k), bits_of_int(8, int_div(x, int_pow(256, k)))))), int_add(k, 1)), empty)
+      by simp(rewrite(hx, bb), kl)
+    have io: is_ok(r) by defs(ex_intro({pair(fn_update(W, "vm", fn_update(U, "bytes", fn_update(U.bytes, EA(k), bits_of_int(8, int_div(x, int_pow(256, k)))))), int_add(k, 1))}, {empty}, e3), is_ok)
+    show by taut(io, nk)
+  qed
+  have er: r = exc(pair(fn_update(W, "vm", U), k), pair("brk", empty)) by simp(rewrite(hx, bb), ok1)
+  have te: t = fn_update(W, "vm", U) by simp(rewrite(er, kr))
+  have tv: t.vm = U by simp(te)
+  show by taut(rewrite(sym(tv), te), rewrite(sym(tv), f1), rewrite(sym(tv), f2))
+qed
+
+// malloc returning 0: an allocator step to some memory V (the world as
+// any call needs it), then errno written -- its four bytes only
+theorem malloc.malloc_zero(i, o, e, b, c, st, n, s, t):
+  runs(malloc.malloc(i, o, e, b, c, st, n), s, ok(t, 0)) -> s in rec_and(abi.World, malloc.Heap.ghost) -> s in i -> malloc.errno_ok(e, s) ->
+  malloc.world_ok(b, c, st, s) ->
+  ex V. V in x86_64_linux.Vm && malloc.step_ok(i, o, s, fn_update(s, "vm", V), malloc.errno_bytes(e, s)) && malloc.world_ok(b, c, st, fn_update(s, "vm", V)) &&
+    t = fn_update(s, "vm", t.vm) && fn_update(t.vm, "bytes", V.bytes) = V &&
+    (all a. a in bits(64) -> (all j. j in omega -> int_lt(j, 4) -> !(a = bits_add(64, bits_add(64, s.fs_base, bits_of_int(64, e[empty])), bits_of_int(64, j)))) ->
+       t.vm.bytes[a] = V.bytes[a])
+proof
+  assume h ht hi he hwo
+  have hs0 := mp(mp(malloc.idle_step[i := i, o := o, s := s, x := malloc.errno_bytes(e, s)], ht), hi)
+  obtain vm, hv hst hse from hs0
+  have hs: ex vm. vm in x86_64_linux.Vm && (malloc.step_ok(i, o, s, fn_update(s, "vm", vm), malloc.errno_bytes(e, s)) &&
+      malloc.world_ok(b, c, st, fn_update(s, "vm", vm))) by ex_intro({vm}, taut(hv, hst, rewrite(sym(hse), hwo)))
+  have k: ex V v0. (V in x86_64_linux.Vm && malloc.step_ok(i, o, s, fn_update(s, "vm", V), malloc.errno_bytes(e, s)) &&
+      malloc.world_ok(b, c, st, fn_update(s, "vm", V))) && runs(malloc.set_errno(e, x86_64_linux.ENOMEM), fn_update(s, "vm", V), ok(t, v0))
+    by simp(h, hi, he, hwo, hs, keep(malloc.set_errno))
+  obtain V v0, kv kst kwo kr from k
+  have r1 r2 r3 := apply(malloc.seterr_run[e := e, x := x86_64_linux.ENOMEM, W := fn_update(s, "vm", V), t := t, v := v0], (fn_update(fn_update(s, "vm", V), "vm", fn_update(s, "vm", V).vm) = fn_update(s, "vm", V) by simp()),
+    (fn_update(s, "vm", V).vm in x86_64_linux.Vm by simp(kv)), kr)
+  have t1: t = fn_update(s, "vm", t.vm) by simp(r1)
+  show by ex_intro({V}, simp(kv, kst, kwo, t1, r2, r3))
+qed
