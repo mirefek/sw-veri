@@ -840,3 +840,101 @@ proof
   qed
   show by taut(t, k1, k2, k3, k4)
 qed
+
+// intact's code by its purpose, its callees by their contracts
+theorem tp.intact: all b i gp gs. b in bits(64) -> i in bits(32) -> tp.calls(gp, test_malloc.pat_spec_fun()) -> tp.calls(gs, test_malloc.size_spec_fun()) ->
+  refines(c_tests_test_malloc.intact(b, i, gp, gs), test_malloc.intact_spec(b, i), abi.World)
+proof
+  fix b i gp gs
+  assume hb hi hgp hgs
+  show proof
+    fix s o
+    assume hw hr
+    let SPEC := test_malloc.intact_spec(b, i)
+    let OVF := exc_val("stack_overflow", empty)
+    have pu := apply(g.runs_univ, expand(hr, c_tests_test_malloc.intact))
+    have hu: s in univ(1) by simp(pu)
+    let PRE := (int_lt(i, test_malloc.NBLK) && test_malloc.blk_usable(s.vm, s.objs, b, i, false)) && abi.thread_ok(s.vm, s.fs_base)
+    have np: !PRE -> runs(SPEC, s, o) proof
+      assume hn
+      show by defs(simp(pu, hn), test_malloc.intact_spec)
+    qed
+    have yp: PRE -> runs(SPEC, s, o) proof
+      assume hp
+      have hil hus hth := hp
+      have e := mp(all_elim(tp.intact_run, {b}, {i}, {gp}, {gs}, {s}, {o}), hb, hi, hil, hw, hu, hth, hus, hgp, hgs, hr)
+      have c1: abi.ovf_out(s, o) -> runs(SPEC, s, o) proof
+        assume h
+        obtain v ob, hv hob ho from h
+        have vu := apply(x86.vm_univ, hv)
+        have eu: OVF in univ(1) by defs(simp(), exc_val)
+        have pu2: pair(s, exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF)) in univ(1) by simp(hu, vu, eu, apply(ct.objs_univ, hob))
+        have ovi := apply(ct.overflow_intro, hv, hob, pu2)
+        have r: runs(SPEC, s, exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF))
+          by defs(simp(hp, ovi, pu2, keep(abi.overflow, test_malloc.has_pat, test_malloc.blk_usable, abi.thread_ok)), test_malloc.intact_spec)
+        show := rewrite(sym(ho), r)
+      qed
+      have c2: test_malloc.has_pat(s.vm, b, i) && o = ok(s, 1) -> runs(SPEC, s, o) proof
+        assume h
+        have h1 ho := h
+        show by defs(simp(pu, hp, h1, ho, keep(abi.overflow, test_malloc.has_pat, test_malloc.blk_usable, abi.thread_ok)), test_malloc.intact_spec)
+      qed
+      have c3: !test_malloc.has_pat(s.vm, b, i) && o = ok(s, 0) -> runs(SPEC, s, o) proof
+        assume h
+        have h1 ho := h
+        show by defs(simp(pu, hp, h1, ho, keep(abi.overflow, test_malloc.has_pat, test_malloc.blk_usable, abi.thread_ok)), test_malloc.intact_spec)
+      qed
+      show by taut(e, c1, c2, c3)
+    qed
+    show by taut(np, yp)
+  qed
+qed
+
+// (intact's spec diverges only where it allows anything: its body returns)
+theorem tp.intact_divw: tr.div_raises(test_malloc.intact_spec_fun())
+proof
+  let Q(x0) := test_malloc.intact_spec(bits_of_int(64, x0[0]), bits_of_int(32, x0[1]))
+  have ru: all regs s o. runs(Q(regs), s, o) -> pair(s, o) in univ(1) proof
+    fix regs s o
+    assume h
+    rsimp only, test_malloc.intact_spec in h
+    show := apply(g.runs_univ, h)
+  qed
+  have dq: all regs w h t. regs in abi.ARGS -> w in abi.World -> w in univ(1) -> h in single(empty) -> runs(Q(regs), union2(w, h), diverge(t)) ->
+      runs(Q(regs), union2(w, h), exc(union2(w, h), empty)) proof
+    fix regs w h t
+    assume _ hw hwu hh hr
+    let W := union2(w, h)
+    let B0 := bits_of_int(64, regs[0])
+    let I0 := bits_of_int(32, regs[1])
+    let B(x0, x2) := ex x3. ((test_malloc.has_pat(app(x0, "vm"), B0, I0) && x3 = exc(pair(x0, empty), pair("ret", 1))) ||
+        (!test_malloc.has_pat(app(x0, "vm"), B0, I0) && x3 = ok(pair(x0, empty), empty))) &&
+      ((fst(x3) = 0 && x2 = exc(pair(fst(out_state(x3)), empty), pair("ret", 0))) || ((((fst(x3) = 1 && fst(out_value(x3)) = "ret") &&
+        x2 = exc(pair(fst(out_state(x3)), empty), pair("ret", snd(out_value(x3))))) || ((fst(x3) = 1 && fst(out_value(x3)) = "raise") &&
+        x2 = exc(pair(fst(out_state(x3)), empty), pair("raise", snd(out_value(x3)))))) || (fst(x3) = 2 && x2 = diverge(snd(x3)))))
+    have {wu = univ, wv = vm} := apply(ct.w_single, hw, hwu, hh)
+    have hb: all x x2. B(W, x) -> fst(x) = 2 -> B(W, x2) proof
+      fix x x2
+      assume h1 h2
+      obtain x3, hc hd from h1
+      have k1: x3 = exc(pair(W, empty), pair("ret", 1)) -> false proof
+        assume e
+        have xe: x = exc(pair(W, empty), pair("ret", 1)) by simp(rewrite(e, hd))
+        show by taut(mp(ct.exc_not2[x := x, a := pair(W, empty), b := pair("ret", 1)], xe), h2)
+      qed
+      have k2: x3 = ok(pair(W, empty), empty) -> false proof
+        assume e
+        have xe: x = exc(pair(W, empty), pair("ret", 0)) by simp(rewrite(e, hd))
+        show by taut(mp(ct.exc_not2[x := x, a := pair(W, empty), b := pair("ret", 0)], xe), h2)
+      qed
+      show by taut(hc, k1, k2)
+    qed
+    show by defs(apply(ct.contract_div[P := x0. (int_lt(I0, test_malloc.NBLK) && test_malloc.blk_usable(app(x0, "vm"), app(x0, "objs"), B0, I0, false)) &&
+      abi.thread_ok(app(x0, "vm"), app(x0, "fs_base")), B := x0 x2. B(x0, x2), s := W, t := t], wu, wv, expand(hr, test_malloc.intact_spec), hb), test_malloc.intact_spec)
+  qed
+  have gf := apply(ct.fun_divg[G := single(empty), q := x0. Q(x0), n := 2, w := 32], ct.single_univ, ru, dq)
+  have gd: tr.div_raises_g(single(empty), test_malloc.intact_spec_fun()) by defs(gf, test_malloc.intact_spec_fun)
+  show := apply(ct.div_of_g, gd)
+qed
+
+contract intact test_malloc.intact_spec_fun by tp.intact
