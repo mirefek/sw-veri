@@ -160,3 +160,190 @@ proof
   have p2 := apply(tm.pat_keep[V := H.vm, V2 := T.vm, q := q, k := k], hv, hv2, hq, hl, hp, ag)
   show by taut(hq, q0, rewrite(sym(hbe), hn), rewrite(sym(hbe), hz), p2)
 qed
+
+// ----------------------------------------------------------------------
+//  The client's writes: bytes only
+
+// a world with bytes written but the thread's word and the code's: as any
+// call needs it still
+theorem tm.wok_bytes(b, cd, st, H, X): malloc.world_ok(b, cd, st, H) -> x86_64_linux.le(X, H.fs_base, 8) = x86_64_linux.le(H.vm.bytes, H.fs_base, 8) ->
+  (all i. i in omega -> int_lt(i, seq_len(cd[empty])) -> X[bits_of_int(64, int_add(b[empty], i))] = H.vm.bytes[bits_of_int(64, int_add(b[empty], i))]) ->
+  malloc.world_ok(b, cd, st, fn_update(H, "vm", fn_update(H.vm, "bytes", X)))
+proof
+  assume hw ht hc
+  let VX := fn_update(H.vm, "bytes", X)
+  have n1 c2 th cn bs ld lv os := expand(hw, malloc.world_ok)
+  have th2 := mp(all_elim(ms.thread_keep, {H.vm}, {X}, {H.fs_base}), th, ht)
+  have cn2: abi.canary_ok(VX, H.fs_base) by defs(simp(expand(cn, abi.canary_ok, x86_64_linux.readable, abi.stack_page, x86_64_linux.mapped)),
+    abi.canary_ok, x86_64_linux.readable, abi.stack_page, x86_64_linux.mapped)
+  have bs2: abi.brk_start_ok(VX) by defs(simp(expand(bs, abi.brk_start_ok)), abi.brk_start_ok)
+  have ca st0 := expand(ld, abi.loaded)
+  have ca2: abi.code_at(VX, b[empty], cd[empty]) proof
+    have g: all i. i in omega -> int_lt(i, seq_len(cd[empty])) ->
+        ((x86_64_linux.fetchable(VX, bits_of_int(64, int_add(b[empty], i))) && !x86_64_linux.can_access(VX, bits_of_int(64, int_add(b[empty], i)), 1)) &&
+         !abi.stack_page(VX, x86_64_linux.page_of(bits_of_int(64, int_add(b[empty], i))))) && VX.bytes[bits_of_int(64, int_add(b[empty], i))] = cd[empty][i] proof
+      fix i
+      assume hi hil
+      have q1 q2 q3 q4 := mp(all_elim(expand(ca, abi.code_at), {i}), hi, hil)
+      have r1: x86_64_linux.fetchable(VX, bits_of_int(64, int_add(b[empty], i))) by defs(simp(expand(q1, x86_64_linux.fetchable, x86_64_linux.mapped)),
+        x86_64_linux.fetchable, x86_64_linux.mapped)
+      have r2: !x86_64_linux.can_access(VX, bits_of_int(64, int_add(b[empty], i)), 1) by defs(simp(expand(q2, x86_64_linux.can_access, x86_64_linux.mapped)),
+        x86_64_linux.can_access, x86_64_linux.mapped)
+      have r3: !abi.stack_page(VX, x86_64_linux.page_of(bits_of_int(64, int_add(b[empty], i)))) by defs(simp(expand(q3, abi.stack_page, x86_64_linux.mapped)),
+        abi.stack_page, x86_64_linux.mapped)
+      have r4: VX.bytes[bits_of_int(64, int_add(b[empty], i))] = cd[empty][i] by simp(mp(all_elim(hc, {i}), hi, hil), q4)
+      show by taut(r1, r2, r3, r4)
+    qed
+    show by defs(g, abi.code_at)
+  qed
+  have sf: x86_64_linux.stack_floor(VX) = x86_64_linux.stack_floor(H.vm) by defs(simp(), x86_64_linux.stack_floor)
+  have st2: all x0. x0 in omega -> x0 in st[empty] -> x86_64_linux.off_stack_space(VX, int_div(x0, x86_64_linux.PAGE), 1) proof
+    fix a
+    assume hao ha3
+    show by defs(simp(sf, expand(mp(all_elim(st0, {a}), hao, ha3), x86_64_linux.off_stack_space)), x86_64_linux.off_stack_space)
+  qed
+  have ld2: abi.loaded(VX, b[empty], cd[empty], st[empty]) by defs(taut(ca2, st2), abi.loaded)
+  have os2: all x0. x0 in set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))) -> !(VX.pages[x0] = none) ->
+      x86_64_linux.off_stack_space(VX, x0, 1) proof
+    fix q
+    assume hq hn
+    show by defs(simp(sf, expand(mp(all_elim(os, {q}), hq, (!(H.vm.pages[q] = none) by simp(hn))), x86_64_linux.off_stack_space)), x86_64_linux.off_stack_space)
+  qed
+  show by defs(simp(n1, c2, th2, cn2, bs2, ld2, lv, os2, sf), malloc.world_ok)
+qed
+
+// (a live byte: mapped read-write)
+theorem tm.live_rw(I, O, H, a): malloc.owned_private(I, O) -> malloc.inv_wf(I) -> H in rec_and(abi.World, malloc.Heap.ghost) -> H in I ->
+  a in malloc.live_of(H.blocks) -> a in omega && malloc.rw_mapped(H.vm, a) && !(a in O[H])
+proof
+  assume hop hwf ht hi hl
+  have ao ex := (a in omega && (ex q. q in bits(64) && (!(H.blocks[q] = none) && a in malloc.range(q, snd(H.blocks[q])))) by taut(apply(mp.live_def[b := H.blocks, a := a]), hl))
+  obtain q, hq hqn hqr from ex
+  have _ r1 r2 := (a in omega && int_le(q, a) && int_lt(a, int_add(q, snd(H.blocks[q]))) by taut(set_select_def[s := omega, p := x. int_le(q, x) && int_lt(x, int_add(q, snd(H.blocks[q]))), z := a],
+    expand(hqr, malloc.range)))
+  have {no = own, rw = rw} := apply(tm.live_facts[I := I, O := O, H := H, q := q, a := a], hop, hwf, ht, hi, hq, hqn, ao, r1, r2)
+  show by taut(ao, rw, no)
+qed
+
+// The client writing bytes X: only bytes of live blocks or unmapped ones
+// (its stack objects), none of the allocator's. The invariant, the
+// allocator's bytes, errno, the world as any call needs it and the memory
+// outside the allocator's at main's start: kept
+theorem tm.client(I, O, eo, b, cd, st, S0, H, X): malloc.frame(I, O) -> malloc.owned_private(I, O) -> malloc.owned_mapped(I, O) -> malloc.inv_wf(I) ->
+  malloc.live_apart(I, eo) -> H in rec_and(abi.World, malloc.Heap.ghost) -> fn_update(H, "vm", fn_update(H.vm, "bytes", X)) in rec_and(abi.World, malloc.Heap.ghost) ->
+  H in I -> malloc.errno_ok(eo, H) -> malloc.world_ok(b, cd, st, H) -> tm.kept(O, eo, S0, H) ->
+  (all x. x in bits(64) -> X[x] = H.vm.bytes[x] ||
+     ((x in malloc.live_of(H.blocks) || !x86_64_linux.mapped(H.vm, int_div(x, x86_64_linux.PAGE))) && !(x in O[H]))) ->
+  inv: fn_update(H, "vm", fn_update(H.vm, "bytes", X)) in I && own: O[fn_update(H, "vm", fn_update(H.vm, "bytes", X))] = O[H] &&
+  eok: malloc.errno_ok(eo, fn_update(H, "vm", fn_update(H.vm, "bytes", X))) && wok: malloc.world_ok(b, cd, st, fn_update(H, "vm", fn_update(H.vm, "bytes", X))) &&
+  kept: tm.kept(O, eo, S0, fn_update(H, "vm", fn_update(H.vm, "bytes", X)))
+proof
+  assume hfr hop hom hwf hla ht ht2 hi heo hw hk hW
+  let VX := fn_update(H.vm, "bytes", X)
+  let T := fn_update(H, "vm", VX)
+  have fsb := apply(mp.u_fs_ty, ht)
+  have _ _ th _ _ ld lv _ := expand(hw, malloc.world_ok)
+  have {fsl = fsl} := apply(mp.top_fsl, fsb, th)
+  have ts: int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE) = 34359738367 by defs(simp(), x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)
+  have pg: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
+  // (a mapped byte: below the task's end, its own word)
+  have mlow: all a. a in omega -> x86_64_linux.mapped(H.vm, int_div(a, x86_64_linux.PAGE)) -> bits_of_int(64, a) = a && a in bits(64) proof
+    fix a
+    assume ao m
+    have ml _ := expand(m, x86_64_linux.mapped)
+    show by defs(arith(ao, ml, ts, pg), bits_of_int, pow2)
+  qed
+  // (where X differs: a live block's byte or an unmapped one)
+  have same: all a. a in omega -> x86_64_linux.mapped(H.vm, int_div(a, x86_64_linux.PAGE)) -> !(a in malloc.live_of(H.blocks)) ->
+      X[bits_of_int(64, a)] = H.vm.bytes[bits_of_int(64, a)] proof
+    fix a
+    assume ao m nl
+    have be ab := mp(all_elim(mlow, {a}), ao, m)
+    have c := mp(all_elim(hW, {a}), ab)
+    show := rewrite(sym(be), (X[a] = H.vm.bytes[a] by taut(c, m, nl)))
+  qed
+  // (the allocator's bytes: none written)
+  have ownX: all a. a in omega -> a in O[H] -> X[bits_of_int(64, a)] = H.vm.bytes[bits_of_int(64, a)] proof
+    fix a
+    assume ao hoa
+    have mo := mp(all_elim(mp(all_elim(expand(hom, malloc.owned_mapped), {H}), ht, hi), {a}), ao, hoa)
+    have c1: x86_64_linux.mapped(H.vm, int_div(a, x86_64_linux.PAGE)) -> X[bits_of_int(64, a)] = H.vm.bytes[bits_of_int(64, a)] proof
+      assume m
+      have be ab := mp(all_elim(mlow, {a}), ao, m)
+      show := rewrite(sym(be), (X[a] = H.vm.bytes[a] by taut(mp(all_elim(hW, {a}), ab), hoa)))
+    qed
+    have c2: a in H.objs.live -> X[bits_of_int(64, a)] = H.vm.bytes[bits_of_int(64, a)] proof
+      assume l
+      have _ _ l3 := mp(all_elim(lv, {a}), ao, l)
+      have be: bits_of_int(64, a) = a by defs(arith(ao, l3), bits_of_int, pow2, x86_64_linux.TASK_SIZE)
+      have ab: a in bits(64) by defs(arith(ao, l3), x86_64_linux.TASK_SIZE)
+      show := rewrite(sym(be), (X[a] = H.vm.bytes[a] by taut(mp(all_elim(hW, {a}), ab), hoa)))
+    qed
+    show by taut(mo, c1, c2)
+  qed
+  // the invariant: the frame law
+  have fr := mp(all_elim(expand(hfr, malloc.frame), {H}, {T}), conj(ht, ht2), taut(hi, (T.blocks = H.blocks by simp()), (T.vm.brk = H.vm.brk by simp()),
+    (T.fs_base = H.fs_base by simp()), (T.vm.stack_top = H.vm.stack_top by simp()), (T.vm.stack_limit = H.vm.stack_limit by simp()),
+    (all a. a in omega -> a in O[H] -> T.vm.bytes[bits_of_int(64, a)] = H.vm.bytes[bits_of_int(64, a)] && T.vm.pages[int_div(a, x86_64_linux.PAGE)] = H.vm.pages[int_div(a, x86_64_linux.PAGE)]
+      by simp(ownX)),
+    (all a. a in omega -> a in O[H] && a in H.objs.live -> a in T.objs.live by simp()),
+    (all a. a in omega -> a in malloc.live(H) -> T.vm.pages[int_div(a, x86_64_linux.PAGE)] = H.vm.pages[int_div(a, x86_64_linux.PAGE)] by simp())))
+  have tin tow := fr
+  // errno: its pages, its place as they were
+  have eok: malloc.errno_ok(eo, T) proof
+    have g: all a. a in omega -> a in malloc.errno_bytes(eo, T) -> malloc.rw_mapped(T.vm, a) proof
+      fix a
+      assume ao ha
+      have eb: malloc.errno_bytes(eo, T) = malloc.errno_bytes(eo, H) by defs(simp(), malloc.errno_bytes)
+      have r := mp(all_elim(expand(heo, malloc.errno_ok), {a}), ao, rewrite(eb, ha))
+      show by defs(simp(expand(r, malloc.rw_mapped, x86_64_linux.mapped)), malloc.rw_mapped, x86_64_linux.mapped)
+    qed
+    show by defs(g, malloc.errno_ok)
+  qed
+  // the world: the thread's word and the code none written
+  have r0 _ _ _ := expand(th, abi.thread_ok)
+  have la := mp(all_elim(expand(hla, malloc.live_apart), {H}), ht, hi)
+  have lsame: all k. k in omega -> int_lt(k, 8) -> X[bits_add(64, H.fs_base, bits_of_int(64, k))] = H.vm.bytes[bits_add(64, H.fs_base, bits_of_int(64, k))] proof
+    fix k
+    assume hk hkl
+    have m0 _ := mp(all_elim(expand(r0, x86_64_linux.readable), {k}), hk, hkl)
+    have ae: bits_add(64, H.fs_base, bits_of_int(64, k)) = int_add(H.fs_base, k) by defs(arith(fsb, hk, hkl, fsl), bits_add, bits_of_int, pow2)
+    have be: bits_of_int(64, int_add(H.fs_base, k)) = int_add(H.fs_base, k) by defs(arith(fsb, hk, hkl, fsl), bits_of_int, pow2)
+    have nl: !(int_add(H.fs_base, k) in malloc.live_of(H.blocks)) proof
+      assume w
+      have ir: int_add(H.fs_base, k) in malloc.range(H.fs_base, 8) by defs(sel(arith(fsb, hk, hkl)), malloc.range)
+      have n1 _ _ := mp(all_elim(la, {int_add(H.fs_base, k)}), (int_add(H.fs_base, k) in omega by arith(fsb, hk)), (int_add(H.fs_base, k) in malloc.live(H) by defs(w, malloc.live)))
+      show by taut(n1, ir)
+    qed
+    have s := mp(all_elim(same, {int_add(H.fs_base, k)}), (int_add(H.fs_base, k) in omega by arith(fsb, hk)), m0, nl)
+    show := rewrite(sym(ae), rewrite(be, s))
+  qed
+  have hle := mp(all_elim(tr.le_same, {X}, {H.vm.bytes}, {H.fs_base}, {8}), (8 in omega by simp()), lsame)
+  have ca _ := expand(ld, abi.loaded)
+  have csame: all i. i in omega -> int_lt(i, seq_len(cd[empty])) -> X[bits_of_int(64, int_add(b[empty], i))] = H.vm.bytes[bits_of_int(64, int_add(b[empty], i))] proof
+    fix i
+    assume hi2 hil
+    let x := bits_of_int(64, int_add(b[empty], i))
+    have q1 q2 _ _ := mp(all_elim(expand(ca, abi.code_at), {i}), hi2, hil)
+    have xb: x in bits(64) by defs(simp(), bits_of_int, pow2)
+    have mx: x86_64_linux.mapped(H.vm, int_div(x, x86_64_linux.PAGE)) by taut(expand(q1, x86_64_linux.fetchable, x86_64_linux.page_of))
+    have nl: !(x in malloc.live_of(H.blocks)) proof
+      assume w
+      have _ rw _ := apply(tm.live_rw[I := I, O := O, H := H, a := x], hop, hwf, ht, hi, w)
+      show by taut(q2, (x86_64_linux.can_access(H.vm, x, 1) by defs(simp(expand(rw, malloc.rw_mapped)), x86_64_linux.can_access, x86_64_linux.hw_allows, x86_64_linux.page_of)))
+    qed
+    show by taut(mp(all_elim(hW, {x}), xb), mx, nl)
+  qed
+  have wok := apply(tm.wok_bytes[b := b, cd := cd, st := st, H := H, X := X], hw, hle, csame)
+  // the memory outside the allocator's at main's start: none written
+  have kept: tm.kept(O, eo, S0, T) proof
+    fix a
+    assume ao no ne m0
+    have nh nl bh ph := mp(all_elim(hk, {a}), ao, no, ne, m0)
+    have mh := apply(tm.mapped_eq[V := H.vm, V0 := S0.vm, q := int_div(a, x86_64_linux.PAGE)], ph, m0)
+    have s := mp(all_elim(same, {a}), ao, mh, nl)
+    show by taut(rewrite(sym(tow), nh), (!(a in malloc.live_of(T.blocks)) by simp(nl)), (T.vm.bytes[bits_of_int(64, a)] = S0.vm.bytes[bits_of_int(64, a)] by simp(s, bh)),
+      (T.vm.pages[int_div(a, x86_64_linux.PAGE)] = S0.vm.pages[int_div(a, x86_64_linux.PAGE)] by simp(ph)))
+  qed
+  show by taut(tin, tow, eok, wok, kept)
+qed
