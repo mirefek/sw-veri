@@ -91,6 +91,13 @@ law owned_private(s: Heap): alloc_inv(s) -> disjoint(alloc_owned(s), live(s))
 // program's data on the initial stack, which the C world sees only so)
 law owned_mapped(s: Heap): alloc_inv(s) -> all a: nat. a in alloc_owned(s) -> mapped(s.vm, a / PAGE) || a in s.objs.live
 
+// A live block is none of the thread's words: its pointer's, errno's, the
+// stack protector's (the C runtime's: a client writing its block keeps
+// them, the allocator's errno leaves the block)
+law live_apart(s: Heap): alloc_inv(s) -> all a: nat. a in live(s) ->
+  a notin range(s.fs_base, 8) && !(uint(s.fs_base) + errno_offset(()) <= a && a < uint(s.fs_base) + errno_offset(()) + 4) &&
+  a notin canary(s.fs_base)
+
 // The invariant depends only on what the allocator controls: a client that
 // changes other memory keeps it (and cannot corrupt the heap). The client
 // may write the bytes of its blocks, but their mappings (pages) stay under

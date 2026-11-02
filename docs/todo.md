@@ -13,12 +13,9 @@ layers/claim_program.sl, `slc claim --program-exits 0,1`): every run of
 the process from an unprivileged exec state that ends exits with 0 or 1,
 or dies of a stack overflow as abi.sl's `abi_function` raises it; no
 other crash, never exit 42. Runs that never end are allowed (§2).
-- (c0) malloc.sl still too weak for a client (found by (c)): errno in
-  no live block -- `step_ok` lets the allocator own errno's bytes; wants
-  a law (owned apart from errno) and `step_ok` with the errno offset.
-  When (c) needs it. `world_ok` at main's first call: its page clauses
-  from the bridge (abi.sl's `stack_reserve`, the world without the
-  stack's pages), in (c).
+- (c0) `world_ok` at main's first call: its page clauses from the
+  bridge (abi.sl's `stack_reserve`, the world without the stack's
+  pages), in (c).
 - (c) `main`: its readable GIMPLE, C1, a spec (returns 0 or 1) and C2
   against malloc.sl's malloc and free -- the client's reasoning: a block
   fresh and its own, its bytes kept by the other calls, at most NULL.

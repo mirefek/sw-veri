@@ -558,3 +558,57 @@ proof
   have hlv: all x. x in omega -> x in mallocng.owned(c)[s] && x in s.objs.live -> x in t.objs.live by taut(h2)
   show := apply(mallocng.frame_pt[c := c, s := s, t := t], hc, hs, ht, hi, hb, hk, hfs, htp, hlm, hg, hl, hlv)
 qed
+
+// ----------------------------------------------------------------------
+//  live_apart
+
+// (a heap state's thread pointer: a word)
+theorem mp.u_fs_ty(s): s in rec_and(abi.World, malloc.Heap.ghost) -> s.fs_base in bits(64)
+proof
+  assume hs
+  obtain w h, hw hh e from mp(rec_and_elim[a := abi.World, b := malloc.Heap.ghost, s := s], hs)
+  have sd: dom(w) = abi.WKEYS by simp(expand(hw, abi.World))
+  have hd: dom(h) = insert("blocks", empty) by simp(expand(hh, malloc.Heap.ghost))
+  have fS: union2(w, h).fs_base = w.fs_base by simp(sd, hd)
+  have ft: w.fs_base in bits(64) by simp(expand(hw, abi.World))
+  show := rewrite(sym(e), rewrite(sym(fS), ft))
+qed
+
+// a live block's byte: in the allocator's ranges (its group's), which the
+// thread's words are not (rep)
+theorem mallocng.law_live_apart(c, eo): c in mallocng.Cfg -> app(eo, empty) = 52 -> malloc.live_apart(mallocng.inv(c), eo)
+proof
+  assume hc he
+  fix s
+  assume hs hi
+  fix a
+  assume hao hl
+  obtain A, ha hr from mp(mallocng.inv_rep[c := c, s := s], hi)
+  have hu := apply(mallocng.abs_univ, ha)
+  have hb := apply(mp.u_blocks_ty, hs)
+  have fsb := apply(mp.u_fs_ty, hs)
+  have {hm = mem, rtl = tls, rer = errno, rca = canary} := expand(hr, mallocng.rep)
+  have {l = live} := apply(mp.has_rng, hc, hu, ha, hb, hm)
+  have ir := mp(all_elim(l, {a}), (a in malloc.live_of(s.blocks) by defs(hl, malloc.live)))
+  have c1: !(a in malloc.range(s.fs_base, 8)) proof
+    assume w
+    have w1 w2 := (int_le(s.fs_base, a) && int_lt(a, int_add(s.fs_base, 8)) by taut(unsel(expand(w, malloc.range))))
+    have ea: int_add(s.fs_base, int_sub(a, s.fs_base)) = a by arith(fsb, hao)
+    have t := mp(all_elim(rtl, {int_sub(a, s.fs_base)}), (int_sub(a, s.fs_base) in omega by arith(fsb, hao, w1)), (int_lt(int_sub(a, s.fs_base), 8) by arith(w2)))
+    show by taut(rewrite(ea, t), ir)
+  qed
+  have c2: !(int_le(int_add(s.fs_base, app(eo, empty)), a) && int_lt(a, int_add(int_add(s.fs_base, app(eo, empty)), 4))) proof
+    assume w
+    have w1 w2 := rewrite(he, w)
+    have ea: int_add(int_add(s.fs_base, 52), int_sub(a, int_add(s.fs_base, 52))) = a by arith(fsb, hao)
+    have t := mp(all_elim(rer, {int_sub(a, int_add(s.fs_base, 52))}), (int_sub(a, int_add(s.fs_base, 52)) in omega by arith(fsb, hao, w1)),
+      (int_lt(int_sub(a, int_add(s.fs_base, 52)), 4) by arith(w2)))
+    show by taut(rewrite(ea, t), ir)
+  qed
+  have c3: !(a in abi.canary(s.fs_base)) proof
+    assume w
+    have t _ := mp(all_elim(rca, {a}), hao, w)
+    show by taut(t, ir)
+  qed
+  show by taut(c1, c2, c3)
+qed

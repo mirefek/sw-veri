@@ -29,7 +29,9 @@ item is a short summary of finished work; details are in the files named.
   `world_ok` holds again after each call (the code kept by the image, no
   stack page and no page near the stack's space made: `bounds_kept`'s
   `kinds`), so a live block, mapped, is none of the caller's objects
-  (`malloc.block_not_obj`).
+  (`malloc.block_not_obj`). A law `live_apart`: a live block is none of
+  the thread's words (its pointer's, errno's, the stack protector's), so a
+  client writing it keeps them and the allocator's errno leaves it.
 
 ## Logic and proof language
 
