@@ -13,13 +13,27 @@ layers/claim_program.sl, `slc claim --program-exits 0,1`): every run of
 the process from an unprivileged exec state that ends exits with 0 or 1,
 or dies of a stack overflow as abi.sl's `abi_function` raises it; no
 other crash, never exit 42. Runs that never end are allowed (§2).
-- (c0) `world_ok` at main's first call: its page clauses from the
-  bridge (abi.sl's `stack_reserve`, the world without the stack's
-  pages), in (c).
-- (c) `main`: its readable GIMPLE, C1, a spec (returns 0 or 1) and C2
-  against malloc.sl's malloc and free -- the client's reasoning: a block
-  fresh and its own, its bytes kept by the other calls, at most NULL.
-  The static helpers (`pat`, `size`, `intact`, `fill`) the same way.
+- (c0) `world_ok` at main's first call: its page clauses and the stack
+  in the user space from the bridge (abi.sl's `stack_reserve`, the world
+  without the stack's pages), in (c).
+- (c) `main` (its spec: layers/test_malloc.sl's `main_spec`, 0 or 1, the
+  memory outside the allocator's and errno kept; the helpers done:
+  proofs/test/helpers.core). Left:
+  - client lemmas (proofs/malloc_client.core): malloc's outcomes inverted
+    (0 with the world's errno written, or a fresh block of at least n
+    bytes, the step's frame), free's; what a block's bytes keep across
+    the other calls (alloc_frame, live_apart, owned_private); a world
+    written in a block still world_ok (live_apart, code_at unwritable);
+  - call rules for main's callees: musl's GIMPLE malloc
+    (`default_malloc_fun(G)`, `mp.top_ref_s`) and free
+    (`mp.free_low_all`) as `mp.ref_s` at the caller's ghost, in step's
+    `overflow || return` form; fill's and intact's by their contracts;
+  - main's C2: four loops, the invariant over the ghost blocks -- p[k]
+    live, its size, its pattern; the memory outside the allocator's at
+    main's start kept (main_frame); the array object none of the
+    allocator's (step_ok's new owned bytes no stack object); then
+    `abi.implements(Heap.ghost, main_at, main_spec)` by
+    `tr.implements_abi_l` with main's C1.
 - (d) After main: stage2's `exit(main(..))` -- musl's `exit`,
   `__funcs_on_exit`, `__libc_exit_fini` (.fini_array, `_fini`),
   `__stdio_exit`, `_Exit` (exit_group): C1, specs, C2, as the startup's.
