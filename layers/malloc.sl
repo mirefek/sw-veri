@@ -73,14 +73,14 @@ param fn prog_statics(u: ()) -> Set[nat]
 // thread pointer's descriptor, its stack protector's word in it), its
 // break's start (above page 0) and its program loaded; its callers' stack
 // objects on the stack (in its space, as gimple.sl's alloc_objs places
-// them), and none of its pages in or near that space (abi.sl's
+// them, in the user space), and none of its pages in or near that space (abi.sl's
 // stack_reserve, seen from the world: so no block on a stack object).
 pred world_ok(s: Heap) =
   (all p: PageNo. s.vm.pages[p] != none -> s.vm.pages[p].value.kind != stack) &&
   s.objs.c_bytes = {a: nat | a notin canary(s.fs_base)} &&
   thread_ok(s.vm, s.fs_base) && canary_ok(s.vm, s.fs_base) && brk_start_ok(s.vm) &&
   loaded(s.vm, prog_base(()), prog_code(()), prog_statics(())) &&
-  (all a: nat. a in s.objs.live -> stack_floor(s.vm) <= a && a < uint(s.vm.stack_top)) &&
+  (all a: nat. a in s.objs.live -> stack_floor(s.vm) <= a && a < uint(s.vm.stack_top) && a < TASK_SIZE) &&
   (all p: PageNo. s.vm.pages[p] != none -> off_stack_space(s.vm, p, 1))
 
 law inv_wf(s: Heap): alloc_inv(s) -> heap_wf(s)
@@ -146,11 +146,11 @@ pred alloc_frame(s: Heap, vm2: Vm, extra: Set[nat]) =
 // A step of the allocator from `before` to `after`: it reorganises its
 // memory; afterwards its invariant holds (so every live block, a new one
 // too, is mapped read-write: inv_wf), and it owns nothing new except fresh
-// mappings and `extra`.
+// mappings -- none of the callers' stack objects -- and `extra`.
 pred step_ok(before: Heap, after: Heap, extra: Set[nat]) =
   alloc_frame(before, after.vm, extra) && alloc_inv(after) &&
   (all a: nat. a in alloc_owned(after) ->
-     a in alloc_owned(before) || a in extra || !mapped(before.vm, a / PAGE))
+     a in alloc_owned(before) || a in extra || (!mapped(before.vm, a / PAGE) && a notin before.objs.live))
 
 // (the process after it as any call needs it: world_ok -- the next call's)
 proc allocator_step(before: Heap, extra: Set[nat]) {

@@ -378,11 +378,11 @@ proof
   qed
   have ld2: abi.loaded(T.vm, app(b, empty), app(cd, empty), app(st, empty)) by defs(taut(ca2, st2), abi.loaded)
   // (the callers' objects: the same, in the same space)
-  have lv2: all x0. x0 in omega -> x0 in T.objs.live -> int_le(x86_64_linux.stack_floor(T.vm), x0) && int_lt(x0, T.vm.stack_top) proof
+  have lv2: all x0. x0 in omega -> x0 in T.objs.live -> int_le(x86_64_linux.stack_floor(T.vm), x0) && int_lt(x0, T.vm.stack_top) && int_lt(x0, x86_64_linux.TASK_SIZE) proof
     fix a
     assume hao hl
-    have l1 l2 := mp(all_elim(lv, {a}), hao, rewrite(hob, hl))
-    show by taut(rewrite(sym(fl), l1), rewrite(sym(bt), l2))
+    have l1 l2 l3 := mp(all_elim(lv, {a}), hao, rewrite(hob, hl))
+    show by taut(rewrite(sym(fl), l1), rewrite(sym(bt), l2), l3)
   qed
   // (no page in or near the stack's space: none new there)
   have os2: all x0. x0 in set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))) -> !(T.vm.pages[x0] = none) ->
@@ -690,6 +690,15 @@ proof
   show := rewrite((int_add(int_add(S.fs_base, 52), i) = a by arith()), e)
 qed
 
+// (a live object of a world as any call has it: in the stack's space)
+theorem mp.live_iss(b, cd, st, S, a): malloc.world_ok(b, cd, st, S) -> a in omega -> a in S.objs.live -> mallocng.in_stack_space(S.vm, a)
+proof
+  assume hw ho hl
+  have _ _ _ _ _ _ lst _ := expand(hw, malloc.world_ok)
+  have l1 l2 l3 := mp(all_elim(lst, {a}), ho, hl)
+  show by defs(taut(l1, l2, l3), mallocng.in_stack_space)
+qed
+
 // From A at S to A2 at T, the memory outside the allocator's untouched but
 // errno, the allocator grown only into memory unmapped before: a step of
 // the layer's allocator (with errno's bytes extra)
@@ -751,7 +760,7 @@ proof
         assume w
         show by taut(ne, apply(mp.top_eb[eo := eo, S := S, a := a], fsb, fsl, he, ao, w))
       qed
-      have l1 l2 := mp(all_elim(lst, {a}), ao, hl)
+      have l1 l2 _ := mp(all_elim(lst, {a}), ao, hl)
       have is: mallocng.in_stack_space(S.vm, a) by defs(taut(l1, l2, ht2), mallocng.in_stack_space)
       show := mp(all_elim(uo, {a}), ao, conj(conj(conj(conj(nf, nr), hl), is), nm))
     qed
@@ -762,7 +771,7 @@ proof
   have ti := apply(mallocng.inv_intro[c := c, s := T, A := A2], ht, ha2, hr2)
   // what T's allocator owns: A2's footprint (A2 unique), so A's or unmapped
   have ow: all a. a in omega -> a in mallocng.owned(c)[T] ->
-      (a in mallocng.owned(c)[S] || a in malloc.errno_bytes(eo, S)) || !x86_64_linux.mapped(S.vm, int_div(a, x86_64_linux.PAGE)) proof
+      (a in mallocng.owned(c)[S] || a in malloc.errno_bytes(eo, S)) || (!x86_64_linux.mapped(S.vm, int_div(a, x86_64_linux.PAGE)) && !(a in S.objs.live)) proof
     fix a
     assume ao h
     obtain B, hb hbr hbf from apply(mallocng.owned_mem[c := c, s := T, a := a], ht, h)
@@ -772,7 +781,12 @@ proof
       assume w
       show := apply(mallocng.owned_intro[c := c, s := S, A := A, a := a], hs, ha, hr, ao, w)
     qed
-    show by taut(g1, c1)
+    have c2: !mallocng.in_stack_space(S.vm, a) -> !(a in S.objs.live) proof
+      assume nn
+      assume hl
+      show by taut(nn, apply(mp.live_iss[b := b, cd := cd, st := st, S := S, a := a], hw, ao, hl))
+    qed
+    show by taut(g1, c1, c2)
   qed
   show by defs(taut(af, ti, ow), malloc.step_ok)
 qed
