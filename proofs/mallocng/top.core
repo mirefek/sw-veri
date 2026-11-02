@@ -1576,11 +1576,32 @@ proof
   show by ex_intro({A}, taut(ha, hrep, post))
 qed
 
+// a run that refines spec from the world s with the ghost part h, but for
+// a stack overflow (the ABI's: the memory and objects changed only)
+abbrev mp.ref_s(low, spec, G, s, h) := all o. runs(low, s, o) -> abi.outcome(o) -> (all x v. o = ok(x, v) -> v in cart(bits(64), bits(64))) ->
+  (ex h2. h2 in G && runs(spec, union2(s, h), with_ghost(o, h2))) || abi.ovf_out(s, o)
+
+// (... so too as the ABI's refinement has it)
+theorem mp.ref_s_ovf(low, spec, G, s, h): mp.ref_s(low, spec, G, s, h) -> abi.refines_ovf_at(low, spec, G, s, h)
+proof
+  assume hs
+  fix o
+  assume hr hsh hv
+  have d := mp(all_elim(hs, {o}), hr, hsh, hv)
+  have k: abi.ovf_out(s, o) -> (ex x. o = exc(x, exc_val("stack_overflow", empty)) && x.os = s.os) proof
+    assume w
+    obtain v ob, _ _ eo1 from w
+    show by ex_intro({fn_update(fn_update(s, "vm", v), "objs", ob)}, simp(eo1))
+  qed
+  show by taut(d, k)
+qed
+
 // The `malloc` symbol's code (over any __libc_malloc_impl called as such)
 // refines the layer's malloc, but for stack overflows keeping the I/O
-theorem mp.top_ref(c, eo, b, cd, st, g, regs, k): c in mallocng.Cfg -> app(eo, empty) = 52 -> mp.mi_call(c, g) -> regs in abi.ARGS ->
+theorem mp.top_ref_s(c, eo, b, cd, st, g, regs, k): c in mallocng.Cfg -> app(eo, empty) = 52 -> mp.mi_call(c, g) -> regs in abi.ARGS ->
   mp.code_img(c, app(b, empty), app(cd, empty), k) ->
-  abi.refines_ovf(c_src_malloc_lite_malloc.default_malloc_fun(g)[regs], abi.wide(malloc.Heap.ghost, mp.UF(c, eo, b, cd, st))[regs], malloc.Heap.ghost)
+  all s h. s in abi.World -> h in malloc.Heap.ghost ->
+    mp.ref_s(c_src_malloc_lite_malloc.default_malloc_fun(g)[regs], abi.wide(malloc.Heap.ghost, mp.UF(c, eo, b, cd, st))[regs], malloc.Heap.ghost, s, h)
 proof
   assume hc he hmi hra hci
   fix s h
@@ -1589,7 +1610,7 @@ proof
   assume hr hsh hv
   let S := union2(s, h)
   let GOAL := (ex h2. h2 in malloc.Heap.ghost && runs(abi.wide(malloc.Heap.ghost, mp.UF(c, eo, b, cd, st))[regs], S, with_ghost(o, h2))) ||
-    (ex x. o = exc(x, exc_val("stack_overflow", empty)) && x.os = s.os)
+    abi.ovf_out(s, o)
   have ty: c_src_malloc_lite_malloc.default_malloc_fun(g) in fn_space(abi.ARGS, powerset(univ(1))) by defs(tr.fun_typed, c_src_malloc_lite_malloc.default_malloc_fun)
   have pu := apply(mp.fv_univ, ty, hra, hr)
   have su: s in univ(1) by simp(pu)
@@ -1625,8 +1646,7 @@ proof
     // an overflow: the ABI's
     have k1: abi.ovf_out(s, o) -> GOAL proof
       assume w
-      obtain v ob, _ _ eo1 from w
-      show by disj({2}, ex_intro({fn_update(fn_update(s, "vm", v), "objs", ob)}, simp(eo1)))
+      show by disj({2}, w)
     qed
     // a return: 0 or a block
     have k2: (ex V rr. (V in x86_64_linux.Vm && (ex A2. mp.mi_ret(c, HA.A, regs[0], HA.blocks, s, A2, V, fst(rr)))) && o = ok(fn_update(s, "vm", V), rr)) -> GOAL proof
@@ -1657,6 +1677,18 @@ proof
     show by taut(hpost, k1, k2)
   qed
   show by taut(cu, cdf)
+qed
+
+
+theorem mp.top_ref(c, eo, b, cd, st, g, regs, k): c in mallocng.Cfg -> app(eo, empty) = 52 -> mp.mi_call(c, g) -> regs in abi.ARGS ->
+  mp.code_img(c, app(b, empty), app(cd, empty), k) ->
+  abi.refines_ovf(c_src_malloc_lite_malloc.default_malloc_fun(g)[regs], abi.wide(malloc.Heap.ghost, mp.UF(c, eo, b, cd, st))[regs], malloc.Heap.ghost)
+proof
+  assume hc he hmi hra hci
+  have t := apply(mp.top_ref_s[c := c, eo := eo, b := b, cd := cd, st := st, g := g, regs := regs, k := k], hc, he, hmi, hra, hci)
+  fix s h
+  assume hs hh
+  show := apply(mp.ref_s_ovf, mp(all_elim(t, {s}, {h}), hs, hh))
 qed
 
 // (an exception of the layer's malloc where it is undefined)
