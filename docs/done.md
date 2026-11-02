@@ -26,6 +26,10 @@ item is a short summary of finished work; details are in the files named.
   from the stack's pages), `world_ok` has the caller's objects there,
   `alloc_frame` keeps them, the allocator's growth is off the stack's
   space (mallocng's `untouched` / `kept_outside` carry those bytes).
+  `world_ok` holds again after each call (the code kept by the image, no
+  stack page and no page near the stack's space made: `bounds_kept`'s
+  `kinds`), so a live block, mapped, is none of the caller's objects
+  (`malloc.block_not_obj`).
 
 ## Logic and proof language
 

@@ -575,6 +575,24 @@ proof
   show by defs(simp(e, q1, q2), mallocng.reorganised)
 qed
 
+// (a page near the stack: so in a memory with the same stack, the page the same)
+theorem mp.ns_same(v, v2, p): v2.pages[p] = v.pages[p] -> v2.stack_top = v.stack_top -> v2.stack_limit = v.stack_limit ->
+  mallocng.near_stack(v2, p) -> mallocng.near_stack(v, p)
+proof
+  assume ep et el h
+  have h2 := expand(h, mallocng.near_stack, x86_64_linux.off_stack_space, x86_64_linux.stack_floor)
+  show by defs(rewrite(ep, rewrite(et, rewrite(el, h2))), mallocng.near_stack, x86_64_linux.off_stack_space, x86_64_linux.stack_floor)
+qed
+
+// (pages off the stack's space: each of them, in a memory with the same stack)
+theorem mp.oss_sub(v, v2, p, n, q): v2.stack_top = v.stack_top -> v2.stack_limit = v.stack_limit -> x86_64_linux.off_stack_space(v, p, n) ->
+  int_le(p, q) -> int_lt(q, int_add(p, n)) -> x86_64_linux.off_stack_space(v2, q, 1)
+proof
+  assume et el ho l1 l2
+  have o := expand(ho, x86_64_linux.off_stack_space, x86_64_linux.stack_floor, x86_64_linux.STACK_GUARD_GAP, x86_64_linux.PAGE)
+  show by defs(arith(o, et, el, l1, l2), x86_64_linux.off_stack_space, x86_64_linux.stack_floor, x86_64_linux.STACK_GUARD_GAP, x86_64_linux.PAGE)
+qed
+
 // (the stack's bounds and the break's start kept: twice, so)
 theorem mp.bk_trans(v1, v2, v3): mallocng.bounds_kept(v1, v2) -> mallocng.bounds_kept(v2, v3) -> mallocng.bounds_kept(v1, v3)
 proof
@@ -582,12 +600,14 @@ proof
   have a1 b1 c1 k1 := expand(h1, mallocng.bounds_kept)
   have a2 b2 c2 k2 := expand(h2, mallocng.bounds_kept)
   // (a stack page at the end: at the middle, so at the start)
-  have k: all x0. x0 in omega -> (int_lt(x0, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) && !(v3.pages[x0] = none)) && snd(v3.pages[x0]).kind = 2 ->
+  have k: all x0. x0 in omega -> (int_lt(x0, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) && !(v3.pages[x0] = none)) && mallocng.near_stack(v3, x0) ->
       v3.pages[x0] = v1.pages[x0] proof
     fix p
     assume hp h
     have e2 := mp(all_elim(k2, {p}), hp, h)
-    have e1 := mp(all_elim(k1, {p}), hp, rewrite(e2, h))
+    have h1 h2 h3 := h
+    have n2 := apply(mp.ns_same[v := v2, v2 := v3, p := p], e2, a2, b2, h3)
+    have e1 := mp(all_elim(k1, {p}), hp, conj(conj(h1, rewrite(e2, h2)), n2))
     show := trans(e2, e1)
   qed
   show by defs(taut(trans(a2, a1), trans(b2, b1), trans(c2, c1), k), mallocng.bounds_kept)
@@ -598,7 +618,7 @@ theorem mp.bk_pg(v, v2): v2.stack_top = v.stack_top -> v2.stack_limit = v.stack_
   mallocng.bounds_kept(v, v2)
 proof
   assume t l s p
-  have k: all x0. x0 in omega -> (int_lt(x0, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) && !(v2.pages[x0] = none)) && snd(v2.pages[x0]).kind = 2 ->
+  have k: all x0. x0 in omega -> (int_lt(x0, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) && !(v2.pages[x0] = none)) && mallocng.near_stack(v2, x0) ->
       v2.pages[x0] = v.pages[x0] proof
     fix q
     assume _ _
@@ -625,11 +645,12 @@ proof
 qed
 
 // (... by fresh pages, not the stack's: so)
-theorem mp.bk_fresh(v, v2, objs, p, n, pg): gimple.fresh_pages(v, v2, objs, p, n, pg) -> !(pg.kind = 2) -> mallocng.bounds_kept(v, v2)
+theorem mp.bk_fresh(v, v2, objs, p, n, pg): gimple.fresh_pages(v, v2, objs, p, n, pg) -> !(pg.kind = 2) -> x86_64_linux.off_stack_space(v, p, n) ->
+  mallocng.bounds_kept(v, v2)
 proof
-  assume hf hk
+  assume hf hk ho
   have _ ft fl fs fpg _ := expand(hf, gimple.fresh_pages)
-  have k: all x0. x0 in omega -> (int_lt(x0, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) && !(v2.pages[x0] = none)) && snd(v2.pages[x0]).kind = 2 ->
+  have k: all x0. x0 in omega -> (int_lt(x0, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) && !(v2.pages[x0] = none)) && mallocng.near_stack(v2, x0) ->
       v2.pages[x0] = v.pages[x0] proof
     fix q
     assume hq h
@@ -639,12 +660,24 @@ proof
       assume w
       have w1 w2 := w
       have ei: v2.pages[q] = some(pg) by simp(e, w1, w2)
-      have k2 := rewrite(ei, h3)
-      show by taut(hk, (pg.kind = 2 by simp(k2)))
+      have k2 := rewrite(ei, expand(h3, mallocng.near_stack))
+      have k3: pg.kind = 2 || !x86_64_linux.off_stack_space(v2, q, 1) by simp(k2)
+      show by taut(hk, k3, apply(mp.oss_sub[v := v, v2 := v2, p := p, n := n, q := q], ft, fl, ho, w1, w2))
     qed
     show by simp(e, c1)
   qed
   show by defs(taut(ft, fl, fs, k), mallocng.bounds_kept)
+qed
+
+// (an mmap without an address: off the stack's space)
+theorem mp.mm_oss(V3, p, N): mallocng_specs.mmap_place(V3, 0, N, bits_of_int(32, 34), p) -> x86_64_linux.off_stack_space(V3, p, x86_64_linux.pages_for(N))
+proof
+  assume hpl
+  have mc: !(bits_of_int(32, 34) = int_add(int_add(x86_64_linux.MAP_PRIVATE, x86_64_linux.MAP_ANONYMOUS), x86_64_linux.MAP_FIXED)) by defs(simp(), x86_64_linux.MAP_PRIVATE,
+    x86_64_linux.MAP_ANONYMOUS, x86_64_linux.MAP_FIXED)
+  have pl := expand(hpl, mallocng_specs.mmap_place)
+  have _ _ off := (int_le(1, p) && x86_64_linux.free_range(V3, p, x86_64_linux.pages_for(N)) && x86_64_linux.off_stack_space(V3, p, x86_64_linux.pages_for(N)) by simp(pl, mc))
+  show := off
 qed
 
 // (... by pages gone: so)
@@ -652,7 +685,7 @@ theorem mp.bk_gone(v, v2, p, n): gimple.gone_pages(v, v2, p, n) -> mallocng.boun
 proof
   assume hg
   have gt gl gs gpg _ := expand(hg, gimple.gone_pages)
-  have k: all x0. x0 in omega -> (int_lt(x0, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) && !(v2.pages[x0] = none)) && snd(v2.pages[x0]).kind = 2 ->
+  have k: all x0. x0 in omega -> (int_lt(x0, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) && !(v2.pages[x0] = none)) && mallocng.near_stack(v2, x0) ->
       v2.pages[x0] = v.pages[x0] proof
     fix q
     assume hq h

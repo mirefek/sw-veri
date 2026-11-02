@@ -73,13 +73,15 @@ param fn prog_statics(u: ()) -> Set[nat]
 // thread pointer's descriptor, its stack protector's word in it), its
 // break's start (above page 0) and its program loaded; its callers' stack
 // objects on the stack (in its space, as gimple.sl's alloc_objs places
-// them).
+// them), and none of its pages in or near that space (abi.sl's
+// stack_reserve, seen from the world: so no block on a stack object).
 pred world_ok(s: Heap) =
   (all p: PageNo. s.vm.pages[p] != none -> s.vm.pages[p].value.kind != stack) &&
   s.objs.c_bytes = {a: nat | a notin canary(s.fs_base)} &&
   thread_ok(s.vm, s.fs_base) && canary_ok(s.vm, s.fs_base) && brk_start_ok(s.vm) &&
   loaded(s.vm, prog_base(()), prog_code(()), prog_statics(())) &&
-  (all a: nat. a in s.objs.live -> stack_floor(s.vm) <= a && a < uint(s.vm.stack_top))
+  (all a: nat. a in s.objs.live -> stack_floor(s.vm) <= a && a < uint(s.vm.stack_top)) &&
+  (all p: PageNo. s.vm.pages[p] != none -> off_stack_space(s.vm, p, 1))
 
 law inv_wf(s: Heap): alloc_inv(s) -> heap_wf(s)
 
