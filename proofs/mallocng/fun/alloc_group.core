@@ -415,17 +415,16 @@ proof
   have u2 := mp(app_update_other[f := V2, k := "bytes", v := V.bytes, x := "brk_start"], (!("brk_start" = "bytes") by simp()))
   have ep: V2.pages = V.pages := sym(rewrite(rest, u1))
   have eb: V2.brk_start = V.brk_start := sym(rewrite(rest, u2))
-  have r: all x0. x0 in omega -> (!(x0 in mallocng.footprint(c, A, B)) && !(x0 in mp.errno(fs))) && x86_64_linux.mapped(V, int_div(x0, x86_64_linux.PAGE)) ->
+  have r: all x0. x0 in omega -> (!(x0 in mallocng.footprint(c, A, B)) && !(x0 in mp.errno(fs))) && int_lt(x0, x86_64_linux.TASK_SIZE) ->
       V2.bytes[bits_of_int(64, x0)] = V.bytes[bits_of_int(64, x0)] && V2.pages[int_div(x0, x86_64_linux.PAGE)] = V.pages[int_div(x0, x86_64_linux.PAGE)] proof
     fix a
     assume ho hq
-    have _ n2 m0 := hq
-    have ml _ := expand(m0, x86_64_linux.mapped)
-    have ab: bits_of_int(64, a) = a by defs(arith(ho, expand(ml, x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)), bits_of_int, pow2)
-    have bb := rewrite(sym(ab), mp(all_elim(out, {a}), (a in bits(64) by arith(ho, expand(ml, x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))), n2))
+    have _ n2 ml := hq
+    have ab: bits_of_int(64, a) = a by defs(arith(ho, expand(ml, x86_64_linux.TASK_SIZE)), bits_of_int, pow2)
+    have bb := rewrite(sym(ab), mp(all_elim(out, {a}), (a in bits(64) by arith(ho, expand(ml, x86_64_linux.TASK_SIZE))), n2))
     show by taut(bb, (V2.pages[int_div(a, x86_64_linux.PAGE)] = V.pages[int_div(a, x86_64_linux.PAGE)] by simp(ep)))
   qed
-  have un: mallocng.kept_outside(c, A, B, V, V2, mp.errno(fs)) by defs(taut(r, apply(mp.bk_only, rest)), mallocng.kept_outside)
+  have un := apply(mp.ko_all[c := c, A := A, b := B, vm := V, V := V2, e := mp.errno(fs)], r, apply(mp.bk_only, rest))
   show by taut(hh2, un, ep, v2V)
 qed
 
@@ -635,6 +634,24 @@ proof
   have nb: !(int_le(int_mul(p, x86_64_linux.PAGE), a) && int_lt(a, int_mul(int_add(p, NP), x86_64_linux.PAGE))) by arith(q)
   have e2: V4.bytes[a] = V3.bytes[a] by simp(mp(all_elim(xby, {a}), ab), nb)
   show by taut(e1, rewrite(sym(bb), e2))
+qed
+
+// (... so a byte of the stack's space: outside the fresh pages)
+theorem mp.mm_apart(V3, p, N, a): p in omega -> N in omega -> mallocng_specs.mmap_place(V3, 0, N, bits_of_int(32, 34), p) ->
+  a in omega -> mallocng.in_stack_space(V3, a) ->
+  int_lt(a, int_mul(p, x86_64_linux.PAGE)) || int_le(int_mul(int_add(p, x86_64_linux.pages_for(N)), x86_64_linux.PAGE), a)
+proof
+  assume hp hn hpl hao hs
+  let NP := x86_64_linux.pages_for(N)
+  have pg: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
+  have mc: !(bits_of_int(32, 34) = int_add(int_add(x86_64_linux.MAP_PRIVATE, x86_64_linux.MAP_ANONYMOUS), x86_64_linux.MAP_FIXED)) by defs(simp(), x86_64_linux.MAP_PRIVATE,
+    x86_64_linux.MAP_ANONYMOUS, x86_64_linux.MAP_FIXED)
+  have pl := expand(hpl, mallocng_specs.mmap_place)
+  have _ _ off := (int_le(1, p) && x86_64_linux.free_range(V3, p, NP) && x86_64_linux.off_stack_space(V3, p, NP) by simp(pl, mc))
+  have s1 s2 _ := expand(hs, mallocng.in_stack_space, x86_64_linux.stack_floor)
+  have no: NP in omega by defs(arith(hn), x86_64_linux.pages_for, x86_64_linux.PAGE)
+  have gp: x86_64_linux.STACK_GUARD_GAP in omega by defs(simp(), x86_64_linux.STACK_GUARD_GAP)
+  show by arith(expand(off, x86_64_linux.off_stack_space, x86_64_linux.stack_floor), s1, s2, gp, pg, hp, no, hao)
 qed
 
 // (memory changed only on pages unmapped before -- an mmap's fresh pages --,
@@ -885,11 +902,11 @@ proof
   have grw: mp.grown(c, A2, A, B, s.vm) proof
     fix a
     assume ho hf
-    have inm: int_le(M, a) && int_lt(a, int_add(M, 40)) -> a in mallocng.footprint(c, A, B) || !x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) proof
+    have inm: int_le(M, a) && int_lt(a, int_add(M, 40)) -> a in mallocng.footprint(c, A, B) || (!x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) && !mallocng.in_stack_space(s.vm, a)) proof
       assume h
       show := mp(all_elim(mp(mf, mnz), {a}), ho, (int_le(M, a) && int_lt(a, int_add(M, mallocng.META_SIZE)) by defs(arith(h), mallocng.META_SIZE)))
     qed
-    have out: !(int_le(M, a) && int_lt(a, int_add(M, 40))) -> a in mallocng.footprint(c, A, B) || !x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) proof
+    have out: !(int_le(M, a) && int_lt(a, int_add(M, 40))) -> a in mallocng.footprint(c, A, B) || (!x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) && !mallocng.in_stack_space(s.vm, a)) proof
       assume h
       have {f1 = fp} := apply(mp.ms_fp, P, ho, h)
       show := mp(all_elim(gr, {a}), ho, taut(f1, hf))
@@ -906,23 +923,34 @@ proof
   have ep: V2.pages = V.pages := sym(rewrite(vr, up))
   have us := mp(app_update_other[f := V2, k := "bytes", v := V.bytes, x := "brk_start"], (!("brk_start" = "bytes") by simp()))
   have es: V2.brk_start = V.brk_start := sym(rewrite(vr, us))
-  have u1 u2 := expand(un, mallocng.untouched)
+  have u1 uo u2 := expand(un, mallocng.untouched)
   have co: c.ctx in omega by simp(hc)
   have {H1 = inv} := expand(hh, mallocng.holds_m)
   have {hpt = part} := expand(H1, mallocng.holds)
   have {fsl = free_slots} := expand(hpt, mallocng.metas_partition)
-  have nfp: all a. a in omega -> a in mallocng.footprint(c, A1, B) -> !(a in mallocng.footprint(c, A, B)) -> !x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) proof
+  have nfp: all a. a in omega -> a in mallocng.footprint(c, A1, B) -> !(a in mallocng.footprint(c, A, B)) ->
+      !x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) && !mallocng.in_stack_space(s.vm, a) proof
     fix a
     assume ho hf hn
     show by taut(mp(all_elim(gr, {a}), ho, hf), hn)
   qed
-  // (free_meta's step: no byte but the allocator's or one unmapped before written)
-  have kp: all a. a in omega -> !(a in mallocng.footprint(c, A, B)) -> x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) ->
+  // (free_meta's step: no byte but the allocator's or one fresh before
+  // written -- so none mapped before, none of the stack's space)
+  have kp: all a. a in omega -> !(a in mallocng.footprint(c, A, B)) -> x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) || mallocng.in_stack_space(s.vm, a) ->
       V2.bytes[bits_of_int(64, a)] = V.bytes[bits_of_int(64, a)] proof
     fix a
     assume ho n1 m0
-    have ml _ := expand(m0, x86_64_linux.mapped)
-    have alo: int_lt(a, int_pow(2, 64)) by arith(ho, expand(ml, x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))
+    have t1: x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) -> int_lt(a, int_pow(2, 64)) proof
+      assume m
+      have ml _ := expand(m, x86_64_linux.mapped)
+      show by arith(ho, expand(ml, x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))
+    qed
+    have t2: mallocng.in_stack_space(s.vm, a) -> int_lt(a, int_pow(2, 64)) proof
+      assume hs
+      have _ _ yt := expand(hs, mallocng.in_stack_space)
+      show by defs(arith(yt, ho), x86_64_linux.TASK_SIZE)
+    qed
+    have alo: int_lt(a, int_pow(2, 64)) by taut(m0, t1, t2)
     // the head's word: the context's, A1's
     have nh: !(int_le(int_add(c.ctx, 16), a) && int_lt(a, int_add(int_add(c.ctx, 16), 8))) proof
       assume w
@@ -952,7 +980,7 @@ proof
     fix a
     assume ho hq
     have n1 n2 m0 := hq
-    have b2 := mp(all_elim(kp, {a}), ho, n1, m0)
+    have b2 := mp(all_elim(kp, {a}), ho, n1, taut(m0))
     have b1 p1 := mp(all_elim(u1, {a}), ho, taut(n1, n2, m0))
     have bb: !abi.stack_free(s.vm, s.objs, a) -> V2.bytes[bits_of_int(64, a)] = s.vm.bytes[bits_of_int(64, a)] proof
       assume nf
@@ -960,8 +988,24 @@ proof
     qed
     show by taut(bb, trans((V2.pages[int_div(a, x86_64_linux.PAGE)] = V.pages[int_div(a, x86_64_linux.PAGE)] by simp(ep)), p1))
   qed
-  have unt: mallocng.untouched(c, A, B, s.vm, V2, s.objs, e) by defs(taut(r, apply(mp.bk_trans, u2, apply(mp.bk_only, vr))), mallocng.untouched)
-  show by taut(ba, bu, nr2, bac, btk, hin, unt, grw, kp)
+  have o: all a. a in omega -> (((!(a in mallocng.footprint(c, A, B)) && !(a in e)) && a in s.objs.live) && mallocng.in_stack_space(s.vm, a)) &&
+      !x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) ->
+      V2.bytes[bits_of_int(64, a)] = s.vm.bytes[bits_of_int(64, a)] && V2.pages[int_div(a, x86_64_linux.PAGE)] = s.vm.pages[int_div(a, x86_64_linux.PAGE)] proof
+    fix a
+    assume ho hq
+    have n1 _ _ s0 _ := hq
+    have b2 := mp(all_elim(kp, {a}), ho, n1, taut(s0))
+    have b1 p1 := mp(all_elim(uo, {a}), ho, hq)
+    show by taut(trans(b2, b1), trans((V2.pages[int_div(a, x86_64_linux.PAGE)] = V.pages[int_div(a, x86_64_linux.PAGE)] by simp(ep)), p1))
+  qed
+  have unt: mallocng.untouched(c, A, B, s.vm, V2, s.objs, e) by defs(taut(r, o, apply(mp.bk_trans, u2, apply(mp.bk_only, vr))), mallocng.untouched)
+  have kpm: all a. a in omega -> !(a in mallocng.footprint(c, A, B)) -> x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) ->
+      V2.bytes[bits_of_int(64, a)] = V.bytes[bits_of_int(64, a)] proof
+    fix a
+    assume ho n1 m0
+    show := mp(all_elim(kp, {a}), ho, n1, taut(m0))
+  qed
+  show by taut(ba, bu, nr2, bac, btk, hin, unt, grw, kpm)
 qed
 
 // (a meta ready on V0, its record none of the allocator's bytes nor e's,
@@ -974,7 +1018,7 @@ proof
   let M0 := mallocng.mview(V0, mallocng.all_bytes())
   let M1 := mallocng.mview(V1, mallocng.all_bytes())
   have rw r0 r8 := expand(hr, mallocng_specs.meta_ready)
-  have u1 _ := expand(hu, mallocng.untouched)
+  have u1 _ _ := expand(hu, mallocng.untouched)
   have cm: mallocng.META_SIZE = 40 by defs(refl({40}), mallocng.META_SIZE)
   have ag: all a. a in omega -> int_le(m, a) -> int_lt(a, int_add(m, 40)) -> M1[a] = M0[a] proof
     fix a
@@ -3029,7 +3073,7 @@ proof
           apply(mp.unt_wider[c := c, A := A1, b := B, V0 := V1, V1 := V2, e := mp.errno(s.fs_base)], un12),
           apply(mp.unt_wider[c := c, A := A1, b := B, V0 := V2, V1 := V3, e := mp.errno(s.fs_base)], un23), refl({mallocng.footprint(c, A1, B)}))
         have un03 := apply(mp.unt_grow[c := c, A := A, A1 := A1, b := B, V0 := s.vm, V1 := V1, V2 := V3, e := mp.errno(s.fs_base)], unt1, un13, grw1)
-        have u31 u32 := expand(un03, mallocng.untouched)
+        have u31 u3o u32 := expand(un03, mallocng.untouched)
         have mf := mp(mfp1, hnz)
         have ts: int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE) = 34359738367 by defs(simp(), x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)
         have ur: all a. a in omega -> (!(a in mallocng.footprint(c, A, B)) && !(a in mp.errno(s.fs_base))) && x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) ->
@@ -3070,26 +3114,61 @@ proof
           qed
           show by taut(eb, trans((VF.pages[int_div(a, x86_64_linux.PAGE)] = V4.pages[int_div(a, x86_64_linux.PAGE)] by simp()), trans(p4, p3)))
         qed
+        // (the callers' objects: in the stack's space, so off the new pages,
+        // the record and the context)
+        have mst4 := apply(mp.mm_stack[V3 := V3, V4 := V4, p := p, N := N4, PG := NPG], hpo, n4o, hpl, hfr)
+        have bt3 bl3 _ := expand(u32, mallocng.bounds_kept)
+        have uo: all a. a in omega -> (((!(a in mallocng.footprint(c, A, B)) && !(a in mp.errno(s.fs_base))) && a in s.objs.live) && mallocng.in_stack_space(s.vm, a)) &&
+            !x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) ->
+            VF.bytes[bits_of_int(64, a)] = s.vm.bytes[bits_of_int(64, a)] && VF.pages[int_div(a, x86_64_linux.PAGE)] = s.vm.pages[int_div(a, x86_64_linux.PAGE)] proof
+          fix a
+          assume hao hq
+          have n1 _ _ s0 _ := hq
+          have b3 p3 := mp(all_elim(u3o, {a}), hao, hq)
+          have _ _ yt := expand(s0, mallocng.in_stack_space)
+          have lo: int_lt(a, 18446744073709551616) by defs(arith(yt, hao), x86_64_linux.TASK_SIZE)
+          have ea: bits_of_int(64, a) = a by defs(arith(hao, lo), bits_of_int, pow2)
+          have yb: a in bits(64) by arith(hao, lo)
+          have s3: mallocng.in_stack_space(V3, a) := apply(mp.iss_same[vm := s.vm, vm2 := V3, a := a], s0, bt3, bl3)
+          have p4 b4 := mp(all_elim(mst4, {a}), hao, s3)
+          have nt: !(int_le(M, a) && int_lt(a, int_add(M, 40))) proof
+            assume w
+            have w1 w2 := w
+            have q := mp(all_elim(mf, {a}), hao, (int_le(M, a) && int_lt(a, int_add(M, mallocng.META_SIZE)) by defs(arith(w1, w2), mallocng.META_SIZE)))
+            show by taut(q, n1, s0)
+          qed
+          have nc: !(int_le(c.ctx, a) && int_lt(a, int_add(c.ctx, mallocng.CTX_SIZE))) proof
+            assume w
+            have w1 w2 := w
+            show by taut(n1, apply(mp.ctx_fp[c := c, A := A, vm := s.vm, b := B, a := a], hc, au, hat, hin, hao, w1, w2))
+          qed
+          have ks: mallocng.CTX_SIZE = 928 by defs(refl({928}), mallocng.CTX_SIZE)
+          have qa := apply(mp.mm_apart[V3 := V3, p := p, N := N4, a := a], hpo, n4o, hpl, hao, s3)
+          have np: !(int_le(P, a) && int_lt(a, int_add(P, 9))) by arith(qa, mnp, pg, n4a, n4g, n4o, hpo)
+          have f1 := mp(all_elim(frb, {a}), yb, arith(nt), arith(nc, hx, ks), arith(nc, hx, ks, cv, hs, hsl), arith(np))
+          have e0: VF.bytes[a] = s.vm.bytes[a] := trans((VF.bytes[a] = Y11[a] by simp()), trans(f1, trans(rewrite(ea, b4), rewrite(ea, b3))))
+          show by taut(rewrite(sym(ea), e0), trans((VF.pages[int_div(a, x86_64_linux.PAGE)] = V4.pages[int_div(a, x86_64_linux.PAGE)] by simp()), trans(p4, p3)))
+        qed
         have {mst = start, mtp = top, mlm = lim} := apply(mp.mm_fresh[V3 := V3, V4 := V4, p := p, N := N4, PG := NPG], hpo, n4o, n4a, n4p, hpl, hfr)
         have bk34: mallocng.bounds_kept(V3, V4) by defs(taut(mtp, mlm, mst), mallocng.bounds_kept)
-        have untF: mallocng.untouched(c, A, B, s.vm, VF, s.objs, mp.errno(s.fs_base)) by defs(taut(ur, apply(mp.bk_trans, u32, apply(mp.bk_trans, bk34, mp.bk_bytes[v := V4, x := Y11]))),
+        have untF: mallocng.untouched(c, A, B, s.vm, VF, s.objs, mp.errno(s.fs_base)) by defs(taut(ur, uo, apply(mp.bk_trans, u32, apply(mp.bk_trans, bk34, mp.bk_bytes[v := V4, x := Y11]))),
           mallocng.untouched)
         // (grown: by the meta, unmapped before or the allocator's; by the
         // pages, unmapped before -- errno's mapped)
         have fsb2: s.fs_base in bits(64) by simp(expand(hw, abi.World))
-        have grF: all a. a in omega -> a in mallocng.footprint(c, A2, B) -> a in mallocng.footprint(c, A, B) || !x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) proof
+        have grF: all a. a in omega -> a in mallocng.footprint(c, A2, B) -> a in mallocng.footprint(c, A, B) || (!x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) && !mallocng.in_stack_space(s.vm, a)) proof
           fix a
           assume hao hf
           have fe := apply(mp.gx_fp[c := c, A := A1, vm := V4, V1 := VF, b := B, k := KK, T := A.taken, m := M, V := VR, n := K4, a := a], GP)
-          have d1: a in mallocng.footprint(c, A1, B) -> a in mallocng.footprint(c, A, B) || !x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) proof
+          have d1: a in mallocng.footprint(c, A1, B) -> a in mallocng.footprint(c, A, B) || (!x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) && !mallocng.in_stack_space(s.vm, a)) proof
             assume h
             show := mp(all_elim(grw1, {a}), hao, h)
           qed
-          have d2: int_le(M, a) && int_lt(a, int_add(M, mallocng.META_SIZE)) -> a in mallocng.footprint(c, A, B) || !x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) proof
+          have d2: int_le(M, a) && int_lt(a, int_add(M, mallocng.META_SIZE)) -> a in mallocng.footprint(c, A, B) || (!x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) && !mallocng.in_stack_space(s.vm, a)) proof
             assume h
             show := mp(all_elim(mf, {a}), hao, h)
           qed
-          have d3: mallocng.in_range(a, mallocng.group_range(VR)) -> a in mallocng.footprint(c, A, B) || !x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) proof
+          have d3: mallocng.in_range(a, mallocng.group_range(VR)) -> a in mallocng.footprint(c, A, B) || (!x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) && !mallocng.in_stack_space(s.vm, a)) proof
             assume w
             have w1 w2 := mp(all_elim(inrg, {a}), w)
             have um := mp(all_elim(pfr, {a}), hao, w1, w2)
@@ -3109,7 +3188,14 @@ proof
               have m3: x86_64_linux.mapped(V3, int_div(a, x86_64_linux.PAGE)) by defs(simp(expand(m0, x86_64_linux.mapped), p3), x86_64_linux.mapped)
               show by taut(rewrite(pg, m3), um)
             qed
-            show by taut(c1)
+            // (the new pages: off the stack's space)
+            have s0: mallocng.in_stack_space(s.vm, a) -> false proof
+              assume hs
+              have s3: mallocng.in_stack_space(V3, a) := apply(mp.iss_same[vm := s.vm, vm2 := V3, a := a], hs, bt3, bl3)
+              have qa := apply(mp.mm_apart[V3 := V3, p := p, N := N4, a := a], hpo, n4o, hpl, hao, s3)
+              show by arith(qa, w1, w2, mnp, pg, n4a, n4o, hpo)
+            qed
+            show by taut(c1, s0)
           qed
           show by taut(fe, hf, d1, d2, d3)
         qed
@@ -3191,7 +3277,7 @@ proof
       have ss16: fn_update(W1, "vm", W1.vm) = W1 by simp()
       have gu1 gs1 _ _ := expand(gk1, mallocng_specs.groups_kept)
       have nr1: mallocng.no_reserved(A1) by defs(rewrite(sym(gs1), expand(hnr, mallocng.no_reserved)), mallocng.no_reserved)
-      have u1a u1b0 := expand(unt1, mallocng.untouched)
+      have u1a _ u1b0 := expand(unt1, mallocng.untouched)
       have _ _ u1b := expand(u1b0, mallocng.bounds_kept)
       have bs1: abi.brk_start_ok(V1) by defs(rewrite(sym(u1b), expand(hbs, abi.brk_start_ok)), abi.brk_start_ok)
       have pnr: mallocng.no_reserved(H1.A) by simp(nr1, hA1)
@@ -3497,18 +3583,25 @@ proof
             int_le(int_add(int_sub(mallocng.slot_start(H2.A.metas[G], R2), mallocng.storage(H2.A.metas[G])), int_mul(256, mallocng.UNIT)),
               int_mul(int_mul(mallocng.UNIT, mallocng.size_classes[H2.A.metas[G].sizeclass]), int_add(R2, 1))) by simp(cb0, hA2)
         // (the thread's block apart from the slot)
-        have u1x u1y := expand(unt1, mallocng.untouched)
+        have u1x _ u1y := expand(unt1, mallocng.untouched)
         have rg17: mp.rgrown(c, A2, A, B, s.vm) proof
           fix a
           assume hao hr
           have q := mp(all_elim(rgw2, {a}), hao, hr)
-          have q1: a in mallocng.footprint(c, A1, B) || !x86_64_linux.mapped(V1, int_div(a, x86_64_linux.PAGE)) by simp(q, hA1, hB1)
-          have d1: a in mallocng.footprint(c, A1, B) -> a in mallocng.footprint(c, A, B) || !x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) proof
+          have q1: a in mallocng.footprint(c, A1, B) || (!x86_64_linux.mapped(V1, int_div(a, x86_64_linux.PAGE)) && !mallocng.in_stack_space(V1, a)) by simp(q, hA1, hB1)
+          have d1: a in mallocng.footprint(c, A1, B) -> a in mallocng.footprint(c, A, B) || (!x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) && !mallocng.in_stack_space(s.vm, a)) proof
             assume f
             show := mp(all_elim(grw1, {a}), hao, f)
           qed
-          have d2: !x86_64_linux.mapped(V1, int_div(a, x86_64_linux.PAGE)) -> a in mallocng.footprint(c, A, B) || !x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) proof
-            assume nm
+          have d2: !x86_64_linux.mapped(V1, int_div(a, x86_64_linux.PAGE)) && !mallocng.in_stack_space(V1, a) ->
+              a in mallocng.footprint(c, A, B) || (!x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) && !mallocng.in_stack_space(s.vm, a)) proof
+            assume nn
+            have nm ns := nn
+            have s0: mallocng.in_stack_space(s.vm, a) -> false proof
+              assume hs
+              have bt bl _ := expand(u1y, mallocng.bounds_kept)
+              show by taut(ns, apply(mp.iss_same[vm := s.vm, vm2 := V1, a := a], hs, bt, bl))
+            qed
             have ne: !(a in EN) proof
               assume he
               have ao e1 e2 := (a in omega && int_le(int_add(s.fs_base, 52), a) && int_lt(a, int_add(s.fs_base, 56)) by simp(he))
@@ -3522,7 +3615,7 @@ proof
               have _ pe := mp(all_elim(u1x, {a}), hao, taut(nf, ne, mm))
               show by taut(nm, (x86_64_linux.mapped(V1, int_div(a, x86_64_linux.PAGE)) by defs(simp(expand(mm, x86_64_linux.mapped), pe), x86_64_linux.mapped)))
             qed
-            show by taut(k)
+            show by taut(k, s0)
           qed
           show by taut(q1, d1, d2)
         qed
@@ -4736,7 +4829,7 @@ proof
         have fgr: fst(rr) = 0 || mallocng_specs.fresh_group(A3, fst(rr), sc, req) by taut(subst({y. mallocng_specs.fresh_group(A3, y, sc, req)}, sym(rm), fgM))
         // (untouched: the slot's bytes the allocator's or unmapped, its end
         // and the meta's the allocator's (grown), the counter the allocator's)
-        have u31 u32 := expand(un017, mallocng.untouched)
+        have u31 u3o u32 := expand(un017, mallocng.untouched)
         have mf := mp(mfp1, hnz)
         have ts: int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE) = 34359738367 by defs(simp(), x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)
         have ur: all a. a in omega -> (!(a in mallocng.footprint(c, A, B)) && !(a in EN)) && x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) ->
@@ -4795,26 +4888,80 @@ proof
             pgs, refl({VF.pages[int_div(a, x86_64_linux.PAGE)]}))
           show by taut(eb, trans(ep, p3))
         qed
+        // (the callers' objects: in the stack's space, so in none of those)
+        have uo: all a. a in omega -> (((!(a in mallocng.footprint(c, A, B)) && !(a in EN)) && a in s.objs.live) && mallocng.in_stack_space(s.vm, a)) &&
+            !x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) ->
+            VF.bytes[bits_of_int(64, a)] = s.vm.bytes[bits_of_int(64, a)] && VF.pages[int_div(a, x86_64_linux.PAGE)] = s.vm.pages[int_div(a, x86_64_linux.PAGE)] proof
+          fix a
+          assume hao hq
+          have n1 _ _ s0 _ := hq
+          have b3 p3 := mp(all_elim(u3o, {a}), hao, hq)
+          have _ _ yt := expand(s0, mallocng.in_stack_space)
+          have lo: int_lt(a, 18446744073709551616) by defs(arith(yt, hao), x86_64_linux.TASK_SIZE)
+          have ea: bits_of_int(64, a) = a by defs(arith(hao, lo), bits_of_int, pow2)
+          have yb: a in bits(64) by arith(hao, lo)
+          have ns: !mallocng.in_slot(VG, R2, a) proof
+            assume isl
+            have ir: mallocng.in_reserved(A2, a) by defs(ex_intro({G}, {R2}, taut(go, r2o, iuG, ril, rrs, isl)), mallocng.in_reserved)
+            have q := mp(all_elim(rg17, {a}), hao, ir)
+            show by taut(q, n1, s0)
+          qed
+          have ne: !(a = SE) proof
+            assume e
+            have {hf = fp} := apply(mp.held_fp, rewrite(sym(e), seh))
+            have q := mp(all_elim(gr017, {a}), hao, hf)
+            show by taut(q, n1, s0)
+          qed
+          have nt: !(int_le(M, a) && int_lt(a, int_add(M, 40))) proof
+            assume w
+            have w1 w2 := w
+            have q := mp(all_elim(mf, {a}), hao, (int_le(M, a) && int_lt(a, int_add(M, mallocng.META_SIZE)) by defs(arith(w1, w2), mallocng.META_SIZE)))
+            show by taut(q, n1, s0)
+          qed
+          have ks: mallocng.CTX_SIZE = 928 by defs(refl({928}), mallocng.CTX_SIZE)
+          have nu: !(int_le(UA, a) && int_lt(a, int_add(UA, 8))) proof
+            assume w
+            have w1 w2 := w
+            show by taut(n1, apply(mp.ctx_fp[c := c, A := A, vm := s.vm, b := B, a := a], hc, au, hat, hin, hao, (int_le(c.ctx, a) by arith(w1, hx, cv)),
+              (int_lt(a, int_add(c.ctx, mallocng.CTX_SIZE)) by arith(w2, hx, cv, ks, hs, hsl))))
+          qed
+          have ns2 := expand(ns, mallocng.in_slot)
+          have f1 := mp(all_elim(vfz, {a}), hao, lo, nt, nu, (int_lt(a, P) || int_le(int_add(P, 9), a) by arith(ns2, pst, ib4, pfi, zj1)))
+          have nl: all j. j in omega -> int_lt(j, k) -> !(a = LA(j)) proof
+            fix j
+            assume jo jl e
+            have l0 l1 l2 := mp(all_elim(lak, {j}), jo, arith(jl, kc))
+            have mj: int_mul(SZ, j) in omega by simp(szo, jo)
+            show by arith(ns2, e, l2, ne, mj, pst, ib4, po)
+          qed
+          have f2 := mp(all_elim(zr, {a}), yb, nl)
+          have f3 := mp(all_elim(z0o, {a}), yb, arith(nt), (!(a = int_add(P, int_neg(3))) by arith(ns2, pst, ib4, pfi, zj1, hao, po)))
+          have f4 := mp(all_elim(fout, {a}), hao, taut((int_lt(a, int_pow(2, 64)) by arith(lo, (int_pow(2, 64) = 18446744073709551616 by simp()))), ns))
+          have e0: VF.bytes[a] = s.vm.bytes[a] := trans(f1, trans(f2, trans(f3, trans(rewrite(ea, f4), rewrite(ea, b3)))))
+          have ep: VF.pages[int_div(a, x86_64_linux.PAGE)] = V17.pages[int_div(a, x86_64_linux.PAGE)] := subst({y. VF.pages[int_div(a, x86_64_linux.PAGE)] = y[int_div(a, x86_64_linux.PAGE)]},
+            pgs, refl({VF.pages[int_div(a, x86_64_linux.PAGE)]}))
+          show by taut(rewrite(sym(ea), e0), trans(ep, p3))
+        qed
         have ebs: V20.brk_start = V17.brk_start := sym(rewrite(fv1, mp(app_update_other[f := V20, k := "bytes", v := V17.bytes, x := "brk_start"], (!("brk_start" = "bytes") by simp()))))
-        have untF: mallocng.untouched(c, A, B, s.vm, VF, s.objs, mp.errno(s.fs_base)) by defs(taut(ur, apply(mp.bk_trans, u32, apply(mp.bk_trans, apply(mp.bk_only, fv1),
+        have untF: mallocng.untouched(c, A, B, s.vm, VF, s.objs, mp.errno(s.fs_base)) by defs(taut(ur, uo, apply(mp.bk_trans, u32, apply(mp.bk_trans, apply(mp.bk_only, fv1),
           mp.bk_bytes[v := V20, x := Z9]))), mallocng.untouched)
         // (grown: by the slot, the allocator's or unmapped; by the meta, the
         // same)
-        have grF: all a. a in omega -> a in mallocng.footprint(c, A3, B) -> a in mallocng.footprint(c, A, B) || !x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) proof
+        have grF: all a. a in omega -> a in mallocng.footprint(c, A3, B) -> a in mallocng.footprint(c, A, B) || (!x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) && !mallocng.in_stack_space(s.vm, a)) proof
           fix a
           assume hao hf
           have fe := apply(mp.gn_fp[c := c, A := A2, vm := V17, V1 := VF, b := B, g := G, i := R2, k := KK, T := A.taken, m := M, V := VR, n := C2, a := a], GP)
-          have d1: a in mallocng.footprint(c, A2, B) -> a in mallocng.footprint(c, A, B) || !x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) proof
+          have d1: a in mallocng.footprint(c, A2, B) -> a in mallocng.footprint(c, A, B) || (!x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) && !mallocng.in_stack_space(s.vm, a)) proof
             assume h
             show := mp(all_elim(gr017, {a}), hao, h)
           qed
-          have d2: a in omega && mallocng.in_slot(A2.metas[G], R2, a) -> a in mallocng.footprint(c, A, B) || !x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) proof
+          have d2: a in omega && mallocng.in_slot(A2.metas[G], R2, a) -> a in mallocng.footprint(c, A, B) || (!x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) && !mallocng.in_stack_space(s.vm, a)) proof
             assume h
             have _ isl := h
             have ir: mallocng.in_reserved(A2, a) by defs(ex_intro({G}, {R2}, taut(go, r2o, iuG, ril, rrs, isl)), mallocng.in_reserved)
             show := mp(all_elim(rg17, {a}), hao, ir)
           qed
-          have d3: a in omega && int_le(M, a) && int_lt(a, int_add(M, mallocng.META_SIZE)) -> a in mallocng.footprint(c, A, B) || !x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) proof
+          have d3: a in omega && int_le(M, a) && int_lt(a, int_add(M, mallocng.META_SIZE)) -> a in mallocng.footprint(c, A, B) || (!x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) && !mallocng.in_stack_space(s.vm, a)) proof
             assume h
             have _ h1 h2 := h
             show := mp(all_elim(mf, {a}), hao, conj(h1, h2))

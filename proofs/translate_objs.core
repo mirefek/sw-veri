@@ -481,11 +481,12 @@ qed
 // not null)
 abbrev tr.aslot(s, c) := int_mod(tr.ha(s, c), 8) = 0 && int_le(int_add(tr.ha(s, c), 8), 18446744073709551616) && !(tr.ha(s, c) = 0)
 
-abbrev tr.nodom(w, A, n) := all a. a in omega -> int_le(A, a) && int_lt(a, int_add(A, n)) -> abi.stack_free(w.vm, w.objs, a)
+abbrev tr.nodom(w, A, n) := all a. a in omega -> int_le(A, a) && int_lt(a, int_add(A, n)) ->
+  abi.stack_free(w.vm, w.objs, a) && int_le(x86_64_linux.stack_floor(w.vm), a) && int_lt(a, w.vm.stack_top)
 
 // (the 8 bytes of the home c on the machine's stack pages, none of the
 // objects: the stack's free bytes -- the world's pages none there, or the
-// machine's, the stack's)
+// machine's, the stack's; in the stack's space, as its pages)
 theorem tr.nodom_frame: all s base code fr m0 m w v c. tr.inv(s, base, code, fr, m0, w) -> tr.mem(s, m, w, v) -> tr.hrange(c, 8) ->
   tr.hacc(s, m.vm, c, 8) -> tr.hfree(s, c, 8, v) -> tr.nodom(w, tr.ha(s, c), 8)
 proof
@@ -534,7 +535,17 @@ proof
   qed
   have pq: int_div(a, x86_64_linux.PAGE) = P by defs(simp(), x86_64_linux.PAGE)
   have g: !(x86_64_linux.mapped(w.vm, P) && !(snd(w.vm.pages[P]).kind = 2)) && !(a in w.objs.live) by taut(nv, pc, c1, c2)
-  show by defs(rewrite(sym(pq), g), abi.stack_free)
+  have sf: abi.stack_free(w.vm, w.objs, a) by defs(rewrite(sym(pq), g), abi.stack_free)
+  // (the stack's pages: in its space -- the reserve, kept since the entry)
+  have {srsv} := hi
+  have {wtop = top, wlim = limit, wrsv = rsv} := wm
+  have _ _ sp3 _ := expand(mp(wrsv, srsv), abi.stack_reserve)
+  have f1 f2 _ _ := mp(all_elim(sp3, {P}), po, sp)
+  have fl: x86_64_linux.stack_floor(w.vm) = x86_64_linux.stack_floor(m.vm) by rsimp(x86_64_linux.stack_floor, wtop, wlim)
+  have pg: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
+  have r1: int_le(x86_64_linux.stack_floor(w.vm), a) by arith(fl, f1, pg, a0)
+  have r2: int_lt(a, w.vm.stack_top) by arith(wtop, f2, pg, a0)
+  show by taut(sf, r1, r2)
 qed
 
 // The objects after the frame's object at c0 allocated: the callers' v0
@@ -775,7 +786,7 @@ qed
 //  any, as alloc_objs allows)
 
 theorem tr.alloc1_run: all w A x. w in abi.World -> w in univ(1) -> A in bits(64) -> int_le(int_add(A, 8), 18446744073709551616) -> int_mod(A, 8) = 0 -> !(A = 0) ->
-  (all a. a in omega -> int_le(A, a) && int_lt(a, int_add(A, 8)) -> abi.stack_free(w.vm, w.objs, a)) ->
+  tr.nodom(w, A, 8) ->
   runs(gimple.alloc_objs(seq_one(pair(8, 8))), w, ok(fn_update(fn_update(w, "vm", fn_update(w.vm, "bytes", x86_64_linux.store_le(w.vm.bytes, A, 8, x))), "objs", fn_update(w.objs, "live", tr.obj1s(w.objs.live, A))), seq_one(A)))
 proof
   fix w A x
@@ -813,7 +824,8 @@ proof
         assume y1 y2
         have y3 := rewrite(e, y2)
         have yy: int_le(A, y) && int_lt(y, int_add(A, 8)) by simp(y3)
-        show := mp(all_elim(hnd, {y}), y1, yy)
+        have sf _ _ := mp(all_elim(hnd, {y}), y1, yy)
+        show := sf
       qed
       show by taut(m0, m1, m2, nd)
     qed
@@ -825,7 +837,19 @@ proof
       have f: false by arith(jo, ko, h2, l1)
       show by taut(f)
     qed
-    show by defs(taut(t1, t2, t3, t4), gimple.objs_fit)
+    // (in the stack's space)
+    have t5: all x3. all x4. x3 in omega && x4 in omega -> (int_lt(x3, seq_len(SZ)) && int_le(app(seq_one(A), x3), x4)) && int_lt(x4, int_add(app(seq_one(A), x3), fst(app(SZ, x3)))) ->
+        int_le(x86_64_linux.stack_floor(app(w, "vm")), x4) && int_lt(x4, app(app(w, "vm"), "stack_top")) proof
+      fix k y
+      assume h1 h2
+      have _ y1 := h1
+      have k1 k2 k3 := h2
+      have e := mp(all_elim(k0, {k}), h1.1, k1)
+      have yy: int_le(A, y) && int_lt(y, int_add(A, 8)) by simp(rewrite(e, conj(k2, k3)))
+      have _ r1 r2 := mp(all_elim(hnd, {y}), y1, yy)
+      show by taut(r1, r2)
+    qed
+    show by defs(taut(t1, t2, t3, t4, t5), gimple.objs_fit)
   qed
   // the memory: x at A, else as it was
   have vm0: w.vm in x86_64_linux.Vm by simp(hW, keep(x86_64_linux.Vm))
@@ -2038,7 +2062,7 @@ proof
         fix k
         assume k1 k2
         assume hr
-        have _ hk2 _ := expand(hl2, gimple.objs_fit)
+        have _ hk2 _ _ := expand(hl2, gimple.objs_fit)
         have m0 m1 m2 sfa := mp(all_elim(hk2, {k}), k1, k2)
         have ao: a in omega by arith(ha)
         have sfr := mp(all_elim(sfa, {a}), ao, hr)

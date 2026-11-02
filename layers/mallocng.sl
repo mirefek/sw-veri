@@ -713,14 +713,20 @@ pred bounds_kept(vm: Vm, vm2: Vm) =
 
 // the memory outside the allocator's (in A) untouched, but for `extra` and
 // what was unmapped -- and the stack's free bytes (objs as at the start: a
-// callee's dead frame and objects, abi.sl's `stack_free`); the bounds kept
+// callee's dead frame and objects, abi.sl's `stack_free`); the callers'
+// stack objects (on no page of the world's) untouched too; the bounds kept
 pred untouched(c: Cfg, A: Abs, blocks: Addr -> Option[nat], vm: Vm, vm2: Vm, objs: Objs, extra: Set[nat]) =
   (all a: nat. a notin footprint(c, A, blocks) && a notin extra && mapped(vm, a / PAGE) ->
      (!stack_free(vm, objs, a) -> vm2.bytes[bits[64](a)] = vm.bytes[bits[64](a)]) && vm2.pages[a / PAGE] = vm.pages[a / PAGE]) &&
+  objs: (all a: nat. a notin footprint(c, A, blocks) && a notin extra && a in objs.live && in_stack_space(vm, a) && !mapped(vm, a / PAGE) ->
+     vm2.bytes[bits[64](a)] = vm.bytes[bits[64](a)] && vm2.pages[a / PAGE] = vm.pages[a / PAGE]) &&
   bounds_kept(vm, vm2)
 
-// ... every byte (the allocator's own steps: they write only its memory)
+// ... every byte (the allocator's own steps: they write only its memory),
+// the unmapped ones of the stack's space too
 pred kept_outside(c: Cfg, A: Abs, blocks: Addr -> Option[nat], vm: Vm, vm2: Vm, extra: Set[nat]) =
   (all a: nat. a notin footprint(c, A, blocks) && a notin extra && mapped(vm, a / PAGE) ->
+     vm2.bytes[bits[64](a)] = vm.bytes[bits[64](a)] && vm2.pages[a / PAGE] = vm.pages[a / PAGE]) &&
+  unmapped: (all a: nat. a notin footprint(c, A, blocks) && a notin extra && in_stack_space(vm, a) && !mapped(vm, a / PAGE) ->
      vm2.bytes[bits[64](a)] = vm.bytes[bits[64](a)] && vm2.pages[a / PAGE] = vm.pages[a / PAGE]) &&
   bounds_kept(vm, vm2)

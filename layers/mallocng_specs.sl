@@ -1213,8 +1213,8 @@ proc[MallocAbs] alloc_slot_spec(c: Cfg, sc: bits[32], req: bits[64]) -> bits[32]
        A.metas[A.active[uint(sc)][0]].sizeclass = uint(sc) &&
        uint(req) + IB <= stride(A.metas[A.active[uint(sc)][0]])))
     havoc vm where holds_in(c, A, vm, objs, blocks) && untouched(c, A0, blocks, before, vm, objs, errno) &&
-      (all a: nat. a in footprint(c, A, blocks) -> a in footprint(c, A0, blocks) || !mapped(before, a / PAGE)) &&
-      (all a: nat. in_reserved(A, a) -> a in footprint(c, A0, blocks) || !mapped(before, a / PAGE)) &&
+      (all a: nat. a in footprint(c, A, blocks) -> a in footprint(c, A0, blocks) || (!mapped(before, a / PAGE) && !in_stack_space(before, a))) &&
+      (all a: nat. in_reserved(A, a) -> a in footprint(c, A0, blocks) || (!mapped(before, a / PAGE) && !in_stack_space(before, a))) &&
       (r = bits[32](2^32 - 1) -> errno_is(vm, fs_base, ENOMEM))
     return r
   }
@@ -1245,9 +1245,9 @@ proc[MallocAbs] alloc_meta_spec(c: Cfg) -> bits[64] {
     ghost A := any A2: Abs where groups_kept(A0, A2)
     let m = any m: bits[64] where (m = 0 && A.taken = A0.taken) || (m != 0 && A.taken = A0.taken ++ [uint(m)])
     havoc vm where holds_in(c, A, vm, objs, blocks) && untouched(c, A0, blocks, before, vm, objs, errno) &&
-      (all a: nat. a in footprint(c, A, blocks) -> a in footprint(c, A0, blocks) || !mapped(before, a / PAGE)) &&
+      (all a: nat. a in footprint(c, A, blocks) -> a in footprint(c, A0, blocks) || (!mapped(before, a / PAGE) && !in_stack_space(before, a))) &&
       (m != 0 -> meta_ready(vm, uint(m))) &&
-      (m != 0 -> all a: nat. uint(m) <= a && a < uint(m) + META_SIZE -> a in footprint(c, A0, blocks) || !mapped(before, a / PAGE)) &&
+      (m != 0 -> all a: nat. uint(m) <= a && a < uint(m) + META_SIZE -> a in footprint(c, A0, blocks) || (!mapped(before, a / PAGE) && !in_stack_space(before, a))) &&
       (m = 0 -> errno_is(vm, fs_base, ENOMEM))
     return m
   }
@@ -1279,7 +1279,7 @@ proc[MallocAbs] alloc_group_spec(c: Cfg, sc: bits[32], req: bits[64]) -> bits[64
     ghost A := any A2: Abs where no_reserved(A2) && (all s: nat. s <= uint(sc) -> A2.active[s] = A0.active[s]) && A2.taken = A0.taken
     let g = any g: bits[64] where g = 0 || fresh_group(A, uint(g), uint(sc), uint(req))
     havoc vm where holds_in(c, A, vm, objs, blocks) && untouched(c, A0, blocks, before, vm, objs, errno) &&
-      (all a: nat. a in footprint(c, A, blocks) -> a in footprint(c, A0, blocks) || !mapped(before, a / PAGE)) &&
+      (all a: nat. a in footprint(c, A, blocks) -> a in footprint(c, A0, blocks) || (!mapped(before, a / PAGE) && !in_stack_space(before, a))) &&
       (g != 0 -> active_idx(vm, A.metas[uint(g)]) < A.metas[uint(g)].last_idx ->
          4096 < UNIT + stride(A.metas[uint(g)]) * (A.metas[uint(g)].last_idx + 1)) &&
       (g = 0 -> errno_is(vm, fs_base, ENOMEM))
@@ -1306,8 +1306,8 @@ proc[MallocAbs] malloc_impl_spec(c: Cfg, n: bits[64]) -> Addr {
     ghost blocks := if p != 0 { set_block(blocks0, p, some(uint(n))) } else { blocks0 }
     ghost A := any A2: Abs where no_reserved(A2) && len(A2.taken) = 0
     havoc vm where holds_in(c, A, vm, objs, blocks) && untouched(c, A0, blocks0, before, vm, objs, errno) &&
-      (all a: nat. a in footprint(c, A, blocks) -> a in footprint(c, A0, blocks0) || !mapped(before, a / PAGE)) &&
-      (p != 0 -> all a: nat. uint(p) <= a && a < uint(p) + uint(n) -> a in footprint(c, A0, blocks0) || !mapped(before, a / PAGE)) &&
+      (all a: nat. a in footprint(c, A, blocks) -> a in footprint(c, A0, blocks0) || (!mapped(before, a / PAGE) && !in_stack_space(before, a))) &&
+      (p != 0 -> all a: nat. uint(p) <= a && a < uint(p) + uint(n) -> a in footprint(c, A0, blocks0) || (!mapped(before, a / PAGE) && !in_stack_space(before, a))) &&
       (p = 0 -> errno_is(vm, fs_base, ENOMEM))
     return p
   }

@@ -20,7 +20,12 @@ item is a short summary of finished work; details are in the files named.
   binary's bytes, with a summary of its trusted base.
 - **The malloc layer** (`layers/malloc.sl`): client contract and specs.
   The frame law forced the client contract to leave block mappings and
-  the break alone; the claim was false before that.
+  the break alone; the claim was false before that. The program claim's
+  client then needed its stack objects kept across a call: GIMPLE's
+  objects lie in the stack's space (`objs_fit`, proven by the bridge
+  from the stack's pages), `world_ok` has the caller's objects there,
+  `alloc_frame` keeps them, the allocator's growth is off the stack's
+  space (mallocng's `untouched` / `kept_outside` carry those bytes).
 
 ## Logic and proof language
 

@@ -395,7 +395,8 @@ theorem tr.fit_one: all s base code fr m w v cs sizes ch nh n k. tr.inv(s, base,
   tr.fobjs(cs, sizes, ch, n) -> tr.hrange(ch, nh) -> int_lt(0, nh) -> tr.hacc(s, m.vm, ch, nh) -> int_le(int_sub(18446744073709551616, ch), 4096) ->
   k in omega -> int_lt(k, n) ->
   ((int_mod(app(tr.hal(s, cs), k), snd(app(sizes, k))) = 0 && !(app(tr.hal(s, cs), k) = 0)) && int_le(int_add(app(tr.hal(s, cs), k), fst(app(sizes, k))), int_pow(2, 64))) &&
-  (all x1. x1 in omega -> int_le(app(tr.hal(s, cs), k), x1) && int_lt(x1, int_add(app(tr.hal(s, cs), k), fst(app(sizes, k)))) -> abi.stack_free(w.vm, w.objs, x1))
+  (all x1. x1 in omega -> int_le(app(tr.hal(s, cs), k), x1) && int_lt(x1, int_add(app(tr.hal(s, cs), k), fst(app(sizes, k)))) ->
+     abi.stack_free(w.vm, w.objs, x1) && int_le(x86_64_linux.stack_floor(w.vm), x1) && int_lt(x1, w.vm.stack_top))
 proof
   fix s base code fr m w v cs sizes ch nh n k
   assume hi h hva hsal hf hch hnh hca hp k0 k2
@@ -448,9 +449,14 @@ proof
   // (its bytes: the stack's free ones -- none of the callers' objects, on
   // the machine's stack pages, the world's none there or the same)
   have {wob, wm} := h
-  have {pages} := wm
+  have {pages, wtop = top, wlim = limit, wrsv = rsv} := wm
+  have {srsv} := hi
+  have _ _ sp3 _ := expand(mp(wrsv, srsv), abi.stack_reserve)
+  have fl: x86_64_linux.stack_floor(w.vm) = x86_64_linux.stack_floor(m.vm) by rsimp(x86_64_linux.stack_floor, wtop, wlim)
+  have pg: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
   have _ _ _ ab := expand(hva, tr.vabove)
-  have fr: all x1. x1 in omega -> int_le(app(tr.hal(s, cs), k), x1) && int_lt(x1, int_add(app(tr.hal(s, cs), k), fst(app(sizes, k)))) -> abi.stack_free(w.vm, w.objs, x1) proof
+  have fr: all x1. x1 in omega -> int_le(app(tr.hal(s, cs), k), x1) && int_lt(x1, int_add(app(tr.hal(s, cs), k), fst(app(sizes, k)))) ->
+      abi.stack_free(w.vm, w.objs, x1) && int_le(x86_64_linux.stack_floor(w.vm), x1) && int_lt(x1, w.vm.stack_top) proof
     fix a
     assume a0 ar
     have ar1 ar2 := ar
@@ -479,7 +485,12 @@ proof
     qed
     have pq: int_div(a, x86_64_linux.PAGE) = P by defs(simp(), x86_64_linux.PAGE)
     have g: !(x86_64_linux.mapped(w.vm, P) && !(snd(w.vm.pages[P]).kind = 2)) && !(a in w.objs.live) by taut(nv, pc, c1, c2)
-    show by defs(rewrite(sym(pq), g), abi.stack_free)
+    have sf: abi.stack_free(w.vm, w.objs, a) by defs(rewrite(sym(pq), g), abi.stack_free)
+    // (in the stack's space: its pages there -- the reserve)
+    have f1 f2 _ _ := mp(all_elim(sp3, {P}), po, sp)
+    have r1: int_le(x86_64_linux.stack_floor(w.vm), a) by arith(fl, f1, pg, a0)
+    have r2: int_lt(a, w.vm.stack_top) by arith(wtop, f2, pg, a0)
+    show by taut(sf, r1, r2)
   qed
   show by taut(mk, nz, en, fr)
 qed
@@ -501,7 +512,25 @@ proof
       (all x1. x1 in omega -> int_le(app(tr.hal(s, cs), x0), x1) && int_lt(x1, int_add(app(tr.hal(s, cs), x0), fst(app(sizes, x0)))) -> abi.stack_free(w.vm, w.objs, x1)) proof
     fix k
     assume k0 k1
-    show := apply(tr.fit_one, {s}, {base}, {code}, {fr}, {m}, {w}, {v}, {cs}, {sizes}, {ch}, {nh}, {n}, {k}, hi, h, hva, hsal, hf, hch, hnh, hca, hp, k0, rewrite(hl2, k1))
+    have q1a q1b q1c q2 := apply(tr.fit_one, {s}, {base}, {code}, {fr}, {m}, {w}, {v}, {cs}, {sizes}, {ch}, {nh}, {n}, {k}, hi, h, hva, hsal, hf, hch, hnh, hca, hp, k0, rewrite(hl2, k1))
+    have q3: all x1. x1 in omega -> int_le(app(tr.hal(s, cs), k), x1) && int_lt(x1, int_add(app(tr.hal(s, cs), k), fst(app(sizes, k)))) -> abi.stack_free(w.vm, w.objs, x1) proof
+      fix a
+      assume a0 ar
+      have sf _ _ := mp(all_elim(q2, {a}), a0, ar)
+      show := sf
+    qed
+    show by taut(q1a, q1b, q1c, q3)
+  qed
+  // (in the stack's space)
+  have ins: all x0. all x1. x0 in omega && x1 in omega -> (int_lt(x0, seq_len(sizes)) && int_le(app(tr.hal(s, cs), x0), x1)) && int_lt(x1, int_add(app(tr.hal(s, cs), x0), fst(app(sizes, x0)))) ->
+      int_le(x86_64_linux.stack_floor(app(w, "vm")), x1) && int_lt(x1, app(app(w, "vm"), "stack_top")) proof
+    fix k a
+    assume ka hr
+    have k0 a0 := ka
+    have k1 r1 r2 := hr
+    have _ _ _ q2 := apply(tr.fit_one, {s}, {base}, {code}, {fr}, {m}, {w}, {v}, {cs}, {sizes}, {ch}, {nh}, {n}, {k}, hi, h, hva, hsal, hf, hch, hnh, hca, hp, k0, rewrite(hl2, k1))
+    have _ e1 e2 := mp(all_elim(q2, {a}), a0, conj(r1, r2))
+    show by taut(e1, e2)
   qed
   have dj: all x0. all x1. x0 in omega && x1 in omega -> int_lt(x0, x1) && int_lt(x1, seq_len(sizes)) ->
       int_le(int_add(app(tr.hal(s, cs), x0), fst(app(sizes, x0))), app(tr.hal(s, cs), x1)) || int_le(int_add(app(tr.hal(s, cs), x1), fst(app(sizes, x1))), app(tr.hal(s, cs), x0)) proof
@@ -520,7 +549,7 @@ proof
     have evk := apply(tr.ha_val, {s}, {app(cs, k)}, {fst(app(sizes, k))}, r4, g8, hrk, npk)
     show by arith(d, eaj, eak, evj, evk)
   qed
-  show by defs(taut(ln, per, dj), gimple.objs_fit)
+  show by defs(taut(ln, per, dj, ins), gimple.objs_fit)
 qed
 //  fit, their bytes B's, the rest as it was
 

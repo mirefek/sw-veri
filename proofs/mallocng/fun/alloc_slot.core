@@ -11,7 +11,7 @@ abbrev mp.below(A2, A, sc) := all s. s in omega -> int_lt(s, sc) -> A2.active[s]
 
 // a reserved slot's bytes: the allocator's before, or unmapped
 abbrev mp.rgrown(c, A2, A, b, vm) := all a. a in omega -> mallocng.in_reserved(A2, a) ->
-  a in mallocng.footprint(c, A, b) || !x86_64_linux.mapped(vm, int_div(a, x86_64_linux.PAGE))
+  a in mallocng.footprint(c, A, b) || (!x86_64_linux.mapped(vm, int_div(a, x86_64_linux.PAGE)) && !mallocng.in_stack_space(vm, a))
 
 // what a caller relies on of a callee f called as alloc_group (its C
 // function value), the ghost part h read: an overflow, or the return -- a
@@ -134,7 +134,7 @@ qed
 theorem mp.unt_wider(c, A, b, V0, V1, e): mallocng.kept_outside(c, A, b, V0, V1, empty) -> mallocng.kept_outside(c, A, b, V0, V1, e)
 proof
   assume u
-  have u1 u2 := expand(u, mallocng.kept_outside)
+  have u1 uu u2 := expand(u, mallocng.kept_outside)
   have w: all a. a in omega -> !(a in mallocng.footprint(c, A, b)) && !(a in e) && x86_64_linux.mapped(V0, int_div(a, x86_64_linux.PAGE)) ->
       V1.bytes[bits_of_int(64, a)] = V0.bytes[bits_of_int(64, a)] && V1.pages[int_div(a, x86_64_linux.PAGE)] = V0.pages[int_div(a, x86_64_linux.PAGE)] proof
     fix a
@@ -143,7 +143,15 @@ proof
     have ne: !(a in empty) by simp()
     show := mp(all_elim(u1, {a}), ha, taut(n1, ne, n3))
   qed
-  show by defs(taut(w, u2), mallocng.kept_outside)
+  have wu: all a. a in omega -> ((!(a in mallocng.footprint(c, A, b)) && !(a in e)) && mallocng.in_stack_space(V0, a)) && !x86_64_linux.mapped(V0, int_div(a, x86_64_linux.PAGE)) ->
+      V1.bytes[bits_of_int(64, a)] = V0.bytes[bits_of_int(64, a)] && V1.pages[int_div(a, x86_64_linux.PAGE)] = V0.pages[int_div(a, x86_64_linux.PAGE)] proof
+    fix a
+    assume ha h
+    have n1 _ n3 n4 := h
+    have ne: !(a in empty) by simp()
+    show := mp(all_elim(uu, {a}), ha, taut(n1, ne, n3, n4))
+  qed
+  show by defs(taut(w, wu, u2), mallocng.kept_outside)
 qed
 
 // (the groups' places as before, no slot reserved before: the allocator's
@@ -190,7 +198,7 @@ theorem mp.grown_trans(c, A, A1, A2, b, V0, V1): (all a. a in omega -> a in mall
   mallocng.kept_outside(c, A, b, V0, V1, empty) -> mp.grown(c, A2, A1, b, V1) -> mp.grown(c, A2, A, b, V0)
 proof
   assume hs hu g2
-  have u1 _ := expand(hu, mallocng.kept_outside)
+  have u1 _ ub := expand(hu, mallocng.kept_outside)
   fix a
   assume hao h
   have g := mp(all_elim(g2, {a}), hao, h)
@@ -198,8 +206,10 @@ proof
     assume h1
     show := mp(all_elim(hs, {a}), hao, h1)
   qed
-  have c2: !x86_64_linux.mapped(V1, int_div(a, x86_64_linux.PAGE)) -> a in mallocng.footprint(c, A, b) || !x86_64_linux.mapped(V0, int_div(a, x86_64_linux.PAGE)) proof
-    assume nm
+  have c2: !x86_64_linux.mapped(V1, int_div(a, x86_64_linux.PAGE)) && !mallocng.in_stack_space(V1, a) ->
+      a in mallocng.footprint(c, A, b) || (!x86_64_linux.mapped(V0, int_div(a, x86_64_linux.PAGE)) && !mallocng.in_stack_space(V0, a)) proof
+    assume nn
+    have nm ns := nn
     have k: !(a in mallocng.footprint(c, A, b)) -> !x86_64_linux.mapped(V0, int_div(a, x86_64_linux.PAGE)) proof
       assume nf hm
       have ne: !(a in empty) by simp()
@@ -207,7 +217,13 @@ proof
       have m1: x86_64_linux.mapped(V1, int_div(a, x86_64_linux.PAGE)) by defs(rewrite(sym(pe), expand(hm, x86_64_linux.mapped)), x86_64_linux.mapped)
       show by taut(m1, nm)
     qed
-    show by taut(k)
+    // (the stack's space: V1's the same)
+    have s0: mallocng.in_stack_space(V0, a) -> false proof
+      assume hs
+      have bt bl _ := expand(ub, mallocng.bounds_kept)
+      show by taut(ns, apply(mp.iss_same[vm := V0, vm2 := V1, a := a], hs, bt, bl))
+    qed
+    show by taut(k, s0)
   qed
   show by taut(g, c1, c2)
 qed
@@ -300,7 +316,7 @@ theorem mp.err_keep(c, A, A1, B, V0, V1, fs, objs, e): fs in bits(64) -> abi.thr
   brk: abi.brk_start_ok(V1) && errno: mallocng_specs.errno_ok(V1, objs, fs) && apart: mallocng_specs.errno_apart(c, A1, V1, fs)
 proof
   assume hfb ht htl hbs heo hea hun hte hee hgr
-  have u1 u2 := expand(hun, mallocng.kept_outside)
+  have u1 _ u2 := expand(hun, mallocng.kept_outside)
   have th := apply(mp.tls_kept[c := c, A := A, b := B, V0 := V0, V1 := V1, fs := fs, e := e], hfb, ht, htl, hun, hte)
   have bs: abi.brk_start_ok(V1) by defs(simp(expand(u2, mallocng.bounds_kept), expand(hbs, abi.brk_start_ok)), abi.brk_start_ok)
   have efl eus _ eur := expand(heo, mallocng_specs.errno_ok)
@@ -794,13 +810,13 @@ proof
       // (the allocator grown by alloc_group only into memory unmapped
       // before: no slot reserved, the same metas taken)
       have rgr: all a. a in omega -> mallocng.in_reserved(A2, a) ->
-          mallocng.in_reserved(A1, a) || a in mallocng.footprint(c, A1, B) || !x86_64_linux.mapped(V1, int_div(a, x86_64_linux.PAGE)) proof
+          mallocng.in_reserved(A1, a) || a in mallocng.footprint(c, A1, B) || (!x86_64_linux.mapped(V1, int_div(a, x86_64_linux.PAGE)) && !mallocng.in_stack_space(V1, a)) proof
         fix a
         assume _ hr
         show by taut(hr, apply(mp.nores[A := A2, a := a], nr2))
       qed
       have tgr: all a. a in omega -> mallocng.in_taken(A2, a) ->
-          mallocng.in_taken(A1, a) || a in mallocng.footprint(c, A1, B) || !x86_64_linux.mapped(V1, int_div(a, x86_64_linux.PAGE)) proof
+          mallocng.in_taken(A1, a) || a in mallocng.footprint(c, A1, B) || (!x86_64_linux.mapped(V1, int_div(a, x86_64_linux.PAGE)) && !mallocng.in_stack_space(V1, a)) proof
         fix a
         assume _ ht
         show by taut(ht, apply(mp.taken_eq[A := A1, A2 := A2, a := a], rewrite(hA1, tk2)))

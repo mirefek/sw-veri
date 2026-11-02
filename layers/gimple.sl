@@ -219,7 +219,8 @@ proc[World] write_bytes(a: Addr, n: nat, v: nat) {
 
 // Stack objects (address-taken locals) are placed on the stack (anywhere
 // GCC's frame layout may put them: the stack's free bytes, on none of the
-// world's pages), disjoint and aligned, not null and within the address
+// world's pages, within the stack's space -- where no mapping but the
+// stack's ever lies), disjoint and aligned, not null and within the address
 // space (as C's objects) -- no such place, a stack overflow; their
 // contents are arbitrary. They join the world's domain
 // (`objs.live`) for the rest of the function: its `_fun` wrapper drops them
@@ -230,7 +231,9 @@ pred objs_fit(vm: Vm, objs: Objs, sizes: List[(nat, nat)], l: List[Addr]) =
      uint(l[k]) % sizes[k][1] = 0 && l[k] != 0 && uint(l[k]) + sizes[k][0] <= 2^64 &&
      (all a: nat. uint(l[k]) <= a && a < uint(l[k]) + sizes[k][0] -> stack_free(vm, objs, a))) &&
   (all j: nat, k: nat. j < k && k < len(sizes) ->
-     uint(l[j]) + sizes[j][0] <= uint(l[k]) || uint(l[k]) + sizes[k][0] <= uint(l[j]))
+     uint(l[j]) + sizes[j][0] <= uint(l[k]) || uint(l[k]) + sizes[k][0] <= uint(l[j])) &&
+  (all k: nat, a: nat. k < len(sizes) && uint(l[k]) <= a && a < uint(l[k]) + sizes[k][0] ->
+     stack_floor(vm) <= a && a < uint(vm.stack_top))
 
 proc[World] alloc_objs(sizes: List[(nat, nat)]) -> List[Addr] {
   // (no room for them: the stack overflows)

@@ -71,12 +71,15 @@ param fn prog_statics(u: ()) -> Set[nat]
 // of a caller's memory (no stack page among the world's; the C world's
 // bytes all but the ABI's), and a process that keeps its thread (the
 // thread pointer's descriptor, its stack protector's word in it), its
-// break's start (above page 0) and its program loaded.
+// break's start (above page 0) and its program loaded; its callers' stack
+// objects on the stack (in its space, as gimple.sl's alloc_objs places
+// them).
 pred world_ok(s: Heap) =
   (all p: PageNo. s.vm.pages[p] != none -> s.vm.pages[p].value.kind != stack) &&
   s.objs.c_bytes = {a: nat | a notin canary(s.fs_base)} &&
   thread_ok(s.vm, s.fs_base) && canary_ok(s.vm, s.fs_base) && brk_start_ok(s.vm) &&
-  loaded(s.vm, prog_base(()), prog_code(()), prog_statics(()))
+  loaded(s.vm, prog_base(()), prog_code(()), prog_statics(())) &&
+  (all a: nat. a in s.objs.live -> stack_floor(s.vm) <= a && a < uint(s.vm.stack_top))
 
 law inv_wf(s: Heap): alloc_inv(s) -> heap_wf(s)
 
@@ -119,9 +122,13 @@ pred errno_ok(s: Heap) = all a: nat. a in errno_bytes(s) -> rw_mapped(s.vm, a)
 
 // Memory the allocator may touch in a call: what it owns, what was unmapped
 // (it may map more with mmap/brk), and `extra` (a block being freed, errno).
-// Everything else -- client memory, live blocks, the stack -- is unchanged.
+// Everything else -- client memory, live blocks, the callers' stack
+// objects (on no page of the C view: the stack's) -- is unchanged.
 pred alloc_frame(s: Heap, vm2: Vm, extra: Set[nat]) =
   (all a: nat. a notin alloc_owned(s) && a notin extra && mapped(s.vm, a / PAGE) ->
+     vm2.bytes[bits[64](a)] = s.vm.bytes[bits[64](a)] &&
+     vm2.pages[a / PAGE] = s.vm.pages[a / PAGE]) &&
+  (all a: nat. a notin alloc_owned(s) && a notin extra && a in s.objs.live && a < TASK_SIZE ->
      vm2.bytes[bits[64](a)] = s.vm.bytes[bits[64](a)] &&
      vm2.pages[a / PAGE] = s.vm.pages[a / PAGE]) &&
   vm2.stack_top = s.vm.stack_top && vm2.stack_limit = s.vm.stack_limit &&
@@ -146,9 +153,10 @@ fn set_block(b: Addr -> Option[nat], p: Addr, v: Option[nat]) -> Addr -> Option[
 
 // Freeing a live block is always possible: the allocator can take it back.
 // (Without this, a free with no possible step would be `undefined`, and
-// the implementation could do anything there.)
+// the implementation could do anything there.) At any call, as free has it
+// (world_ok).
 law free_step(s: Heap, p: Addr):
-  alloc_inv(s) && s.blocks[p] != none ->
+  alloc_inv(s) && world_ok(s) && s.blocks[p] != none ->
     ex vm: Vm. step_ok(s, (s with { blocks: set_block(s.blocks, p, none) }) with { vm: vm }, range(p, s.blocks[p].value))
 
 proc set_errno(e: nat) {
