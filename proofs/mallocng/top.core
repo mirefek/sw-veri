@@ -690,6 +690,38 @@ proof
   show := rewrite((int_add(int_add(S.fs_base, 52), i) = a by arith()), e)
 qed
 
+// a layer errno byte: errno's i-th, i < 4
+theorem mp.top_ebi(eo, S, a): S.fs_base in bits(64) -> int_le(int_add(S.fs_base, 56), int_pow(2, 64)) -> app(eo, empty) = 52 ->
+  a in malloc.errno_bytes(eo, S) -> int_le(int_add(S.fs_base, 52), a) && int_lt(a, int_add(S.fs_base, 56))
+proof
+  assume fsb fsl he ha
+  have w := unsel(expand(ha, malloc.errno_bytes, malloc.range))
+  show by defs(arith(w, fsb, fsl, he), bits_add, bits_of_int, pow2)
+qed
+
+// errno usable after a step keeping its pages (mp.am_epg), the thread
+// pointer kept
+theorem mp.eok_T(eo, S, T): S.fs_base in bits(64) -> int_le(int_add(S.fs_base, 56), int_pow(2, 64)) -> app(eo, empty) = 52 -> T.fs_base = S.fs_base ->
+  malloc.errno_ok(eo, S) -> mp.am_epg(S, T.vm) -> malloc.errno_ok(eo, T)
+proof
+  assume fsb fsl he tf heo hep
+  have eb: malloc.errno_bytes(eo, T) = malloc.errno_bytes(eo, S) by defs(simp(tf), malloc.errno_bytes)
+  have e0 := expand(heo, malloc.errno_ok)
+  have g: all a. a in omega -> a in malloc.errno_bytes(eo, T) -> malloc.rw_mapped(T.vm, a) proof
+    fix a
+    assume ao ha
+    have hs: a in malloc.errno_bytes(eo, S) := rewrite(eb, ha)
+    have rw := mp(all_elim(e0, {a}), ao, hs)
+    have h1 h2 := apply(mp.top_ebi[eo := eo, S := S, a := a], fsb, fsl, he, hs)
+    let i := int_sub(int_sub(a, S.fs_base), 52)
+    have pe := mp(all_elim(hep, {i}), (i in omega by arith(h1)), (int_lt(i, 4) by arith(h2)))
+    have pa: T.vm.pages[int_div(a, x86_64_linux.PAGE)] = S.vm.pages[int_div(a, x86_64_linux.PAGE)] := rewrite((int_add(int_add(S.fs_base, 52), i) = a by arith()), pe)
+    have r1 := expand(rw, malloc.rw_mapped, x86_64_linux.mapped)
+    show by defs(rewrite(sym(pa), r1), malloc.rw_mapped, x86_64_linux.mapped)
+  qed
+  show by defs(g, malloc.errno_ok)
+qed
+
 // (a live object of a world as any call has it: in the stack's space)
 theorem mp.live_iss(b, cd, st, S, a): malloc.world_ok(b, cd, st, S) -> a in omega -> a in S.objs.live -> mallocng.in_stack_space(S.vm, a)
 proof
@@ -934,19 +966,19 @@ qed
 theorem mp.top_oom(I, O, eo, b, cd, st, S, V): S in univ(1) -> V in x86_64_linux.Vm -> S.fs_base in bits(64) -> app(eo, empty) = 52 ->
   fn_update(S, "vm", V) in univ(1) -> is_fun(fn_update(S, "vm", V)) -> "vm" in dom(fn_update(S, "vm", V)) ->
   malloc.step_ok(I, O, S, fn_update(S, "vm", V), malloc.errno_bytes(eo, S)) -> malloc.world_ok(b, cd, st, fn_update(S, "vm", V)) ->
-  mallocng_specs.errno_is(V, S.fs_base, x86_64_linux.ENOMEM) ->
+  malloc.errno_ok(eo, fn_update(S, "vm", V)) -> mallocng_specs.errno_is(V, S.fs_base, x86_64_linux.ENOMEM) ->
   runs(malloc.out_of_memory(I, O, eo, b, cd, st, S), S, ok(fn_update(S, "vm", V), 0))
 proof
-  assume su hv fsb he tu tf td hst hwk hen
+  assume su hv fsb he tu tf td hst hwk hek hen
   let T := fn_update(S, "vm", V)
   have tv: T.vm = V by simp()
   have tfs: T.fs_base = S.fs_base by simp()
   have se := apply(mp.top_seterr[eo := eo, T := T], tu, rewrite(sym(tv), hv), tf, td, rewrite(sym(tfs), fsb), he, rewrite(sym(tfs), rewrite(sym(tv), hen)))
   have pa: pair(S, ok(T, empty)) in univ(1) by simp(su, tu)
-  have as: runs(malloc.allocator_step(I, O, b, cd, st, S, malloc.errno_bytes(eo, S)), S, ok(T, empty)) by spec_ret({V}, hv, hst, hwk, pa)
+  have as: runs(malloc.allocator_step(I, O, eo, b, cd, st, S, malloc.errno_bytes(eo, S)), S, ok(T, empty)) by spec_ret({V}, hv, hst, hwk, hek, pa)
   have b2 := mp(all_elim(gc.bind_ok[p := malloc.set_errno(eo, x86_64_linux.ENOMEM), k := x4 x5. ok(T, 0) = ok(x4, 0), x := x4 x5. ok(T, 0) = exc(x4, x5), d := x4. ok(T, 0) = diverge(x4)],
     {T}, {T}, {empty}), se, refl({ok(T, 0)}))
-  have b1 := mp(all_elim(gc.bind_ok[p := malloc.allocator_step(I, O, b, cd, st, S, malloc.errno_bytes(eo, S)),
+  have b1 := mp(all_elim(gc.bind_ok[p := malloc.allocator_step(I, O, eo, b, cd, st, S, malloc.errno_bytes(eo, S)),
       k := x2 x3. bind_rel(malloc.set_errno(eo, x86_64_linux.ENOMEM), x2, x4 x5. ok(T, 0) = ok(x4, 0), x4 x5. ok(T, 0) = exc(x4, x5), x4. ok(T, 0) = diverge(x4)),
       x := x2 x3. ok(T, 0) = exc(x2, x3), d := x2. ok(T, 0) = diverge(x2)], {S}, {T}, {empty}), as, b2)
   have pu: pair(S, ok(T, 0)) in univ(1) by simp(su, tu)
@@ -969,13 +1001,14 @@ qed
 theorem mp.top_mok(I, O, eo, b, cd, st, n, S, p, V): n in omega -> p in bits(64) -> !(p = 0) -> int_mod(p, 16) = 0 -> malloc.fresh_block(O, S, p, n) ->
   V in x86_64_linux.Vm -> malloc.step_ok(I, O, S, fn_update(fn_update(S, "blocks", malloc.set_block(S.blocks, p, some(n))), "vm", V), malloc.errno_bytes(eo, S)) ->
   malloc.world_ok(b, cd, st, fn_update(fn_update(S, "blocks", malloc.set_block(S.blocks, p, some(n))), "vm", V)) ->
+  malloc.errno_ok(eo, fn_update(fn_update(S, "blocks", malloc.set_block(S.blocks, p, some(n))), "vm", V)) ->
   pair(S, ok(fn_update(fn_update(S, "blocks", malloc.set_block(S.blocks, p, some(n))), "vm", V), p)) in univ(1) ->
   runs(malloc.malloc(I, O, eo, b, cd, st, n), S, ok(fn_update(fn_update(S, "blocks", malloc.set_block(S.blocks, p, some(n))), "vm", V), p))
 proof
-  assume hn hp hp0 hal hfr hv hst hwk pu
+  assume hn hp hp0 hal hfr hv hst hwk hek pu
   let K := ok(pair(S, empty), empty)
   have nn: int_le(n, n) by arith(hn)
-  show by spec_ret({K}, {K}, {n}, {n}, {K}, {p}, {p}, {K}, {V}, {V}, hn, nn, hp, hp0, hal, hfr, hv, hst, hwk, pu)
+  show by spec_ret({K}, {K}, {n}, {n}, {K}, {p}, {p}, {K}, {V}, {V}, hn, nn, hp, hp0, hal, hfr, hv, hst, hwk, hek, pu)
 qed
 
 // ... anything where its precondition fails
@@ -1467,7 +1500,9 @@ proof
   have wk := apply(mp.wok_kept[c := c, A := A, A2 := A2, S := S, T := T, objs := S.objs, E := mp.errno(S.fs_base), b := b, cd := cd, st := st, k := k],
     hc, au, ha, a2u, a2a, bt, svm, rewrite(sym(tb), bt), rewrite(sym(tv), hv), fsb, hrep, rep2, hwo, rewrite(sym(tv), hun), mp.errno_off[fs := S.fs_base],
     (T.objs = S.objs by simp()), (T.fs_base = S.fs_base by simp()), hci)
-  have oom := apply(mp.top_oom[I := mallocng.inv(c), O := mallocng.owned(c), eo := eo, b := b, cd := cd, st := st, S := S, V := V], Su, hv, fsb, he, tu, tf, td, stp, wk, hen)
+  have {fsl = fsl} := apply(mp.top_fsl, fsb, th)
+  have ek := apply(mp.eok_T[eo := eo, S := S, T := T], fsb, fsl, he, (T.fs_base = S.fs_base by simp()), heo, rewrite(sym(tv), hep))
+  have oom := apply(mp.top_oom[I := mallocng.inv(c), O := mallocng.owned(c), eo := eo, b := b, cd := cd, st := st, S := S, V := V], Su, hv, fsb, he, tu, tf, td, stp, wk, ek, hen)
   // the layer's malloc returning 0 there, as a C function value, widened
   have pu: pair(S, ok(T, 0)) in univ(1) by simp(Su, tu)
   have mf := apply(mp.top_mfail[I := mallocng.inv(c), O := mallocng.owned(c), eo := eo, b := b, cd := cd, st := st, n := regs[0], S := S, T := T], pu, oom)
@@ -1541,7 +1576,9 @@ proof
   have wk := apply(mp.wok_kept[c := c, A := A, A2 := A3, S := S, T := T, objs := S.objs, E := mp.errno(S.fs_base), b := b, cd := cd, st := st, k := k],
     hc, au, ha, a3u, a3a, bt, svm, rewrite(sym(tb), b2t), rewrite(sym(tv), hv), fsb, hrep, rep3, hwo, rewrite(sym(tv), hun), mp.errno_off[fs := S.fs_base],
     (T.objs = S.objs by simp()), (T.fs_base = S.fs_base by simp()), hci)
-  have mk := apply(mp.top_mok[I := mallocng.inv(c), O := mallocng.owned(c), eo := eo, b := b, cd := cd, st := st, n := n, S := S, p := p, V := V], hn, pb, pnz, al, fr, hv, stp, wk, pu)
+  have {fsl = fsl} := apply(mp.top_fsl, fsb, th)
+  have ek := apply(mp.eok_T[eo := eo, S := S, T := T], fsb, fsl, he, (T.fs_base = S.fs_base by simp()), heo, rewrite(sym(tv), hep))
+  have mk := apply(mp.top_mok[I := mallocng.inv(c), O := mallocng.owned(c), eo := eo, b := b, cd := cd, st := st, n := n, S := S, p := p, V := V], hn, pb, pnz, al, fr, hv, stp, wk, ek, pu)
   have sh: abi.outcome(ok(T, p)) by disj({1}, ex_intro({T}, {p}, refl({ok(T, p)})))
   have fv := apply(mp.top_mfun[I := mallocng.inv(c), O := mallocng.owned(c), eo := eo, b := b, cd := cd, st := st, regs := regs, S := S, o := ok(T, p)], hra, pu, sh, mk)
   have pu2: pair(S, ok(T, pair(p, y))) in univ(1) by simp(Su, tu, hy, pb)

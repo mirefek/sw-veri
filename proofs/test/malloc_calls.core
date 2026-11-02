@@ -74,6 +74,7 @@ theorem malloc.malloc_zero(i, o, e, b, c, st, n, s, t):
   runs(malloc.malloc(i, o, e, b, c, st, n), s, ok(t, 0)) -> s in rec_and(abi.World, malloc.Heap.ghost) -> s in i -> malloc.errno_ok(e, s) ->
   malloc.world_ok(b, c, st, s) ->
   ex V. V in x86_64_linux.Vm && malloc.step_ok(i, o, s, fn_update(s, "vm", V), malloc.errno_bytes(e, s)) && malloc.world_ok(b, c, st, fn_update(s, "vm", V)) &&
+    malloc.errno_ok(e, fn_update(s, "vm", V)) &&
     t = fn_update(s, "vm", t.vm) && fn_update(t.vm, "bytes", V.bytes) = V &&
     (all a. a in bits(64) -> (all j. j in omega -> int_lt(j, 4) -> !(a = bits_add(64, bits_add(64, s.fs_base, bits_of_int(64, e[empty])), bits_of_int(64, j)))) ->
        t.vm.bytes[a] = V.bytes[a])
@@ -82,15 +83,15 @@ proof
   have hs0 := mp(mp(malloc.idle_step[i := i, o := o, s := s, x := malloc.errno_bytes(e, s)], ht), hi)
   obtain vm, hv hst hse from hs0
   have hs: ex vm. vm in x86_64_linux.Vm && (malloc.step_ok(i, o, s, fn_update(s, "vm", vm), malloc.errno_bytes(e, s)) &&
-      malloc.world_ok(b, c, st, fn_update(s, "vm", vm))) by ex_intro({vm}, taut(hv, hst, rewrite(sym(hse), hwo)))
+      malloc.world_ok(b, c, st, fn_update(s, "vm", vm)) && malloc.errno_ok(e, fn_update(s, "vm", vm))) by ex_intro({vm}, taut(hv, hst, rewrite(sym(hse), hwo), rewrite(sym(hse), he)))
   have k: ex V v0. (V in x86_64_linux.Vm && malloc.step_ok(i, o, s, fn_update(s, "vm", V), malloc.errno_bytes(e, s)) &&
-      malloc.world_ok(b, c, st, fn_update(s, "vm", V))) && runs(malloc.set_errno(e, x86_64_linux.ENOMEM), fn_update(s, "vm", V), ok(t, v0))
+      malloc.world_ok(b, c, st, fn_update(s, "vm", V)) && malloc.errno_ok(e, fn_update(s, "vm", V))) && runs(malloc.set_errno(e, x86_64_linux.ENOMEM), fn_update(s, "vm", V), ok(t, v0))
     by simp(h, hi, he, hwo, hs, keep(malloc.set_errno))
-  obtain V v0, kv kst kwo kr from k
+  obtain V v0, kv kst kwo kek kr from k
   have r1 r2 r3 := apply(malloc.seterr_run[e := e, x := x86_64_linux.ENOMEM, W := fn_update(s, "vm", V), t := t, v := v0], (fn_update(fn_update(s, "vm", V), "vm", fn_update(s, "vm", V).vm) = fn_update(s, "vm", V) by simp()),
     (fn_update(s, "vm", V).vm in x86_64_linux.Vm by simp(kv)), kr)
   have t1: t = fn_update(s, "vm", t.vm) by simp(r1)
-  show by ex_intro({V}, simp(kv, kst, kwo, t1, r2, r3))
+  show by ex_intro({V}, simp(kv, kst, kwo, kek, t1, r2, r3))
 qed
 
 // malloc where defined: a return (it neither raises nor diverges)
@@ -102,7 +103,7 @@ proof
   have hs0 := mp(mp(malloc.idle_step[i := i, o := o, s := s, x := malloc.errno_bytes(e, s)], ht), hi)
   obtain vm, hv hst hse from hs0
   have hs: ex vm. vm in x86_64_linux.Vm && (malloc.step_ok(i, o, s, fn_update(s, "vm", vm), malloc.errno_bytes(e, s)) &&
-      malloc.world_ok(b, c, st, fn_update(s, "vm", vm))) by ex_intro({vm}, taut(hv, hst, rewrite(sym(hse), hwo)))
+      malloc.world_ok(b, c, st, fn_update(s, "vm", vm)) && malloc.errno_ok(e, fn_update(s, "vm", vm))) by ex_intro({vm}, taut(hv, hst, rewrite(sym(hse), hwo), rewrite(sym(hse), he)))
   show by simp(h, hi, he, hwo, hs, {l0 l. snd(l) in omega && int_le(snd(l), 4)}, {l. int_sub(4, snd(l))})
 qed
 
@@ -252,13 +253,14 @@ qed
 // step taking the block's memory back (the world as any call needs it);
 // free(0): nothing. Where defined it only returns (a step there is: law
 // free_step).
-theorem malloc.free_out(i, o, e, b, c, st, p, s, x): malloc.free_step(i, o, b, c, st) ->
+theorem malloc.free_out(i, o, e, b, c, st, p, s, x): malloc.free_step(i, o, e, b, c, st) ->
   runs(malloc.free(i, o, e, b, c, st, p), s, x) -> s in rec_and(abi.World, malloc.Heap.ghost) -> p in bits(64) -> malloc.world_ok(b, c, st, s) ->
   (!(p = 0) -> s in i && malloc.errno_ok(e, s) && !(s.blocks[p] = none)) ->
   (p = 0 && x = ok(s, empty)) ||
   (!(p = 0) && (ex V. V in x86_64_linux.Vm && x = ok(fn_update(fn_update(s, "blocks", malloc.set_block(s.blocks, p, none)), "vm", V), empty) &&
      malloc.step_ok(i, o, s, fn_update(fn_update(s, "blocks", malloc.set_block(s.blocks, p, none)), "vm", V), malloc.range(p, snd(s.blocks[p]))) &&
-     malloc.world_ok(b, c, st, fn_update(fn_update(s, "blocks", malloc.set_block(s.blocks, p, none)), "vm", V))))
+     malloc.world_ok(b, c, st, fn_update(fn_update(s, "blocks", malloc.set_block(s.blocks, p, none)), "vm", V)) &&
+     malloc.errno_ok(e, fn_update(fn_update(s, "blocks", malloc.set_block(s.blocks, p, none)), "vm", V))))
 proof
   assume hfs h ht hp hwo hpre
   have c0: p = 0 -> x = ok(s, empty) proof
@@ -267,17 +269,18 @@ proof
   qed
   have c1: !(p = 0) -> (ex V. V in x86_64_linux.Vm && x = ok(fn_update(fn_update(s, "blocks", malloc.set_block(s.blocks, p, none)), "vm", V), empty) &&
      malloc.step_ok(i, o, s, fn_update(fn_update(s, "blocks", malloc.set_block(s.blocks, p, none)), "vm", V), malloc.range(p, snd(s.blocks[p]))) &&
-     malloc.world_ok(b, c, st, fn_update(fn_update(s, "blocks", malloc.set_block(s.blocks, p, none)), "vm", V))) proof
+     malloc.world_ok(b, c, st, fn_update(fn_update(s, "blocks", malloc.set_block(s.blocks, p, none)), "vm", V)) &&
+     malloc.errno_ok(e, fn_update(fn_update(s, "blocks", malloc.set_block(s.blocks, p, none)), "vm", V))) proof
     assume nz
     have hi he hb := mp(hpre, nz)
-    have fs := mp(all_elim(expand(hfs, malloc.free_step), {s}, {p}), conj(ht, hp), conj(conj(hi, hwo), hb))
+    have fs := mp(all_elim(expand(hfs, malloc.free_step), {s}, {p}), conj(ht, hp), conj(conj(conj(hi, hwo), he), hb))
     show by simp(h, hwo, nz, hi, he, hb, fs)
   qed
   show by taut(c0, c1)
 qed
 
 // the ABI's free where defined: free's return at its argument
-theorem tm.wf_ret(I, O, eo, b, cd, st, regs, S, X): malloc.free_step(I, O, b, cd, st) -> regs in abi.ARGS -> ord_le(1, seq_len(regs)) ->
+theorem tm.wf_ret(I, O, eo, b, cd, st, regs, S, X): malloc.free_step(I, O, eo, b, cd, st) -> regs in abi.ARGS -> ord_le(1, seq_len(regs)) ->
   runs(abi.wide(malloc.Heap.ghost, malloc.free_fun(I, O, eo, b, cd, st))[regs], S, X) ->
   S in rec_and(abi.World, malloc.Heap.ghost) -> regs[0] in bits(64) -> malloc.world_ok(b, cd, st, S) ->
   (!(regs[0] = 0) -> S in I && malloc.errno_ok(eo, S) && !(S.blocks[regs[0]] = none)) ->
@@ -300,10 +303,11 @@ proof
     qed
     have k1: (!(regs[0] = 0) && (ex V. V in x86_64_linux.Vm && Y = ok(fn_update(fn_update(S, "blocks", malloc.set_block(S.blocks, regs[0], none)), "vm", V), empty) &&
         malloc.step_ok(I, O, S, fn_update(fn_update(S, "blocks", malloc.set_block(S.blocks, regs[0], none)), "vm", V), malloc.range(regs[0], snd(S.blocks[regs[0]]))) &&
-        malloc.world_ok(b, cd, st, fn_update(fn_update(S, "blocks", malloc.set_block(S.blocks, regs[0], none)), "vm", V)))) -> ex T. Y = ok(T, empty) proof
+        malloc.world_ok(b, cd, st, fn_update(fn_update(S, "blocks", malloc.set_block(S.blocks, regs[0], none)), "vm", V)) &&
+        malloc.errno_ok(eo, fn_update(fn_update(S, "blocks", malloc.set_block(S.blocks, regs[0], none)), "vm", V)))) -> ex T. Y = ok(T, empty) proof
       assume q
       have _ e := q
-      obtain V, _ e2 _ _ from e
+      obtain V, _ e2 _ _ _ from e
       show by ex_intro({fn_update(fn_update(S, "blocks", malloc.set_block(S.blocks, regs[0], none)), "vm", V)}, e2)
     qed
     show by taut(fo, k0, k1)
@@ -331,7 +335,7 @@ abbrev tm.fcall(I, O, eo, b, cd, st, gf) := all args s h o. args in abi.ARGS -> 
 // free(p) at a call from the world t, the ghost part h: an overflow, or a
 // return -- the memory V, the layer's free from t joined with h to V's
 // world joined with some ghost part
-theorem tm.free_q: all I O eo b cd st gf h t p regs o2. malloc.free_step(I, O, b, cd, st) -> tm.fcall(I, O, eo, b, cd, st, gf) ->
+theorem tm.free_q: all I O eo b cd st gf h t p regs o2. malloc.free_step(I, O, eo, b, cd, st) -> tm.fcall(I, O, eo, b, cd, st, gf) ->
   t in abi.World -> t in univ(1) -> h in malloc.Heap.ghost -> malloc.world_ok(b, cd, st, union2(t, h)) ->
   (!(p = 0) -> union2(t, h) in I && malloc.errno_ok(eo, union2(t, h)) && !(union2(t, h).blocks[p] = none)) -> p in bits(64) ->
   gc.regs_ok(regs, seq_one(gimple.arg(64, p))) -> runs(gf[regs], t, o2) ->

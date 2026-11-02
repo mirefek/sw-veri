@@ -152,9 +152,10 @@ pred step_ok(before: Heap, after: Heap, extra: Set[nat]) =
   (all a: nat. a in alloc_owned(after) ->
      a in alloc_owned(before) || a in extra || (!mapped(before.vm, a / PAGE) && a notin before.objs.live))
 
-// (the process after it as any call needs it: world_ok -- the next call's)
+// (the process after it as any call needs it: world_ok, errno usable --
+// the next call's)
 proc allocator_step(before: Heap, extra: Set[nat]) {
-  havoc vm where step_ok(before, self, extra) && world_ok(self)
+  havoc vm where step_ok(before, self, extra) && world_ok(self) && errno_ok(self)
 }
 
 // the blocks with p set to v
@@ -164,11 +165,12 @@ fn set_block(b: Addr -> Option[nat], p: Addr, v: Option[nat]) -> Addr -> Option[
 // Freeing a live block is always possible: the allocator can take it back.
 // (Without this, a free with no possible step would be `undefined`, and
 // the implementation could do anything there.) At any call, as free has it
-// (world_ok).
+// (world_ok, errno usable).
 law free_step(s: Heap, p: Addr):
-  alloc_inv(s) && world_ok(s) && s.blocks[p] != none ->
+  alloc_inv(s) && world_ok(s) && errno_ok(s) && s.blocks[p] != none ->
     ex vm: Vm. step_ok(s, (s with { blocks: set_block(s.blocks, p, none) }) with { vm: vm }, range(p, s.blocks[p].value)) &&
-      world_ok((s with { blocks: set_block(s.blocks, p, none) }) with { vm: vm })
+      world_ok((s with { blocks: set_block(s.blocks, p, none) }) with { vm: vm }) &&
+      errno_ok((s with { blocks: set_block(s.blocks, p, none) }) with { vm: vm })
 
 proc set_errno(e: nat) {
   let a = fs_base + bits[64](errno_offset(()))
@@ -206,7 +208,8 @@ proc malloc(n: bits[64]) -> Addr {
   let p     = any Addr where p != 0 && uint(p) % 16 = 0 && fresh_block(before, p, size)
                 else { return out_of_memory(before) }
   let grown = before with { blocks: set_block(before.blocks, p, some(size)) }
-  let vm2   = any Vm where step_ok(before, grown with { vm: vm2 }, errno_bytes(before)) && world_ok(grown with { vm: vm2 })
+  let vm2   = any Vm where step_ok(before, grown with { vm: vm2 }, errno_bytes(before)) && world_ok(grown with { vm: vm2 }) &&
+                errno_ok(grown with { vm: vm2 })
                 else { return out_of_memory(before) }
   ghost blocks := grown.blocks
   vm := vm2                                     // contents of the block: arbitrary

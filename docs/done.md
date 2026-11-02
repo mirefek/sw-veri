@@ -1521,3 +1521,8 @@ item is a short summary of finished work; details are in the files named.
   the startup C2s); `program_ok` -- the process's every ending run an
   allowed exit or a stack overflow -- stated as `musl_program` by `slc
   claim --program-exits`.
+- **errno usable after malloc and free** (layers/malloc.sl: `allocator_step`,
+  malloc's new memory and the law `free_step` keep `errno_ok`): malloc's
+  outcomes carry errno's pages kept (`mp.am_epg` through alloc_group,
+  alloc_slot and malloc's exits); free's by errno none of the allocator's
+  bytes nor the block's (`mp.eok_free`); `mp.eok_T` at the top.

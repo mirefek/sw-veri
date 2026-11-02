@@ -742,11 +742,11 @@ qed
 //  The law: a live block is in a slot (blocks_ok); its group mapped on
 //  its own or not
 
-theorem mallocng.law_free_step(c, b, cd, st, ks): c in mallocng.Cfg -> int_mod(c.ctx, 8) = 0 -> int_lt(c.ctx, 4294967296) ->
-  mp.code_img(c, app(b, empty), app(cd, empty), ks) ->
-  malloc.free_step(mallocng.inv(c), mallocng.owned(c), b, cd, st)
+theorem mallocng.law_free_step(c, eo, b, cd, st, ks): c in mallocng.Cfg -> int_mod(c.ctx, 8) = 0 -> int_lt(c.ctx, 4294967296) ->
+  mp.code_img(c, app(b, empty), app(cd, empty), ks) -> app(eo, empty) = 52 ->
+  malloc.free_step(mallocng.inv(c), mallocng.owned(c), eo, b, cd, st)
 proof
-  assume hc cal clo hci
+  assume hc cal clo hci he
   unfold malloc.free_step
   fix s p
   assume h1 h2
@@ -755,6 +755,7 @@ proof
   have hi: s in mallocng.inv(c) by taut(h2)
   have hw: malloc.world_ok(b, cd, st, s) by taut(h2)
   have hbl: !(s.blocks[p] = none) by taut(h2)
+  have heo: malloc.errno_ok(eo, s) by taut(h2)
   have e: ex A. A in mallocng.Abs && mallocng.rep(c, A, s) by taut(unsel(expand(hi, mallocng.inv)))
   obtain A, ha hr from e
   have {hh = mem} := expand(hr, mallocng.rep)
@@ -775,5 +776,15 @@ proof
     assume o
     show := apply(mp.fs_unres[c := c, s := s, A := A, p := p, g := g, i := j, b := b, cd := cd, st := st, k := ks], hc, hs, ha, hr, hw, hci, hp, hbl, hg, hj, hjl, hsl, o)
   qed
-  show by taut(r1, r2)
+  // (errno usable after: its pages kept, mp.eok_free)
+  have ex0: ex vm. vm in x86_64_linux.Vm && (malloc.step_ok(mallocng.inv(c), mallocng.owned(c), s,
+      fn_update(fn_update(s, "blocks", malloc.set_block(s.blocks, p, none)), "vm", vm), malloc.range(p, snd(s.blocks[p]))) &&
+      malloc.world_ok(b, cd, st, fn_update(fn_update(s, "blocks", malloc.set_block(s.blocks, p, none)), "vm", vm))) by taut(r1, r2)
+  obtain vm, hv hst hwk from ex0
+  let T := fn_update(fn_update(s, "blocks", malloc.set_block(s.blocks, p, none)), "vm", vm)
+  have af _ _ := expand(hst, malloc.step_ok)
+  have _ _ th _ _ _ _ _ := expand(hw, malloc.world_ok)
+  have eok := apply(mp.eok_free[c := c, eo := eo, A := A, S := s, T := T, p := p], hc, apply(mallocng.abs_univ, ha), ha, hs, apply(mp.u_blocks_ty, hs),
+    apply(mp.u_fs_ty, hs), he, th, hr, hp, hbl, af, (T.fs_base = s.fs_base by simp()), heo)
+  show by ex_intro({vm}, taut(hv, hst, hwk, eok))
 qed
