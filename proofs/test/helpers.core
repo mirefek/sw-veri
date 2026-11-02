@@ -179,3 +179,129 @@ refines main_ref c_tests_test_malloc_cfg.main_fun c_tests_test_malloc.main_fun
 
 contract pat test_malloc.pat_spec_fun by tp.pat
 contract size test_malloc.size_spec_fun by tp.size
+
+// ----------------------------------------------------------------------
+//  pat's and size's contracts at a call
+
+// (as g.fun_q, for a spec's C function value: its result bound first)
+theorem tp.fun_ql(x0. p, w, n, regs, s, o2, v): regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) -> ord_le(n, seq_len(regs)) -> s in abi.World ->
+  (all o. runs(p(regs), s, o) -> abi.ovf_out(s, o) || o = ok(s, v)) ->
+  (all o. runs(gimple.result(w, v), s, o) -> ex u. u in bits(64) && bits_of_int(w, u) = v && o = ok(s, u)) ->
+  runs(fn_build(set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)), x0. mkprog(x1 x2. !ord_le(n, seq_len(x0)) || bind_rel(p(x0), x1, x3 x4. letin(x4, x5. bind_rel(gimple.result(w, x5), x3, x6 x7. letin(x7, x8. any_rel(x9. x9 in bits(64), x9. x2 = ok(x6, pair(x8, x9)))),
+    x6 x7. x2 = exc(x6, x7), x6. x2 = diverge(x6))), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))))[regs], s, o2) ->
+  abi.ovf_out(s, o2) ||
+  (ex r. o2 = ok(fn_update(s, "vm", s.vm), r) && bits_of_int(w, fst(r)) = v && fst(r) in bits(64))
+proof
+  assume hr hn hw hp hres h
+  let OVF := exc_val("stack_overflow", empty)
+  rsimp only, app_fn_build, hr in h
+  have pv pf pd pb := apply(ms.world_parts, hw)
+  have ss: fn_update(s, "vm", s.vm) = s := mp(fn_update_same[f := s, k := "vm"], pf, pd)
+  have b := apply(g.runs_elim, h)
+  have b2: bind_rel(p(regs), s, x3 x4. letin(x4, x5. bind_rel(gimple.result(w, x5), x3, x6 x7. letin(x7, x8. any_rel(x9. x9 in bits(64), x9. o2 = ok(x6, pair(x8, x9)))),
+      x6 x7. o2 = exc(x6, x7), x6. o2 = diverge(x6))), x3 x4. o2 = exc(x3, x4), x3. o2 = diverge(x3)) by taut(b, hn)
+  obtain o3, hs3 hk3 from expand(b2, bind_rel)
+  have c1: abi.ovf_out(s, o3) ->
+      abi.ovf_out(s, o2) || (ex r. o2 = ok(fn_update(s, "vm", s.vm), r) && bits_of_int(w, fst(r)) = v && fst(r) in bits(64)) proof
+    assume e
+    obtain vm ob, hv hob he from e
+    have oe: o2 = exc(fn_update(fn_update(s, "vm", vm), "objs", ob), OVF) by simp(rewrite(he, hk3))
+    have l: abi.ovf_out(s, o2) by ex_intro({vm}, {ob}, taut(hv, hob, oe))
+    show by taut(l)
+  qed
+  have c2: o3 = ok(s, v) ->
+      abi.ovf_out(s, o2) || (ex r. o2 = ok(fn_update(s, "vm", s.vm), r) && bits_of_int(w, fst(r)) = v && fst(r) in bits(64)) proof
+    assume he
+    have k1: bind_rel(gimple.result(w, v), s, x6 x7. any_rel(x8. x8 in bits(64), x8. o2 = ok(x6, pair(x7, x8))), x6 x7. o2 = exc(x6, x7), x6. o2 = diverge(x6))
+      by simp(expand(rewrite(he, hk3), letin), keep(bind_rel, gimple.result))
+    obtain o4, hr4 hk4 from expand(k1, bind_rel)
+    obtain u, hu64 hlow ho4 from mp(all_elim(hres, {o4}), hr4)
+    have k2: any_rel(x8. x8 in bits(64), x8. o2 = ok(s, pair(u, x8))) by simp(rewrite(ho4, hk4), keep(any_rel))
+    have ne: ex y. y in bits(64) by ex_intro({0}, simp())
+    obtain y, hy hoy from apply(g.any_e, ne, k2)
+    have cl: bits_of_int(w, fst(pair(u, y))) = v by simp(hlow)
+    have fb: fst(pair(u, y)) in bits(64) by simp(hu64)
+    have l: ex r. o2 = ok(fn_update(s, "vm", s.vm), r) && bits_of_int(w, fst(r)) = v && fst(r) in bits(64) by ex_intro({pair(u, y)}, taut(rewrite(sym(ss), hoy), cl, fb))
+    show by taut(l)
+  qed
+  show by taut(mp(all_elim(hp, {o3}), hs3), c1, c2)
+qed
+
+// (the registers of a call with two 32-bit words a, b: their low halves)
+theorem tp.regs2_32: all regs a b. a in bits(32) -> b in bits(32) -> gc.regs_ok(regs, seq_concat(seq_one(gimple.arg(32, a)), seq_one(gimple.arg(32, b)))) ->
+  regs in list_type(bits(64)) && seq_len(regs) = 2 && bits_of_int(32, regs[0]) = a && bits_of_int(32, regs[1]) = b
+proof
+  fix regs a b
+  assume ha hb h
+  have r1 r2 r3 := h
+  let L := seq_concat(seq_one(gimple.arg(32, a)), seq_one(gimple.arg(32, b)))
+  have l2: seq_len(L) = 2 by simp()
+  have p32: int_pow(2, 32) = 4294967296 by simp()
+  have z0 := mp(all_elim(r3, {0}), simp(), (int_lt(0, seq_len(L)) by simp(l2)))
+  have z1 := mp(all_elim(r3, {1}), simp(), (int_lt(1, seq_len(L)) by simp(l2)))
+  have q0 := at({seq_concat(seq_one(gimple.arg(32, a)), seq_one(gimple.arg(32, b)))[0]})
+  have q1 := at({seq_concat(seq_one(gimple.arg(32, a)), seq_one(gimple.arg(32, b)))[1]})
+  have m0: int_mod(regs[0], 4294967296) = int_mod(a, 4294967296) by simp(expand(rewrite(q0, z0), gimple.in_reg, gimple.arg), p32)
+  have m1: int_mod(regs[1], 4294967296) = int_mod(b, 4294967296) by simp(expand(rewrite(q1, z1), gimple.in_reg, gimple.arg), p32)
+  have e0: bits_of_int(32, regs[0]) = a by defs(simp(m0, (int_mod(a, 4294967296) = a by arith(ha))), bits_of_int, pow2)
+  have e1: bits_of_int(32, regs[1]) = b by defs(simp(m1, (int_mod(b, 4294967296) = b by arith(hb))), bits_of_int, pow2)
+  show by taut(r1, trans(r2, l2), e0, e1)
+qed
+
+// size(i): block i's size, the world unchanged
+theorem tp.size_q: all t i regs o2. t in abi.World -> i in bits(32) -> int_lt(i, test_malloc.NBLK) ->
+  gc.regs_ok(regs, seq_one(gimple.arg(32, i))) -> runs(test_malloc.size_spec_fun()[regs], t, o2) ->
+  abi.ovf_out(t, o2) ||
+  (ex r. o2 = ok(fn_update(t, "vm", t.vm), r) && bits_of_int(32, fst(r)) = bits_of_int(32, test_malloc.size_of(i)) && fst(r) in bits(64))
+proof
+  fix t i regs o2
+  assume hw hi hil hro h2
+  have rl rn r0 := mp(all_elim(gc.regs1_32, {regs}, {i}), hi, hro)
+  have lo: seq_len(regs) in omega by simp(rl)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, (ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)), keep(ord_le))
+  have o1: ord_le(1, seq_len(regs)) by defs(simp(rn), ord_le)
+  let SV := bits_of_int(32, test_malloc.size_of(i))
+  have pv _ _ _ := apply(ms.world_parts, hw)
+  have pc: all o. runs(test_malloc.size_spec(bits_of_int(32, regs[0])), t, o) -> abi.ovf_out(t, o) || o = ok(t, SV) proof
+    fix o
+    assume hr
+    have ci := apply(ct.contract_inv, expand(rewrite(r0, hr), test_malloc.size_spec), hil, pv)
+    show by simp(ci)
+  qed
+  have res: all o. runs(gimple.result(32, SV), t, o) -> ex u. u in bits(64) && bits_of_int(32, u) = SV && o = ok(t, u) proof
+    fix o
+    assume hr
+    show := mp(all_elim(g.result32_inv, {t}, {SV}, {o}), simp(), hr)
+  qed
+  show := apply(tp.fun_ql[p := x0. test_malloc.size_spec(bits_of_int(32, x0[0])), w := 32, n := 1, regs := regs, s := t, o2 := o2, v := SV], ra, o1, hw, pc, res,
+    expand(h2, test_malloc.size_spec_fun))
+qed
+
+// pat(i, j): block i's j-th pattern byte, the world unchanged
+theorem tp.pat_q: all t i j regs o2. t in abi.World -> i in bits(32) -> j in bits(32) -> int_lt(i, test_malloc.NBLK) -> int_lt(j, test_malloc.size_of(test_malloc.NBLK)) ->
+  gc.regs_ok(regs, seq_concat(seq_one(gimple.arg(32, i)), seq_one(gimple.arg(32, j)))) -> runs(test_malloc.pat_spec_fun()[regs], t, o2) ->
+  abi.ovf_out(t, o2) ||
+  (ex r. o2 = ok(fn_update(t, "vm", t.vm), r) && bits_of_int(32, fst(r)) = bits_of_int(32, test_malloc.pat_of(i, j)) && fst(r) in bits(64))
+proof
+  fix t i j regs o2
+  assume hw hi hj hil hjl hro h2
+  have rl rn r0 r1 := mp(all_elim(tp.regs2_32, {regs}, {i}, {j}), hi, hj, hro)
+  have lo: seq_len(regs) in omega by simp(rl)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, (ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)), keep(ord_le))
+  have o2l: ord_le(2, seq_len(regs)) by defs(simp(rn), ord_le)
+  let PV := bits_of_int(32, test_malloc.pat_of(i, j))
+  have pv _ _ _ := apply(ms.world_parts, hw)
+  have pc: all o. runs(test_malloc.pat_spec(bits_of_int(32, regs[0]), bits_of_int(32, regs[1])), t, o) -> abi.ovf_out(t, o) || o = ok(t, PV) proof
+    fix o
+    assume hr
+    have ci := apply(ct.contract_inv, expand(rewrite(r1, rewrite(r0, hr)), test_malloc.pat_spec), conj(hil, hjl), pv)
+    show by simp(ci)
+  qed
+  have res: all o. runs(gimple.result(32, PV), t, o) -> ex u. u in bits(64) && bits_of_int(32, u) = PV && o = ok(t, u) proof
+    fix o
+    assume hr
+    show := mp(all_elim(g.result32_inv, {t}, {PV}, {o}), simp(), hr)
+  qed
+  show := apply(tp.fun_ql[p := x0. test_malloc.pat_spec(bits_of_int(32, x0[0]), bits_of_int(32, x0[1])), w := 32, n := 2, regs := regs, s := t, o2 := o2, v := PV], ra, o2l, hw, pc, res,
+    expand(h2, test_malloc.pat_spec_fun))
+qed
