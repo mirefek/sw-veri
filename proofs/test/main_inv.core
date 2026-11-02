@@ -347,3 +347,63 @@ proof
   qed
   show by taut(tin, tow, eok, wok, kept)
 qed
+
+// ----------------------------------------------------------------------
+//  main's array: a stack object, none of the allocator's
+
+// (a live object of a world as any call needs it: on no mapped page)
+theorem tm.obj_unm(b, cd, st, H, a): malloc.world_ok(b, cd, st, H) -> a in omega -> a in H.objs.live ->
+  !x86_64_linux.mapped(H.vm, int_div(a, x86_64_linux.PAGE))
+proof
+  assume hw ao hl
+  have _ _ _ _ _ _ lv os := expand(hw, malloc.world_ok)
+  have l1 l2 _ := mp(all_elim(lv, {a}), ao, hl)
+  assume m
+  have ml mn := expand(m, x86_64_linux.mapped)
+  have pg: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
+  have qs: int_div(a, x86_64_linux.PAGE) in set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))) by sel(taut((int_div(a, x86_64_linux.PAGE) in omega by arith(ao, pg)), ml))
+  have o := mp(all_elim(os, {int_div(a, x86_64_linux.PAGE)}), qs, mn)
+  have gp: x86_64_linux.STACK_GUARD_GAP in omega by defs(simp(), x86_64_linux.STACK_GUARD_GAP)
+  show by arith(expand(o, x86_64_linux.off_stack_space), l1, l2, ao, gp, pg)
+qed
+
+// (an 8-byte word: as its bytes)
+theorem tm.cell_eq(V, V2, c): c in omega -> int_le(int_add(c, 8), 18446744073709551616) ->
+  (all a. a in omega -> int_le(c, a) -> int_lt(a, int_add(c, 8)) -> V2.bytes[bits_of_int(64, a)] = V.bytes[bits_of_int(64, a)]) ->
+  gimple.bytes_at(V2, c, 8) = gimple.bytes_at(V, c, 8)
+proof
+  assume hc hl hag
+  have per: all i. i in omega -> int_le(0, i) -> int_lt(i, 8) ->
+      int_mul(V2.bytes[bits_add(64, c, bits_of_int(64, i))], int_pow(256, i)) = int_mul(V.bytes[bits_add(64, c, bits_of_int(64, i))], int_pow(256, i)) proof
+    fix i
+    assume hi _ hil
+    have ab: bits_add(64, c, bits_of_int(64, i)) = bits_of_int(64, int_add(c, i)) by defs(arith(hc, hl, hi, hil), bits_add, bits_of_int, pow2)
+    have k := mp(all_elim(hag, {int_add(c, i)}), (int_add(c, i) in omega by arith(hc, hi)), (int_le(c, int_add(c, i)) by arith(hi)), (int_lt(int_add(c, i), int_add(c, 8)) by arith(hil)))
+    show by simp(ab, k)
+  qed
+  have s := apply(int_sum_ext[a := 0, b := 8, f := i. int_mul(V2.bytes[bits_add(64, c, bits_of_int(64, i))], int_pow(256, i)),
+    g := i. int_mul(V.bytes[bits_add(64, c, bits_of_int(64, i))], int_pow(256, i))], simp(), simp(), per)
+  show by defs(s, gimple.bytes_at)
+qed
+
+// An allocator step from H to T, its extra bytes mapped ones: a live
+// object of H none of the allocator's keeps its byte, still none of the
+// allocator's
+theorem tm.obj_step(I, O, b, cd, st, H, T, X, a): malloc.step_ok(I, O, H, T, X) -> malloc.world_ok(b, cd, st, H) ->
+  (all x. x in X -> x86_64_linux.mapped(H.vm, int_div(x, x86_64_linux.PAGE))) -> a in omega -> a in H.objs.live -> !(a in O[H]) ->
+  T.vm.bytes[bits_of_int(64, a)] = H.vm.bytes[bits_of_int(64, a)] && !(a in O[T])
+proof
+  assume hst hw hx ao hl no
+  have af _ ow := expand(hst, malloc.step_ok)
+  have _ f2 _ _ _ := expand(af, malloc.alloc_frame)
+  have _ _ _ _ _ _ lv _ := expand(hw, malloc.world_ok)
+  have _ _ l3 := mp(all_elim(lv, {a}), ao, hl)
+  have um := apply(tm.obj_unm[b := b, cd := cd, st := st, H := H, a := a], hw, ao, hl)
+  have nx: !(a in X) proof
+    assume w
+    show by taut(um, mp(all_elim(hx, {a}), w))
+  qed
+  have b2 _ := mp(all_elim(f2, {a}), ao, conj(conj(conj(no, nx), hl), l3))
+  have nt: !(a in O[T]) by taut(mp(all_elim(ow, {a}), ao), no, nx, hl)
+  show by taut(b2, nt)
+qed
