@@ -414,19 +414,3 @@ pred keeps_code[S](spec: CFun2[S], base: nat, code: List[bits[8]], statics: Set[
         exc(s, _) => loaded(s.vm, base, code, statics)
         diverge(_) => true
       }
-
-///////////////////////////////////////////////////////////////////////
-//  Using it
-
-// The call rule: at a call site `call f` (after the arguments are set up),
-// the machine may be reasoned about as the spec. Follows from the
-// definitions; proven once, used at every call site.
-theorem call_rule[G](f: Addr, spec: CFun2[World & G], args: Args, objs: Set[nat], mem: Vm):
-  implements2(f, spec) ->
-    do[Machine] { call_abs(f); run_to_return() } refines do[Machine & G] { push(rip); rip := f; abi_function(f, spec, args, objs, mem) }
-
-// ... for a function inside the program: at the call, the program must be
-// loaded.
-theorem call_rule_at[G](f: Addr, spec: CFun2[World & G], args: Args, objs: Set[nat], mem: Vm, base: nat, code: List[bits[8]], statics: Set[nat]):
-  implements2_at(f, spec, base, code, statics) ->
-    do[Machine] { call_abs(f); run_to_return() } refines do[Machine & G] { require loaded(vm, base, code, statics); push(rip); rip := f; abi_function(f, spec, args, objs, mem) }

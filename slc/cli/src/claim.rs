@@ -241,6 +241,5 @@ fn summary(
     s.push_str("\nNotes:\n");
     s.push_str("  - No proof is given. The claim can only be true if every instruction and system call the\n");
     s.push_str("    allocator executes is modelled; run `slc coverage ELF malloc free` for the gaps.\n");
-    s.push_str("  - abi.call_rule is a layer theorem, also stated (to be proven once).\n");
     s
 }
