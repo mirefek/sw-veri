@@ -580,3 +580,84 @@ proof
   qed
   show by taut(t, c1, c2, c3)
 qed
+
+// ----------------------------------------------------------------------
+//  fill by its purpose
+
+// (the spec's runs: its requirement not met, anything; an overflow; the
+// pattern written, nothing else)
+theorem tp.fills_run(b, i, s, o): s in abi.World -> pair(s, o) in univ(1) ->
+  (!(((int_lt(i, test_malloc.NBLK) && test_malloc.blk_usable(s.vm, s.objs, b, i, true)) && abi.thread_ok(s.vm, s.fs_base)) &&
+     (all x2. x2 in omega -> int_lt(x2, test_malloc.size_of(i)) -> !(int_add(b, x2) in malloc.range(s.fs_base, 8)))) ||
+   abi.ovf_out(s, o) || (ex V. tp.finv(s.vm, V, b, i, test_malloc.size_of(i)) && o = ok(fn_update(s, "vm", V), empty))) ->
+  runs(test_malloc.fill_spec(b, i), s, o)
+proof
+  assume hw pu h
+  let OVF := exc_val("stack_overflow", empty)
+  let SZ := test_malloc.size_of(i)
+  let PRE(x0) := ((int_lt(i, test_malloc.NBLK) && test_malloc.blk_usable(app(x0, "vm"), app(x0, "objs"), b, i, true)) && abi.thread_ok(app(x0, "vm"), app(x0, "fs_base"))) &&
+    (all x2. x2 in omega -> int_lt(x2, SZ) -> !(int_add(b, x2) in malloc.range(app(x0, "fs_base"), 8)))
+  let BR1(x0, x2) := bind_rel(abi.overflow, x0, x3 x4. x2 = ok(pair(x3, empty), empty), x3 x4. x2 = exc(pair(x3, empty), pair("raise", x4)), x3. x2 = diverge(x3))
+  let BR2(x0, x2) := letin(app(x0, "vm"), x3. any_rel(x4. x4 in x86_64_linux.Vm && ((fn_update(app(fn_update(x0, "vm", x4), "vm"), "bytes", app(x3, "bytes")) = x3 &&
+    test_malloc.has_pat(app(fn_update(x0, "vm", x4), "vm"), b, i)) && (all x5. x5 in bits(64) -> !(int_le(b, x5) && int_lt(x5, int_add(b, SZ))) ->
+    app(app(app(fn_update(x0, "vm", x4), "vm"), "bytes"), x5) = app(app(x3, "bytes"), x5))), x4. letin(fn_update(x0, "vm", x4), x5. x2 = ok(pair(x5, empty), empty))))
+  let DS(x2, x1) := (fst(x2) = 0 && x1 = ok(fst(out_state(x2)), empty)) || ((((fst(x2) = 1 && fst(out_value(x2)) = "ret") && x1 = ok(fst(out_state(x2)), snd(out_value(x2)))) ||
+    ((fst(x2) = 1 && fst(out_value(x2)) = "raise") && x1 = exc(fst(out_state(x2)), snd(out_value(x2))))) || (fst(x2) = 2 && x1 = diverge(snd(x2))))
+  let SB(x0, x1) := !PRE(x0) || (ex x2. (BR1(x0, x2) || BR2(x0, x2)) && DS(x2, x1))
+  have g0: SB(s, o) proof
+    have c1: !PRE(s) -> SB(s, o) proof
+      assume hn
+      show by taut(hn)
+    qed
+    have c2: abi.ovf_out(s, o) -> SB(s, o) proof
+      assume e
+      obtain v ob, hv hob ho from e
+      let WO := fn_update(fn_update(s, "vm", v), "objs", ob)
+      let X2 := exc(pair(WO, empty), pair("raise", OVF))
+      have r1 := apply(ct.overflow_intro, {s}, {v}, {ob}, hv, hob, rewrite(ho, pu))
+      have cx: ex x3 x4. exc(WO, OVF) = exc(x3, x4) && X2 = exc(pair(x3, empty), pair("raise", x4)) by ex_intro({WO}, {OVF}, taut(refl({exc(WO, OVF)}), refl({X2})))
+      have b1: BR1(s, X2) by defs(ex_intro({exc(WO, OVF)}, taut(r1, cx)), bind_rel)
+      have d1: DS(X2, o) by simp(ho)
+      show by taut((ex x2. (BR1(s, x2) || BR2(s, x2)) && DS(x2, o) by ex_intro({X2}, taut(b1, d1))))
+    qed
+    have c3: (ex V. tp.finv(s.vm, V, b, i, SZ) && o = ok(fn_update(s, "vm", V), empty)) -> SB(s, o) proof
+      assume e
+      obtain V, hV he hp hfr ho from e
+      let X2 := ok(pair(fn_update(s, "vm", V), empty), empty)
+      have hpt: test_malloc.has_pat(V, b, i) by defs(hp, test_malloc.has_pat)
+      have ev: ex x4. (x4 in x86_64_linux.Vm && ((fn_update(app(fn_update(s, "vm", x4), "vm"), "bytes", app(s.vm, "bytes")) = s.vm &&
+          test_malloc.has_pat(app(fn_update(s, "vm", x4), "vm"), b, i)) && (all x5. x5 in bits(64) -> !(int_le(b, x5) && int_lt(x5, int_add(b, SZ))) ->
+          app(app(app(fn_update(s, "vm", x4), "vm"), "bytes"), x5) = app(app(s.vm, "bytes"), x5)))) && letin(fn_update(s, "vm", x4), x5. X2 = ok(pair(x5, empty), empty))
+        by ex_intro({V}, defs(simp(hV, he, hpt, hfr, keep(test_malloc.has_pat)), letin))
+      have b2: BR2(s, X2) by defs(taut(expand(ev, any_rel, letin)), any_rel, letin)
+      have d2: DS(X2, o) by simp(ho)
+      show by taut((ex x2. (BR1(s, x2) || BR2(s, x2)) && DS(x2, o) by ex_intro({X2}, taut(b2, d2))))
+    qed
+    show by taut(h, c1, c2, c3)
+  qed
+  show by defs(apply(tr.runs_intro[r := x0 x1. SB(x0, x1)], {s}, {o}, pu, g0), test_malloc.fill_spec)
+qed
+
+// fill's code by its purpose, its callees by their contracts
+theorem tp.fill: all b i gp gs. b in bits(64) -> i in bits(32) -> tp.calls(gp, test_malloc.pat_spec_fun()) -> tp.calls(gs, test_malloc.size_spec_fun()) ->
+  refines(c_tests_test_malloc.fill(b, i, gp, gs), test_malloc.fill_spec(b, i), abi.World)
+proof
+  fix b i gp gs
+  assume hb hi hgp hgs
+  show proof
+    fix s o
+    assume hw hr
+    have pu := apply(g.runs_univ, expand(hr, c_tests_test_malloc.fill))
+    have hu: s in univ(1) by simp(pu)
+    have c: ((int_lt(i, test_malloc.NBLK) && test_malloc.blk_usable(s.vm, s.objs, b, i, true)) && abi.thread_ok(s.vm, s.fs_base)) &&
+        (all x2. x2 in omega -> int_lt(x2, test_malloc.size_of(i)) -> !(int_add(b, x2) in malloc.range(s.fs_base, 8))) ->
+        abi.ovf_out(s, o) || (ex V. tp.finv(s.vm, V, b, i, test_malloc.size_of(i)) && o = ok(fn_update(s, "vm", V), empty)) proof
+      assume hp
+      have hil hus hth hap := hp
+      show := mp(all_elim(tp.fill_run, {b}, {i}, {gp}, {gs}, {s}, {o}), hb, hi, hil, hw, hu, hth, hus, hap, hgp, hgs, hr)
+    qed
+    show := apply(tp.fills_run[b := b, i := i, s := s, o := o], hw, pu, taut(c))
+  qed
+qed
+
+contract fill test_malloc.fill_spec_fun by tp.fill
