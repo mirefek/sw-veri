@@ -64,15 +64,6 @@ proof
   show by defs(mp(mallocng.law_frame[c := musl.cfg], musl.cfg_ok), musl.inv, musl.owned)
 qed
 
-// freeing a live block leaves a state mallocng's invariant allows
-// (proofs/mallocng/free_step.core; the context word-aligned, low)
-theorem musl.free_step: malloc.free_step(musl.inv, musl.owned, musl_malloc.prog_base, musl_malloc.prog_code, musl_malloc.prog_statics)
-proof
-  have cx: musl.cfg.ctx = 4227328 by simp(unfold(musl.cfg), unfold(c_src_malloc_mallocng_malloc.__malloc_context))
-  have t := mp(mallocng.law_free_step[c := musl.cfg, b := musl_malloc.prog_base, cd := musl_malloc.prog_code, st := musl_malloc.prog_statics], musl.cfg_ok, (int_mod(musl.cfg.ctx, 8) = 0 by simp(cx)), (int_lt(musl.cfg.ctx, 4294967296) by simp(cx)))
-  show by defs(t, musl.inv, musl.owned)
-qed
-
 // ----------------------------------------------------------------------
 //  Startup (proofs/mallocng/init.core): from process start to `main`, the
 //  invariant is established, the allocator owning its static bytes and
@@ -110,6 +101,46 @@ proof
   show by taut(he, hb, hcd)
 qed
 
+// the program text: the file's read-only executable segment 1, its pages
+// that segment's last
+theorem musl.code_img: mp.code_img(musl.cfg, app(musl_malloc.prog_base, empty), app(musl_malloc.prog_code, empty), 1)
+proof
+  have _ hb hcd := musl.prog
+  have cf: musl.cfg.file = musl_malloc.file by simp(unfold(musl.cfg))
+  let F := musl_malloc.file
+  have {pn = phnum, s1 = s1} := ui.elf
+  have _ fl _ va _ ms := expand(s1, ui.segis)
+  have {ln = len} := ui.text_bytes
+  have nf: !bit(x86_64_linux.segment(F, 1).flags, 1) by defs(simp(fl), bit)
+  have pg: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
+  have body: all i. i in omega -> int_lt(i, seq_len(text.code)) ->
+      (int_le(x86_64_linux.segment(F, 1).vaddr, int_add(4198400, i)) && int_lt(int_add(4198400, i), int_add(x86_64_linux.segment(F, 1).vaddr, x86_64_linux.segment(F, 1).memsz))) &&
+      x86_64_linux.last_on_page(F, 1, int_div(int_add(4198400, i), x86_64_linux.PAGE)) && int_lt(int_add(4198400, i), 18446744073709551616) proof
+    fix i
+    assume hi hil
+    have il: int_lt(i, 18292) := rewrite(ln, hil)
+    have r: int_le(x86_64_linux.segment(F, 1).vaddr, int_add(4198400, i)) && int_lt(int_add(4198400, i), int_add(x86_64_linux.segment(F, 1).vaddr, x86_64_linux.segment(F, 1).memsz))
+      by simp(va, ms, (int_le(4198400, int_add(4198400, i)) && int_lt(int_add(4198400, i), int_add(4198400, 18292)) by arith(hi, il)))
+    have qo: int_div(int_add(4198400, i), x86_64_linux.PAGE) in omega by defs(arith(hi), x86_64_linux.PAGE)
+    have tb: ui.TAB(1, int_div(int_add(4198400, i), x86_64_linux.PAGE)) by arith(pg, hi, il)
+    have lp := mp(all_elim(ui.last_tab, {1}, {int_div(int_add(4198400, i), x86_64_linux.PAGE)}), (1 in omega by simp()), qo, tb)
+    show by taut(r, lp, (int_lt(int_add(4198400, i), 18446744073709551616) by arith(hi, il)))
+  qed
+  have l1 := ui.load1
+  have all6 := conj(conj(conj(conj(conj((1 in omega by simp()), (int_lt(1, x86_64_linux.phnum(F)) by simp(pn))), l1), nf), (4198400 in omega by simp())), body)
+  show := rewrite(sym(cf), rewrite(sym(hcd), rewrite(sym(hb), all6)))
+qed
+
+// freeing a live block leaves a state mallocng's invariant allows
+// (proofs/mallocng/free_step.core; the context word-aligned, low)
+theorem musl.free_step: malloc.free_step(musl.inv, musl.owned, musl_malloc.prog_base, musl_malloc.prog_code, musl_malloc.prog_statics)
+proof
+  have cx: musl.cfg.ctx = 4227328 by simp(unfold(musl.cfg), unfold(c_src_malloc_mallocng_malloc.__malloc_context))
+  have t := mp(mallocng.law_free_step[c := musl.cfg, b := musl_malloc.prog_base, cd := musl_malloc.prog_code, st := musl_malloc.prog_statics, ks := 1], musl.cfg_ok,
+    (int_mod(musl.cfg.ctx, 8) = 0 by simp(cx)), (int_lt(musl.cfg.ctx, 4294967296) by simp(cx)), musl.code_img)
+  show by defs(t, musl.inv, musl.owned)
+qed
+
 theorem musl.impl_malloc:
   abi.implements(malloc.Heap.ghost, musl_malloc.malloc_at,
     malloc.malloc_fun(musl.inv, musl.owned, musl_malloc.errno_offset, musl_malloc.prog_base, musl_malloc.prog_code, musl_malloc.prog_statics))
@@ -117,7 +148,7 @@ proof
   have hc: mp.mi_cfg(musl.cfg) by simp(musl.cfg_ok, unfold(musl.cfg))
   have he hb hcd := musl.prog
   have t := mp(all_elim(mp.top_malloc, {musl.cfg}, {app(musl_malloc.prog_statics, empty)}, {musl_malloc.errno_offset}, {musl_malloc.prog_base},
-    {musl_malloc.prog_code}, {musl_malloc.prog_statics}), hc, he, hb, hcd, refl({app(musl_malloc.prog_statics, empty)}))
+    {musl_malloc.prog_code}, {musl_malloc.prog_statics}), hc, he, hb, hcd, refl({app(musl_malloc.prog_statics, empty)}), musl.code_img)
   show by defs(t, musl.inv, musl.owned, musl_malloc.malloc_at)
 qed
 
@@ -128,7 +159,7 @@ proof
   have hc: mp.fr_cfg(musl.cfg) by simp(musl.cfg_ok, unfold(musl.cfg))
   have he hb hcd := musl.prog
   have t := mp(all_elim(mp.top_free, {musl.cfg}, {app(musl_malloc.prog_statics, empty)}, {musl_malloc.errno_offset}, {musl_malloc.prog_base},
-    {musl_malloc.prog_code}, {musl_malloc.prog_statics}), hc, he, hb, hcd, refl({app(musl_malloc.prog_statics, empty)}))
+    {musl_malloc.prog_code}, {musl_malloc.prog_statics}), hc, he, hb, hcd, refl({app(musl_malloc.prog_statics, empty)}), musl.code_img)
   show by defs(t, musl.inv, musl.owned, musl_malloc.free_at)
 qed
 

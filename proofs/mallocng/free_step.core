@@ -128,13 +128,15 @@ qed
 //  The block's group not mapped on its own: its slot unused again, its
 //  bit in the group's freed mask (the meta's word written)
 
-theorem mp.fs_unres(c, s, A, p, g, i): c in mallocng.Cfg -> s in rec_and(abi.World, malloc.Heap.ghost) -> A in mallocng.Abs -> mallocng.rep(c, A, s) ->
+theorem mp.fs_unres(c, s, A, p, g, i, b, cd, st, k): c in mallocng.Cfg -> s in rec_and(abi.World, malloc.Heap.ghost) -> A in mallocng.Abs -> mallocng.rep(c, A, s) ->
+  malloc.world_ok(b, cd, st, s) -> mp.code_img(c, app(b, empty), app(cd, empty), k) ->
   p in bits(64) -> !(s.blocks[p] = none) -> mallocng.is_used(A, g) -> i in omega -> int_lt(i, seq_len(A.slots[g])) -> A.slots[g][i] = tag(1, p) ->
   !mallocng.own_mapping(A.metas[g]) ->
-  ex vm. vm in x86_64_linux.Vm && malloc.step_ok(mallocng.inv(c), mallocng.owned(c), s,
-    fn_update(fn_update(s, "blocks", malloc.set_block(s.blocks, p, none)), "vm", vm), malloc.range(p, snd(s.blocks[p])))
+  ex vm. vm in x86_64_linux.Vm && (malloc.step_ok(mallocng.inv(c), mallocng.owned(c), s,
+    fn_update(fn_update(s, "blocks", malloc.set_block(s.blocks, p, none)), "vm", vm), malloc.range(p, snd(s.blocks[p]))) &&
+    malloc.world_ok(b, cd, st, fn_update(fn_update(s, "blocks", malloc.set_block(s.blocks, p, none)), "vm", vm)))
 proof
-  assume hc hs ha hr hp hbl hg hi hil hsl hno
+  assume hc hs ha hr hw hci hp hbl hg hi hil hsl hno
   have au := apply(mallocng.abs_univ, ha)
   have {hh = mem, hnr = unres, htk = untaken, hlv = live, htl = tls, her = errno, hcn = canary, hax = aux} := expand(hr, mallocng.rep)
   let B := s.blocks
@@ -144,7 +146,7 @@ proof
   // unframed: slot i reserved, the memory as it is
   let A1 := mp.unfr(A, g, i)
   let B1 := malloc.set_block(B, p, none)
-  have {v0 = vm, b1t = btype, a1a = abs, a1u = univ, hm1 = holds, fps = fp, iu1 = used, ro1 = ro} :=
+  have {v0 = vm, fsb = fs, b1t = btype, a1a = abs, a1u = univ, hm1 = holds, fps = fp, iu1 = used, ro1 = ro} :=
     apply(mp.fs_unfr[c := c, s := s, A := A, p := p, g := g, i := i], hc, hs, ha, hr, hp, hg, hi, hil, hsl)
   have hin1: mallocng.holds_in(c, A1, V0, mp.no_objs, B1) by defs(taut(hm1, all_elim(mp.shown_none, {c}, {A1})), mallocng.holds_in)
   have ln1 := apply(mp.su_len[A := A, g := g, i := i, u := tag(3, empty), p := g], ha, go, hi, hil, mp.use3)
@@ -257,8 +259,28 @@ proof
     have g1 := mp(all_elim(fpo, {a}), rewrite(tb, rewrite(eq, hbf)))
     show by taut(g1, mp(all_elim(ow0, {a}), ao))
   qed
-  have st: malloc.step_ok(mallocng.inv(c), mallocng.owned(c), s, T, malloc.range(p, snd(B[p]))) by defs(taut(af, ti, ow), malloc.step_ok)
-  show by ex_intro({V2}, taut(v2, st))
+  have stp: malloc.step_ok(mallocng.inv(c), mallocng.owned(c), s, T, malloc.range(p, snd(B[p]))) by defs(taut(af, ti, ow), malloc.step_ok)
+  // (the world after: as any call needs it -- every byte outside the
+  // allocator's and the block's as it was)
+  have r: all x0. x0 in omega -> (!(x0 in mallocng.footprint(c, A, B)) && !(x0 in malloc.range(p, snd(B[p])))) && int_lt(x0, x86_64_linux.TASK_SIZE) ->
+      V2.bytes[bits_of_int(64, x0)] = V0.bytes[bits_of_int(64, x0)] && V2.pages[int_div(x0, x86_64_linux.PAGE)] = V0.pages[int_div(x0, x86_64_linux.PAGE)] proof
+    fix a
+    assume ao w0
+    have nf nx ht := w0
+    have no: !(a in mallocng.owned(c)[s]) proof
+      assume w
+      obtain Bx, hbx hbr hbf from apply(mallocng.owned_mem[c := c, s := s, a := a], hs, w)
+      have eq := apply(mallocng.abs_unique[c := c, s := s, A := Bx, B := A], hc, hs, hbx, ha, hbr, hr)
+      show by taut(nf, rewrite(eq, hbf))
+    qed
+    show := mp(all_elim(fr0, {a}), ao, conj(conj(no, nx), ht))
+  qed
+  have unt := apply(mp.unt_all[c := c, A := A, b := B, vm := V0, V := V2, objs := s.objs, e := malloc.range(p, snd(B[p]))], r,
+    apply(mp.bk_pg[v := V0, v2 := V2], bk1, bk2, bk3, pg))
+  have wk := apply(mp.wok_kept[c := c, A := A, A2 := A2, S := s, T := T, objs := s.objs, E := malloc.range(p, snd(B[p])), b := b, cd := cd, st := st, k := k],
+    hc, au, ha, a2u, a2a, bt, v0, rewrite(sym(tb), b1t), rewrite(sym(tv), v2), fsb, hr, rep2, hw, rewrite(sym(tv), unt),
+    apply(mp.blk_off[c := c, A := A, S := s, p := p], hc, au, ha, bt, fsb, hr, hp, hbl), (T.objs = s.objs by simp()), (T.fs_base = s.fs_base by simp()), hci)
+  show by ex_intro({V2}, taut(v2, stp, wk))
 qed
 
 // ----------------------------------------------------------------------
@@ -551,14 +573,15 @@ proof
   show by defs(taut(af, ti, ow), malloc.step_ok)
 qed
 
-theorem mp.fs_own(c, s, A, p, g, i, b, cd, st): c in mallocng.Cfg -> int_mod(c.ctx, 8) = 0 -> int_lt(c.ctx, 4294967296) ->
-  s in rec_and(abi.World, malloc.Heap.ghost) -> A in mallocng.Abs -> mallocng.rep(c, A, s) -> malloc.world_ok(b, cd, st, s) ->
+theorem mp.fs_own(c, s, A, p, g, i, b, cd, st, k): c in mallocng.Cfg -> int_mod(c.ctx, 8) = 0 -> int_lt(c.ctx, 4294967296) ->
+  s in rec_and(abi.World, malloc.Heap.ghost) -> A in mallocng.Abs -> mallocng.rep(c, A, s) -> malloc.world_ok(b, cd, st, s) -> mp.code_img(c, app(b, empty), app(cd, empty), k) ->
   p in bits(64) -> !(s.blocks[p] = none) -> mallocng.is_used(A, g) -> i in omega -> int_lt(i, seq_len(A.slots[g])) -> A.slots[g][i] = tag(1, p) ->
   mallocng.own_mapping(A.metas[g]) ->
-  ex vm. vm in x86_64_linux.Vm && malloc.step_ok(mallocng.inv(c), mallocng.owned(c), s,
-    fn_update(fn_update(s, "blocks", malloc.set_block(s.blocks, p, none)), "vm", vm), malloc.range(p, snd(s.blocks[p])))
+  ex vm. vm in x86_64_linux.Vm && (malloc.step_ok(mallocng.inv(c), mallocng.owned(c), s,
+    fn_update(fn_update(s, "blocks", malloc.set_block(s.blocks, p, none)), "vm", vm), malloc.range(p, snd(s.blocks[p]))) &&
+    malloc.world_ok(b, cd, st, fn_update(fn_update(s, "blocks", malloc.set_block(s.blocks, p, none)), "vm", vm)))
 proof
-  assume hc cal clo hs ha hr hw hp hbl hg hi hil hsl hown
+  assume hc cal clo hs ha hr hw hci hp hbl hg hi hil hsl hown
   have au := apply(mallocng.abs_univ, ha)
   have {hh = mem, hnr = unres, htk = untaken} := expand(hr, mallocng.rep)
   let B := s.blocks
@@ -703,17 +726,22 @@ proof
   qed
   have stp := apply(mp.fs_stepu[c := c, A := A, S := s, T := T, A2 := A3, X := malloc.range(p, snd(B[p])), b := b, cd := cd, st := st], hc, ha, a3a, hs, tg, hr, rep3, hw,
     rewrite(sym(tv), unt), hgT)
-  show by ex_intro({V3}, taut(v3, stp))
+  // (the world after: as any call needs it)
+  have wk := apply(mp.wok_kept[c := c, A := A, A2 := A3, S := s, T := T, objs := mp.no_objs, E := malloc.range(p, snd(B[p])), b := b, cd := cd, st := st, k := k],
+    hc, au, ha, a3u, a3a, bt, v0, rewrite(sym(tb), b1t), rewrite(sym(tv), v3), fsb, hr, rep3, hw, rewrite(sym(tv), unt),
+    apply(mp.blk_off[c := c, A := A, S := s, p := p], hc, au, ha, bt, fsb, hr, hp, hbl), (T.objs = s.objs by simp()), (T.fs_base = s.fs_base by simp()), hci)
+  show by ex_intro({V3}, taut(v3, stp, wk))
 qed
 
 // ----------------------------------------------------------------------
 //  The law: a live block is in a slot (blocks_ok); its group mapped on
 //  its own or not
 
-theorem mallocng.law_free_step(c, b, cd, st): c in mallocng.Cfg -> int_mod(c.ctx, 8) = 0 -> int_lt(c.ctx, 4294967296) ->
+theorem mallocng.law_free_step(c, b, cd, st, ks): c in mallocng.Cfg -> int_mod(c.ctx, 8) = 0 -> int_lt(c.ctx, 4294967296) ->
+  mp.code_img(c, app(b, empty), app(cd, empty), ks) ->
   malloc.free_step(mallocng.inv(c), mallocng.owned(c), b, cd, st)
 proof
-  assume hc cal clo
+  assume hc cal clo hci
   unfold malloc.free_step
   fix s p
   assume h1 h2
@@ -730,15 +758,17 @@ proof
   obtain k j, hk hj hkl hjl hsl from mp(all_elim(expand(hbk, mallocng.blocks_ok), {p}), hp, hbl)
   let g := A.used[k]
   have hg: mallocng.is_used(A, g) by defs(ex_intro({k}, taut(hk, hkl, refl({g}))), mallocng.is_used)
-  have r1: mallocng.own_mapping(A.metas[g]) -> (ex vm. vm in x86_64_linux.Vm && malloc.step_ok(mallocng.inv(c), mallocng.owned(c), s,
-      fn_update(fn_update(s, "blocks", malloc.set_block(s.blocks, p, none)), "vm", vm), malloc.range(p, snd(s.blocks[p])))) proof
+  have r1: mallocng.own_mapping(A.metas[g]) -> (ex vm. vm in x86_64_linux.Vm && (malloc.step_ok(mallocng.inv(c), mallocng.owned(c), s,
+      fn_update(fn_update(s, "blocks", malloc.set_block(s.blocks, p, none)), "vm", vm), malloc.range(p, snd(s.blocks[p]))) &&
+      malloc.world_ok(b, cd, st, fn_update(fn_update(s, "blocks", malloc.set_block(s.blocks, p, none)), "vm", vm)))) proof
     assume o
-    show := apply(mp.fs_own[c := c, s := s, A := A, p := p, g := g, i := j, b := b, cd := cd, st := st], hc, cal, clo, hs, ha, hr, hw, hp, hbl, hg, hj, hjl, hsl, o)
+    show := apply(mp.fs_own[c := c, s := s, A := A, p := p, g := g, i := j, b := b, cd := cd, st := st, k := ks], hc, cal, clo, hs, ha, hr, hw, hci, hp, hbl, hg, hj, hjl, hsl, o)
   qed
-  have r2: !mallocng.own_mapping(A.metas[g]) -> (ex vm. vm in x86_64_linux.Vm && malloc.step_ok(mallocng.inv(c), mallocng.owned(c), s,
-      fn_update(fn_update(s, "blocks", malloc.set_block(s.blocks, p, none)), "vm", vm), malloc.range(p, snd(s.blocks[p])))) proof
+  have r2: !mallocng.own_mapping(A.metas[g]) -> (ex vm. vm in x86_64_linux.Vm && (malloc.step_ok(mallocng.inv(c), mallocng.owned(c), s,
+      fn_update(fn_update(s, "blocks", malloc.set_block(s.blocks, p, none)), "vm", vm), malloc.range(p, snd(s.blocks[p]))) &&
+      malloc.world_ok(b, cd, st, fn_update(fn_update(s, "blocks", malloc.set_block(s.blocks, p, none)), "vm", vm)))) proof
     assume o
-    show := apply(mp.fs_unres[c := c, s := s, A := A, p := p, g := g, i := j], hc, hs, ha, hr, hp, hbl, hg, hj, hjl, hsl, o)
+    show := apply(mp.fs_unres[c := c, s := s, A := A, p := p, g := g, i := j, b := b, cd := cd, st := st, k := ks], hc, hs, ha, hr, hw, hci, hp, hbl, hg, hj, hjl, hsl, o)
   qed
   show by taut(r1, r2)
 qed

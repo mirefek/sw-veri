@@ -26,17 +26,19 @@ qed
 theorem mp.tf_fok(I, O, eo, b, cd, st, S, p, V): !(p = 0) -> S in I -> malloc.errno_ok(eo, S) -> malloc.world_ok(b, cd, st, S) -> !(S.blocks[p] = none) ->
   S.blocks in fn_space(bits(64), option(omega)) -> V in x86_64_linux.Vm ->
   malloc.step_ok(I, O, S, fn_update(fn_update(S, "blocks", malloc.set_block(S.blocks, p, none)), "vm", V), malloc.range(p, snd(S.blocks[p]))) ->
+  malloc.world_ok(b, cd, st, fn_update(fn_update(S, "blocks", malloc.set_block(S.blocks, p, none)), "vm", V)) ->
   pair(fn_update(S, "blocks", malloc.set_block(S.blocks, p, none)), ok(fn_update(fn_update(S, "blocks", malloc.set_block(S.blocks, p, none)), "vm", V), empty)) in univ(1) ->
   pair(S, ok(fn_update(fn_update(S, "blocks", malloc.set_block(S.blocks, p, none)), "vm", V), empty)) in univ(1) ->
   runs(malloc.free(I, O, eo, b, cd, st, p), S, ok(fn_update(fn_update(S, "blocks", malloc.set_block(S.blocks, p, none)), "vm", V), empty))
 proof
-  assume hp0 hi he hw hbl hbt hv hst pux pu
+  assume hp0 hi he hw hbl hbt hv hst hwk pux pu
   have bu := apply(mp.uf_bu[b := S.blocks, p := p], hbt)
   let X := fn_update(S, "blocks", malloc.set_block(S.blocks, p, none))
   let T := fn_update(X, "vm", V)
   let R := malloc.range(p, snd(S.blocks[p]))
-  have as: runs(malloc.allocator_step(I, O, S, R), X, ok(T, empty)) by spec_ret({V}, hv, hst, pux)
-  have br := mp(all_elim(gc.bind_ok[p := malloc.allocator_step(I, O, S, R), k := x6 x7. ok(T, empty) = ok(x6, empty), x := x6 x7. ok(T, empty) = exc(x6, x7),
+  have hwk2: malloc.world_ok(b, cd, st, fn_update(X, "vm", V)) := hwk
+  have as: runs(malloc.allocator_step(I, O, b, cd, st, S, R), X, ok(T, empty)) by spec_ret({V}, hv, hst, hwk2, pux)
+  have br := mp(all_elim(gc.bind_ok[p := malloc.allocator_step(I, O, b, cd, st, S, R), k := x6 x7. ok(T, empty) = ok(x6, empty), x := x6 x7. ok(T, empty) = exc(x6, x7),
     d := x6. ok(T, empty) = diverge(x6)], {X}, {T}, {empty}), as, refl({ok(T, empty)}))
   show by spec_ret({ok(pair(S, empty), empty)}, hp0, hi, he, hw, hbl, br, bu, pu)
 qed
@@ -196,6 +198,32 @@ theorem mp.blk_live(b, p, a): p in bits(64) -> !(b[p] = none) -> a in omega -> a
 proof
   assume hp hn ao ar
   show by taut(apply(mp.live_def[b := b, a := a]), ao, (ex q. q in bits(64) && (!(b[q] = none) && a in malloc.range(q, snd(b[q]))) by ex_intro({p}, taut(hp, hn, ar))))
+qed
+
+// (a live block: neither the thread's word nor the stack protector's --
+// those none of the allocator's ranges, the block in them)
+theorem mp.blk_off(c, A, S, p): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> S.blocks in fn_space(bits(64), option(omega)) -> S.fs_base in bits(64) ->
+  mallocng.rep(c, A, S) -> p in bits(64) -> !(S.blocks[p] = none) ->
+  all i. i in omega -> int_lt(i, 8) -> !(int_add(S.fs_base, i) in malloc.range(p, snd(S.blocks[p]))) && !(int_add(int_add(S.fs_base, 40), i) in malloc.range(p, snd(S.blocks[p])))
+proof
+  assume hc hu ha hb fsb hr hp hn
+  have {hm = mem, rtl = tls, rca = canary} := expand(hr, mallocng.rep)
+  have {l = live} := apply(mp.has_rng, hc, hu, ha, hb, hm)
+  fix i
+  assume hi hil
+  have c1: !(int_add(S.fs_base, i) in malloc.range(p, snd(S.blocks[p]))) proof
+    assume w
+    have lv := apply(mp.blk_live[b := S.blocks, p := p, a := int_add(S.fs_base, i)], hp, hn, (int_add(S.fs_base, i) in omega by arith(fsb, hi)), w)
+    show by taut(mp(all_elim(l, {int_add(S.fs_base, i)}), lv), mp(all_elim(rtl, {i}), hi, hil))
+  qed
+  have c2: !(int_add(int_add(S.fs_base, 40), i) in malloc.range(p, snd(S.blocks[p]))) proof
+    assume w
+    have lv := apply(mp.blk_live[b := S.blocks, p := p, a := int_add(int_add(S.fs_base, 40), i)], hp, hn, (int_add(int_add(S.fs_base, 40), i) in omega by arith(fsb, hi)), w)
+    have ic: int_add(int_add(S.fs_base, 40), i) in abi.canary(S.fs_base) by defs(sel(arith(fsb, hi, hil)), abi.canary)
+    have nr _ := mp(all_elim(rca, {int_add(int_add(S.fs_base, 40), i)}), (int_add(int_add(S.fs_base, 40), i) in omega by arith(fsb, hi)), ic)
+    show by taut(mp(all_elim(l, {int_add(int_add(S.fs_base, 40), i)}), lv), nr)
+  qed
+  show by taut(c1, c2)
 qed
 
 // (the blocks with p dropped: live bytes only the old ones)
@@ -366,13 +394,13 @@ qed
 
 // a live block p given back (`mp.lf_post`, from A at the layer's state):
 // the layer's free's, the block no longer live
-theorem mp.tf_blk(c, eo, b, cd, st, regs, s, h, A, V, y0, y1): c in mallocng.Cfg -> app(eo, empty) = 52 -> regs in abi.ARGS -> ord_le(1, seq_len(regs)) ->
+theorem mp.tf_blk(c, eo, b, cd, st, regs, s, h, A, V, y0, y1, k): c in mallocng.Cfg -> app(eo, empty) = 52 -> regs in abi.ARGS -> ord_le(1, seq_len(regs)) ->
   s in abi.World -> s in univ(1) -> h in malloc.Heap.ghost -> !(regs[0] = 0) -> mp.MPRE(c, eo, b, cd, st, union2(s, h)) -> !(union2(s, h).blocks[regs[0]] = none) ->
   A in mallocng.Abs -> mallocng.rep(c, A, union2(s, h)) -> regs[0] in bits(64) ->
-  V in x86_64_linux.Vm -> y0 in bits(64) -> y1 in bits(64) -> mp.lf_post(c, A, h.blocks, regs[0], s, V) ->
+  V in x86_64_linux.Vm -> y0 in bits(64) -> y1 in bits(64) -> mp.lf_post(c, A, h.blocks, regs[0], s, V) -> mp.code_img(c, app(b, empty), app(cd, empty), k) ->
   ex h2. h2 in malloc.Heap.ghost && runs(abi.wide(malloc.Heap.ghost, mp.UFF(c, eo, b, cd, st))[regs], union2(s, h), with_ghost(ok(fn_update(s, "vm", V), pair(y0, y1)), h2))
 proof
-  assume hc he hra o1l hs su hh hp0 hpre hbl ha hrep hpb hv hy0 hy1 hpost
+  assume hc he hra o1l hs su hh hp0 hpre hbl ha hrep hpb hv hy0 hy1 hpost hci
   let S := union2(s, h)
   let p := regs[0]
   have hinv heo hwo := hpre
@@ -419,8 +447,13 @@ proof
   have Su: S in univ(1) := mp(union2_univ[u := 1, a := s, b := h], su, (h in univ(1) by taut(mp(all_elim(mp.hg_ok, {h}), hh))))
   have pux: pair(fn_update(S, "blocks", B2), ok(T, empty)) in univ(1) by simp(Su, b2u, tu)
   have pu: pair(S, ok(T, empty)) in univ(1) by simp(Su, tu)
+  // (the world after: as any call needs it)
+  have svm: S.vm in x86_64_linux.Vm := rewrite(sym(vS), (s.vm in x86_64_linux.Vm by simp(expand(hs, abi.World))))
+  have wk := apply(mp.wok_kept[c := c, A := A, A2 := A2, S := S, T := T, objs := S.objs, E := R, b := b, cd := cd, st := st, k := k],
+    hc, au, ha, a2u, a2a, bt, svm, rewrite(sym(tb), apply(mp.uf_btype[b := S.blocks, p := p], bt)), rewrite(sym(tv), hv), fsb, hrep, rep2, hwo, rewrite(sym(tv), hun0),
+    apply(mp.blk_off[c := c, A := A, S := S, p := p], hc, au, ha, bt, fsb, hrep, hpb, hbl), (T.objs = S.objs by simp()), (T.fs_base = S.fs_base by simp()), hci)
   have fk := apply(mp.tf_fok[I := mallocng.inv(c), O := mallocng.owned(c), eo := eo, b := b, cd := cd, st := st, S := S, p := p, V := V],
-    hp0, hinv, heo, hwo, hbl, bt, hv, stp, pux, pu)
+    hp0, hinv, heo, hwo, hbl, bt, hv, stp, wk, pux, pu)
   have pu1: pair(S, ok(T, y0)) in univ(1) by simp(Su, tu, hy0)
   have fv := apply(mp.tf_fun[I := mallocng.inv(c), O := mallocng.owned(c), eo := eo, b := b, cd := cd, st := st, regs := regs, S := S, o := ok(T, y0)], hra, pu1,
     apply(mp.tf_rel_ok[I := mallocng.inv(c), O := mallocng.owned(c), eo := eo, b := b, cd := cd, st := st, regs := regs, S := S, x := T, v := y0], hy0, fk))
@@ -563,14 +596,14 @@ qed
 // world w with the layer's ghost part h (n at least the groups in use where
 // it frees a live block): it refines the layer's free (but for overflows)
 // and diverges only where that is undefined
-theorem mp.tf_low(c, statics, eo, b, cd, st, regs, w, h, n, nf): mp.fr_cfg(c) -> app(eo, empty) = 52 -> mp.nf_known(c, statics, n, nf) ->
+theorem mp.tf_low(c, statics, eo, b, cd, st, regs, w, h, n, nf, k): mp.fr_cfg(c) -> app(eo, empty) = 52 -> mp.nf_known(c, statics, n, nf) ->
   regs in abi.ARGS -> w in abi.World -> w in univ(1) -> h in malloc.Heap.ghost -> abi.thread_ok(w.vm, w.fs_base) ->
   (ord_le(1, seq_len(regs)) && !(regs[0] = 0) && mp.MPRE(c, eo, b, cd, st, union2(w, h)) && !(union2(w, h).blocks[regs[0]] = none) ->
-     ex A. A in mallocng.Abs && mallocng.rep(c, A, union2(w, h)) && int_le(seq_len(A.used), n)) ->
+     ex A. A in mallocng.Abs && mallocng.rep(c, A, union2(w, h)) && int_le(seq_len(A.used), n)) -> mp.code_img(c, app(b, empty), app(cd, empty), k) ->
   abi.refines_ovf_at(c_src_malloc_free.free_fun(mp.FLF(nf))[regs], abi.wide(malloc.Heap.ghost, mp.UFF(c, eo, b, cd, st))[regs], malloc.Heap.ghost, w, h) &&
   tr.div_low_at(c_src_malloc_free.free_fun(mp.FLF(nf))[regs], abi.wide(malloc.Heap.ghost, mp.UFF(c, eo, b, cd, st))[regs], malloc.Heap.ghost, w, h)
 proof
-  assume hcf he hk hra hw hwu hh hth hna
+  assume hcf he hk hra hw hwu hh hth hna hci
   have hc _ _ _ _ := hcf
   let S := union2(w, h)
   let LOW := c_src_malloc_free.free_fun(mp.FLF(nf))
@@ -635,8 +668,8 @@ proof
         obtain V rr, hV hres eo1 from e
         obtain y0 y1, hy0 hy1 er from apply(cart_elim, mp(all_elim(hv, {fn_update(w, "vm", V)}, {rr}), eo1))
         have lp: mp.lf_post(c, A, h.blocks, regs[0], w, V) by taut(hres, hp0)
-        obtain h2, hh2 r from apply(mp.tf_blk[c := c, eo := eo, b := b, cd := cd, st := st, regs := regs, s := w, h := h, A := A, V := V, y0 := y0, y1 := y1],
-          hc, he, hra, o1l, hw, hwu, hh, hp0, hpre, hbl, ha, hrep, apply(mp.arg0_bits, hra, o1l), hV, hy0, hy1, lp)
+        obtain h2, hh2 r from apply(mp.tf_blk[c := c, eo := eo, b := b, cd := cd, st := st, regs := regs, s := w, h := h, A := A, V := V, y0 := y0, y1 := y1, k := k],
+          hc, he, hra, o1l, hw, hwu, hh, hp0, hpre, hbl, ha, hrep, apply(mp.arg0_bits, hra, o1l), hV, hy0, hy1, lp, hci)
         show by disj({1}, ex_intro({h2}, taut(hh2, rewrite(sym(rewrite(er, eo1)), r))))
       qed
       show by taut(post, ovf, k2)
@@ -711,11 +744,11 @@ qed
 // code unrolls free_group <-> nontrivial_free as deep as the groups in use
 // there (of an A the state represents).
 theorem mp.top_free: all c statics eo b cd st. mp.fr_cfg(c) -> app(eo, empty) = 52 ->
-  app(b, empty) = 4198400 -> app(cd, empty) = text.code -> app(st, empty) = statics ->
+  app(b, empty) = 4198400 -> app(cd, empty) = text.code -> app(st, empty) = statics -> mp.code_img(c, app(b, empty), app(cd, empty), 1) ->
   abi.implements(malloc.Heap.ghost, 4201081, malloc.free_fun(mallocng.inv(c), mallocng.owned(c), eo, b, cd, st))
 proof
   fix c statics eo b cd st
-  assume hcf he hb hcd hst
+  assume hcf he hb hcd hst hci
   let W := abi.wide(malloc.Heap.ghost, mp.UFF(c, eo, b, cd, st))
   have fam: all args w h. args in abi.ARGS -> w in abi.World -> w in univ(1) -> h in malloc.Heap.ghost -> abi.thread_ok(w.vm, w.fs_base) ->
       ex low. tr.implements_at(4201081, low, 4198400, text.code, statics) && abi.refines_ovf_at(low[args], W[args], malloc.Heap.ghost, w, h) &&
@@ -755,8 +788,8 @@ proof
     let NF := mp.FNF(nf)
     have hnk: mp.nf_known(c, statics, n, NF) by taut(hk2)
     have im _ := mp(all_elim(mp.fl_free, {c}, {statics}, {n}, {NF}), hcf, hnk)
-    have rf dv := apply(mp.tf_low[c := c, statics := statics, eo := eo, b := b, cd := cd, st := st, regs := args, w := w, h := h, n := n, nf := NF],
-      hcf, he, hnk, hA, hw, hwu, hh, hth, hna)
+    have rf dv := apply(mp.tf_low[c := c, statics := statics, eo := eo, b := b, cd := cd, st := st, regs := args, w := w, h := h, n := n, nf := NF, k := 1],
+      hcf, he, hnk, hA, hw, hwu, hh, hth, hna, hci)
     show by ex_intro({c_src_malloc_free.free_fun(mp.FLF(NF))}, taut(im, rf, dv))
   qed
   // the program not loaded (or the stack protector's word not writable):
