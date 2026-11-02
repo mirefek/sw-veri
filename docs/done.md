@@ -1503,3 +1503,10 @@ item is a short summary of finished work; details are in the files named.
   bytes the static ones or libc's stack data (`ui.owned_main`, by
   `abs_unique` on the empty heap typed, `ui.heap_typed`);
   `ui.init_main`, the claim's `init_at_main`.
+- **The program's claim, stated** (layers/claim_program.sl): the claim's
+  binary a client of malloc and free only (tests/test_malloc.c), the
+  chain moved to it (local functions pinned by source file, code
+  addresses by function and offset, the image's layout in init.core and
+  the startup C2s); `program_ok` -- the process's every ending run an
+  allowed exit or a stack overflow -- stated as `musl_program` by `slc
+  claim --program-exits`.

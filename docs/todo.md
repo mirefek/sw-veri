@@ -5,20 +5,14 @@ summarized in docs/done.md.
 
 ## 1. Next: the program's claim (tests/test_malloc.c)
 
-The claim's binary is now a client of malloc and free only
+The claim's binary is a client of malloc and free only
 (tests/test_malloc.c: blocks filled with patterns, half freed and
 allocated again, all checked; exit 1 when malloc returns NULL, 42 when a
-pattern changed, else 0). The claim about it, beside `musl_malloc`:
-every run of the process from an unprivileged exec state that ends exits
-with 0 or 1, or dies of a stack overflow (a segv as abi.sl's
-`overflow_at` has it, below the initial rsp); no other crash, never
-exit 42. Runs that never end are allowed (§2).
-- (a) The chain on the new binary: the pinned local functions' addresses
-  in scripts/check.sh remapped (by source file), the generated files
-  remade; the proofs' hard-coded layout (init.core: main's address, the
-  segments, the tables' file offsets, .bss) updated.
-- (b) The statement: layers/claim_program.sl (the process run until it
-  exits or faults; its outcomes), `slc claim` stating it for the binary.
+pattern changed, else 0). The claim `musl_program` (stated, open:
+layers/claim_program.sl, `slc claim --program-exits 0,1`): every run of
+the process from an unprivileged exec state that ends exits with 0 or 1,
+or dies of a stack overflow as abi.sl's `abi_function` raises it; no
+other crash, never exit 42. Runs that never end are allowed (§2).
 - (c) `main`: its readable GIMPLE, C1, a spec (returns 0 or 1) and C2
   against malloc.sl's malloc and free -- the client's reasoning: a block
   fresh and its own, its bytes kept by the other calls, at most NULL.
