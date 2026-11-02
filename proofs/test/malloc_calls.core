@@ -292,3 +292,180 @@ proof
   qed
   show by taut(d, c2)
 qed
+
+// ----------------------------------------------------------------------
+//  free at main's call
+
+// free(p) of a live block, where defined: its block dropped, an allocator
+// step taking the block's memory back (the world as any call needs it);
+// free(0): nothing. Where defined it only returns (a step there is: law
+// free_step).
+theorem malloc.free_out(i, o, e, b, c, st, p, s, x): malloc.free_step(i, o, b, c, st) ->
+  runs(malloc.free(i, o, e, b, c, st, p), s, x) -> s in rec_and(abi.World, malloc.Heap.ghost) -> p in bits(64) -> malloc.world_ok(b, c, st, s) ->
+  (!(p = 0) -> s in i && malloc.errno_ok(e, s) && !(s.blocks[p] = none)) ->
+  (p = 0 && x = ok(s, empty)) ||
+  (!(p = 0) && (ex V. V in x86_64_linux.Vm && x = ok(fn_update(fn_update(s, "blocks", malloc.set_block(s.blocks, p, none)), "vm", V), empty) &&
+     malloc.step_ok(i, o, s, fn_update(fn_update(s, "blocks", malloc.set_block(s.blocks, p, none)), "vm", V), malloc.range(p, snd(s.blocks[p]))) &&
+     malloc.world_ok(b, c, st, fn_update(fn_update(s, "blocks", malloc.set_block(s.blocks, p, none)), "vm", V))))
+proof
+  assume hfs h ht hp hwo hpre
+  have c0: p = 0 -> x = ok(s, empty) proof
+    assume e0
+    show by simp(h, hwo, e0)
+  qed
+  have c1: !(p = 0) -> (ex V. V in x86_64_linux.Vm && x = ok(fn_update(fn_update(s, "blocks", malloc.set_block(s.blocks, p, none)), "vm", V), empty) &&
+     malloc.step_ok(i, o, s, fn_update(fn_update(s, "blocks", malloc.set_block(s.blocks, p, none)), "vm", V), malloc.range(p, snd(s.blocks[p]))) &&
+     malloc.world_ok(b, c, st, fn_update(fn_update(s, "blocks", malloc.set_block(s.blocks, p, none)), "vm", V))) proof
+    assume nz
+    have hi he hb := mp(hpre, nz)
+    have fs := mp(all_elim(expand(hfs, malloc.free_step), {s}, {p}), conj(ht, hp), conj(conj(hi, hwo), hb))
+    show by simp(h, hwo, nz, hi, he, hb, fs)
+  qed
+  show by taut(c0, c1)
+qed
+
+// the ABI's free where defined: free's return at its argument
+theorem tm.wf_ret(I, O, eo, b, cd, st, regs, S, X): malloc.free_step(I, O, b, cd, st) -> regs in abi.ARGS -> ord_le(1, seq_len(regs)) ->
+  runs(abi.wide(malloc.Heap.ghost, malloc.free_fun(I, O, eo, b, cd, st))[regs], S, X) ->
+  S in rec_and(abi.World, malloc.Heap.ghost) -> regs[0] in bits(64) -> malloc.world_ok(b, cd, st, S) ->
+  (!(regs[0] = 0) -> S in I && malloc.errno_ok(eo, S) && !(S.blocks[regs[0]] = none)) ->
+  ex T y z. runs(malloc.free(I, O, eo, b, cd, st, regs[0]), S, ok(T, empty)) && X = ok(T, pair(y, z))
+proof
+  assume hfs hra h1 h ht hp hwo hpre
+  rsimp only, abi.wide, app_fn_build, hra in h
+  have b1 := apply(g.runs_elim, h)
+  obtain y, hy ky from expand(b1, bind_rel)
+  rsimp only, malloc.free_fun, app_fn_build, hra in hy
+  have b2 := apply(g.runs_elim, hy)
+  have b3: bind_rel(malloc.free(I, O, eo, b, cd, st, regs[0]), S, x3 x4. any_rel(x5. x5 in bits(64), x5. y = ok(x3, x5)), x3 x4. y = exc(x3, x4), x3. y = diverge(x3)) by taut(b2, h1)
+  obtain Y, hY kY from expand(b3, bind_rel)
+  have fo := apply(malloc.free_out[i := I, o := O, e := eo, b := b, c := cd, st := st, p := regs[0], s := S, x := Y], hfs, hY, ht, hp, hwo, hpre)
+  have yk: ex T. Y = ok(T, empty) proof
+    have k0: regs[0] = 0 && Y = ok(S, empty) -> ex T. Y = ok(T, empty) proof
+      assume q
+      have _ e := q
+      show by ex_intro({S}, e)
+    qed
+    have k1: (!(regs[0] = 0) && (ex V. V in x86_64_linux.Vm && Y = ok(fn_update(fn_update(S, "blocks", malloc.set_block(S.blocks, regs[0], none)), "vm", V), empty) &&
+        malloc.step_ok(I, O, S, fn_update(fn_update(S, "blocks", malloc.set_block(S.blocks, regs[0], none)), "vm", V), malloc.range(regs[0], snd(S.blocks[regs[0]]))) &&
+        malloc.world_ok(b, cd, st, fn_update(fn_update(S, "blocks", malloc.set_block(S.blocks, regs[0], none)), "vm", V)))) -> ex T. Y = ok(T, empty) proof
+      assume q
+      have _ e := q
+      obtain V, _ e2 _ _ from e
+      show by ex_intro({fn_update(fn_update(S, "blocks", malloc.set_block(S.blocks, regs[0], none)), "vm", V)}, e2)
+    qed
+    show by taut(fo, k0, k1)
+  qed
+  obtain T, eY from yk
+  have ky2: any_rel(x5. x5 in bits(64), x5. y = ok(T, x5)) by simp(rewrite(eY, kY), keep(any_rel))
+  have ne: ex z. z in bits(64) by ex_intro({0}, simp())
+  obtain y0, _ hy0 from apply(g.any_e, ne, ky2)
+  have kz: any_rel(x5. x5 in bits(64), x5. X = ok(T, pair(y0, x5))) by simp(rewrite(hy0, ky), keep(any_rel))
+  obtain z, _ hz from apply(g.any_e, ne, kz)
+  show by ex_intro({T}, {y0}, {z}, taut(rewrite(eY, hY), hz))
+qed
+
+// a callee gf the code of free: refining the ABI's free strictly from a
+// world with its thread sound (mp.free_low_all)
+abbrev tm.fcallee(I, O, eo, b, cd, st, gf) := all args s h. args in abi.ARGS -> s in abi.World -> s in univ(1) -> h in malloc.Heap.ghost ->
+  abi.thread_ok(s.vm, s.fs_base) -> mp.ref_s(gf[args], abi.wide(malloc.Heap.ghost, malloc.free_fun(I, O, eo, b, cd, st))[args], malloc.Heap.ghost, s, h)
+
+// free(p) at a call from the world t, the ghost part h: an overflow, or a
+// return -- the memory V, the layer's free from t joined with h to V's
+// world joined with some ghost part
+theorem tm.free_q: all I O eo b cd st gf h t p regs o2. malloc.free_step(I, O, b, cd, st) -> tm.fcallee(I, O, eo, b, cd, st, gf) -> tm.otyped(gf) ->
+  t in abi.World -> t in univ(1) -> h in malloc.Heap.ghost -> malloc.world_ok(b, cd, st, union2(t, h)) ->
+  (!(p = 0) -> union2(t, h) in I && malloc.errno_ok(eo, union2(t, h)) && !(union2(t, h).blocks[p] = none)) -> p in bits(64) ->
+  gc.regs_ok(regs, seq_one(gimple.arg(64, p))) -> runs(gf[regs], t, o2) ->
+  abi.ovf_out(t, o2) ||
+  (ex V r. (V in x86_64_linux.Vm && (ex h2. h2 in malloc.Heap.ghost &&
+     runs(malloc.free(I, O, eo, b, cd, st, p), union2(t, h), ok(union2(fn_update(t, "vm", V), h2), empty)))) && o2 = ok(fn_update(t, "vm", V), r))
+proof
+  fix I O eo b cd st gf h t p regs o2
+  assume hfs hf hot hw hu hh hwo hpre hp hro hr
+  let S := union2(t, h)
+  have rl rn r0 := apply(gc.regs1, hp, hro)
+  have lo: seq_len(regs) in omega by simp(rl)
+  have ra: regs in abi.ARGS by simp(rl, (ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)), keep(ord_le))
+  have o1l: ord_le(1, seq_len(regs)) by defs(simp(rn), ord_le)
+  have st0 := apply(rec_and_intro, hw, hh)
+  have dt: dom(t) = abi.WKEYS by simp(expand(hw, abi.World))
+  have dh: dom(h) = insert("blocks", empty) by simp(expand(hh, malloc.Heap.ghost))
+  have sv: S.vm = t.vm by simp(dt, dh)
+  have sfs: S.fs_base = t.fs_base by simp(dt, dh)
+  have _ _ th _ _ _ _ _ := expand(hwo, malloc.world_ok)
+  have tht: abi.thread_ok(t.vm, t.fs_base) := rewrite(sfs, rewrite(sv, th))
+  have rs := mp(all_elim(hf, {regs}, {t}, {h}), ra, hw, hu, hh, tht)
+  have ty1 ty2 ty3 := mp(all_elim(hot, {regs}, {t}, {o2}), hr)
+  have d := mp(all_elim(rs, {o2}), hr, ty1, ty2)
+  have hpre0: !(regs[0] = 0) -> S in I && malloc.errno_ok(eo, S) && !(S.blocks[regs[0]] = none) := rewrite(sym(r0), hpre)
+  have c2: (ex h2. h2 in malloc.Heap.ghost && runs(abi.wide(malloc.Heap.ghost, malloc.free_fun(I, O, eo, b, cd, st))[regs], S, with_ghost(o2, h2))) ->
+      (ex V r. (V in x86_64_linux.Vm && (ex h2. h2 in malloc.Heap.ghost &&
+        runs(malloc.free(I, O, eo, b, cd, st, p), S, ok(union2(fn_update(t, "vm", V), h2), empty)))) && o2 = ok(fn_update(t, "vm", V), r)) proof
+    assume w
+    obtain h2, hh2 hw2 from w
+    obtain T y z, hT eT from apply(tm.wf_ret[I := I, O := O, eo := eo, b := b, cd := cd, st := st, regs := regs, S := S, X := with_ghost(o2, h2)], hfs, ra, o1l, hw2, st0,
+      rewrite(sym(r0), hp), hwo, hpre0)
+    have hTn := rewrite(r0, hT)
+    have nx: !(ex m1 e1. o2 = exc(m1, e1)) proof
+      assume q
+      obtain m1 e1, eq from q
+      show by simp(rewrite(eq, eT), abi.wg_exc)
+    qed
+    have nd: !(ex t1. o2 = diverge(t1)) proof
+      assume q
+      obtain t1, eq from q
+      show by simp(rewrite(eq, eT), abi.wg_div)
+    qed
+    obtain t2 rr, eo2 from (ex m1 e1. o2 = ok(m1, e1) by taut(ty1, nx, nd))
+    have wg: ok(union2(t2, h2), rr) = ok(T, pair(y, z)) := trans(sym(all_elim(abi.wg_ok, {t2}, {rr}, {h2})), rewrite(eo2, eT))
+    have eT2: T = union2(t2, h2) by simp(wg)
+    have t2w := mp(all_elim(ty3, {t2}, {rr}), eo2)
+    have dt2: dom(t2) = abi.WKEYS by simp(expand(t2w, abi.World))
+    have dh2: dom(h2) = insert("blocks", empty) by simp(expand(hh2, malloc.Heap.ghost))
+    have v2: t2.vm in x86_64_linux.Vm by simp(expand(t2w, abi.World))
+    have fo := apply(malloc.free_out[i := I, o := O, e := eo, b := b, c := cd, st := st, p := p, s := S, x := ok(T, empty)], hfs, hTn, st0, hp, hwo, hpre)
+    // free(0): nothing
+    have k0: p = 0 && ok(T, empty) = ok(S, empty) -> (ex V r. (V in x86_64_linux.Vm && (ex h3. h3 in malloc.Heap.ghost &&
+        runs(malloc.free(I, O, eo, b, cd, st, p), S, ok(union2(fn_update(t, "vm", V), h3), empty)))) && o2 = ok(fn_update(t, "vm", V), r)) proof
+      assume q
+      have _ eq := q
+      have ts: T = S by simp(eq)
+      have it ih := apply(tm.union_inj, t2w, hw, hh2, hh, trans(sym(eT2), ts))
+      have _ pf pd _ := apply(ms.world_parts, hw)
+      have ss: fn_update(t, "vm", t.vm) = t := mp(fn_update_same[f := t, k := "vm"], pf, pd)
+      have mr: runs(malloc.free(I, O, eo, b, cd, st, p), S, ok(union2(fn_update(t, "vm", t.vm), h2), empty)) := rewrite(sym(ss), rewrite(it, rewrite(eT2, hTn)))
+      have vt: t.vm in x86_64_linux.Vm by simp(expand(hw, abi.World))
+      show by ex_intro({t.vm}, {rr}, taut(vt, (ex h3. h3 in malloc.Heap.ghost && runs(malloc.free(I, O, eo, b, cd, st, p), S, ok(union2(fn_update(t, "vm", t.vm), h3), empty)) by ex_intro({h2}, taut(hh2, mr))),
+        rewrite(sym(ss), rewrite(it, eo2))))
+    qed
+    // free of a block: its blocks and memory changed
+    have k1: (!(p = 0) && (ex V. V in x86_64_linux.Vm && ok(T, empty) = ok(fn_update(fn_update(S, "blocks", malloc.set_block(S.blocks, p, none)), "vm", V), empty) &&
+        malloc.step_ok(I, O, S, fn_update(fn_update(S, "blocks", malloc.set_block(S.blocks, p, none)), "vm", V), malloc.range(p, snd(S.blocks[p]))) &&
+        malloc.world_ok(b, cd, st, fn_update(fn_update(S, "blocks", malloc.set_block(S.blocks, p, none)), "vm", V)))) ->
+        (ex V r. (V in x86_64_linux.Vm && (ex h3. h3 in malloc.Heap.ghost &&
+        runs(malloc.free(I, O, eo, b, cd, st, p), S, ok(union2(fn_update(t, "vm", V), h3), empty)))) && o2 = ok(fn_update(t, "vm", V), r)) proof
+      assume q
+      have _ e := q
+      obtain V2, _ eq _ _ from e
+      have et: T = fn_update(fn_update(S, "blocks", malloc.set_block(S.blocks, p, none)), "vm", V2) by simp(eq)
+      have tb: T.blocks = h2.blocks := rewrite(sym(eT2), (union2(t2, h2).blocks = h2.blocks by simp(dt2, dh2)))
+      have tv: T.vm = t2.vm := rewrite(sym(eT2), (union2(t2, h2).vm = t2.vm by simp(dt2, dh2)))
+      have ebl: T.blocks = malloc.set_block(S.blocks, p, none) by simp(et)
+      have evm: T.vm = V2 by simp(et)
+      have shp := rewrite(sym(evm), rewrite(sym(ebl), et))
+      have hb2: h2.blocks in fn_space(bits(64), option(omega)) by simp(expand(hh2, malloc.Heap.ghost))
+      have h2u _ _ := mp(all_elim(mp.hg_ok, {h2}), hh2)
+      have hbu := mp(app_univ[u := 1, f := h2, k := "blocks"], h2u)
+      have hgs eqs := apply(tm.split[t := t, h := h, B := h2.blocks, V := t2.vm], hw, hu, hh, v2, hb2, hbu)
+      have e3: union2(t2, h2) = union2(fn_update(t, "vm", t2.vm), fn_update(h, "blocks", h2.blocks)) := trans(sym(eT2), trans(rewrite(tv, rewrite(tb, shp)), eqs))
+      have w2W _ := apply(mp.am_world, hw, hu, v2)
+      have it ih := apply(tm.union_inj, t2w, w2W, hh2, hgs, e3)
+      have mr: runs(malloc.free(I, O, eo, b, cd, st, p), S, ok(union2(fn_update(t, "vm", t2.vm), h2), empty)) := rewrite(it, rewrite(eT2, hTn))
+      show by ex_intro({t2.vm}, {rr}, taut(v2, (ex h3. h3 in malloc.Heap.ghost && runs(malloc.free(I, O, eo, b, cd, st, p), S, ok(union2(fn_update(t, "vm", t2.vm), h3), empty)) by ex_intro({h2}, taut(hh2, mr))),
+        rewrite(it, eo2)))
+    qed
+    show by taut(fo, k0, k1)
+  qed
+  show by taut(d, c2)
+qed
