@@ -19,15 +19,13 @@ other crash, never exit 42. Runs that never end are allowed (§2).
 - (c) `main` (its spec: layers/test_malloc.sl's `main_spec`, 0 or 1, the
   memory outside the allocator's and errno kept; the helpers done:
   proofs/test/helpers.core). Left:
-  - client lemmas (proofs/malloc_client.core): malloc's outcomes inverted
-    (0 with the world's errno written, or a fresh block of at least n
-    bytes, the step's frame), free's; what a block's bytes keep across
-    the other calls (alloc_frame, live_apart, owned_private); a world
-    written in a block still world_ok (live_apart, code_at unwritable);
-  - call rules for main's callees: musl's GIMPLE malloc
-    (`default_malloc_fun(G)`, `mp.top_ref_s`) and free
-    (`mp.free_low_all`) as `mp.ref_s` at the caller's ghost, in step's
-    `overflow || return` form; fill's and intact's by their contracts;
+  - free's outcomes for a client and its call rule (as malloc's in
+    proofs/test/malloc_calls.core: `malloc.malloc_blk` / `_zero` /
+    `_ret`, `tm.wm_ret`, `tm.malloc_q`); `tm.otyped` (outcome shapes,
+    worlds) for musl's malloc and free values; what a block's bytes keep
+    across the other calls (alloc_frame, live_apart, owned_private); a
+    world written in a block still world_ok (live_apart, code_at
+    unwritable);
   - main's C2: four loops, the invariant over the ghost blocks -- p[k]
     live, its size, its pattern; the memory outside the allocator's at
     main's start kept (main_frame); the array object none of the
