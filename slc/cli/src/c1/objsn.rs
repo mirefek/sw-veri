@@ -88,7 +88,10 @@ impl<'e> Gen<'e> {
     /// kind (tr.astore_r's).
     #[allow(clippy::too_many_arguments)]
     pub(super) fn allocn_at(&mut self, st: &St, qi: usize, op: &Term, al: &Term, xl: &Term, dl: &Term, kl: &Term) -> Result<Option<Seq>, String> {
-        if self.objk.len() < 2 || self.objs_n.is_some() || self.hvo.is_some() {
+        // (one object too: allocated where the machine makes no step, before
+        // a loop or call reaches it -- the old kind, at its first store, a
+        // fallback: alloc_at)
+        if self.objk.is_empty() || self.objs_n.is_some() || self.hvo.is_some() {
             return Ok(None);
         }
         let sizes = self.app(op, "gimple.alloc_objs", 1).ok_or("not alloc_objs")?[0].clone();

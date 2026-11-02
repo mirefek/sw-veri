@@ -21,10 +21,22 @@ log=$root/build/musl$b-make.log
 out=$root/build/gimple$b
 mkdir -p "$out"
 for f in "$@"; do
-    cmd=$(grep -- " $musl/$f\$" "$log" | head -1)
-    [ -n "$cmd" ] || { echo "no compile command for $f in $log" >&2; exit 1; }
     base=$(echo "$f" | tr / _)
     tmp=$(mktemp -d)
+    case "$f" in
+      tests/*)
+        # (the test program: compiled as scripts/build-musl.sh links it)
+        cc="$root/build/musl$b/bin/musl-gcc -static ${BUILD:--O2} -fomit-frame-pointer -c $root/$f"
+        eval "$cc -o $tmp/$base.o -fdump-tree-gimple -fdump-tree-optimized -dumpdir $tmp/"
+        cp "$tmp"/*.gimple "$out/$base.gimple"
+        cp "$tmp"/*.optimized "$out/$base.optimized"
+        eval "$cc -o $out/$base.o -g"
+        rm -rf "$tmp"
+        echo "$out/$base.{gimple,optimized}"
+        continue ;;
+    esac
+    cmd=$(grep -- " $musl/$f\$" "$log" | head -1)
+    [ -n "$cmd" ] || { echo "no compile command for $f in $log" >&2; exit 1; }
     # same command; object and dumps into a temporary directory
     cmd=$(echo "$cmd" | sed "s| -o [^ ]*| -o $tmp/$base.o|")
     (cd "$root/build/musl$b-obj" && eval "$cmd -fdump-tree-gimple -fdump-tree-optimized -dumpdir $tmp/")

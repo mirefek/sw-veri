@@ -352,6 +352,30 @@ impl<'e> Gen<'e> {
                     let st2 = self.set_reg(st, a2, g, 8, v);
                     return self.then(tr, st2);
                 }
+                // mov r64, qword [rsp + i*k + d]: the spec's 8-byte load at an
+                // element of a frame's stack object (as movzx16_rsib's)
+                if let Some(m) = self.memop(&x[2]).filter(|m| {
+                    self.objs_n.is_some() && nat(&x[0]) == Some(8) && x[3] == x[2] && nat(&m["seg"]) == Some(0)
+                        && self.tag(&m["base"]).is_some_and(|b| b.0 == 2 && nat(&b.1) == Some(4)) && self.app(&m["index"], "some", 1).is_some()
+                }) {
+                    let (Some(ix), Some(k), Some(dn)) = (self.app(&m["index"], "some", 1).map(|y| y[0].clone()), nat(&m["scale"]), nat(&m["disp"])) else {
+                        return Err(bad("mov r64, [rsp + i*k + d] with a scale or displacement not a literal"));
+                    };
+                    if let Some(pf) = self.widen(st, reg(&ix)?, 8)? {
+                        return Ok(pf);
+                    }
+                    let iv = self.need_reg(st, reg(&ix)?, 8)?;
+                    let c = self.hkey(dn);
+                    let ha = self.mk("tr.ha", vec![self.s.clone(), lit(c)]);
+                    let ea = self.mk("bits_add", vec![lit(64), ha, self.mk("bits_mul", vec![lit(64), iv.clone(), lit(k)])]);
+                    let (pp, off, hc, heq) = self.mem_hyp_eq(st, &ea, 8)?;
+                    let v = self.parse(&format!("bits_of_int(64, gimple.bytes_at(app({wn}, \"vm\"), bits_add(64, {}, {}), 8))", self.print(&pp), self.print(&off)))?;
+                    let (v, hr) = self.result(&v)?;
+                    let tr = self.step("load64_rsib", a, insn, &[&x[1], &ix, &lit(k), &lit(dn), &lit(c), &x[4], &iv, &pp, &off, &v], self.tail(st, insn, 10, vec![s(&heq), s(&hc), hr]));
+                    self.scratch.insert(g);
+                    let st2 = self.set_reg(st, a2, g, 8, v);
+                    return self.then(tr, st2);
+                }
                 // mov r64, [b + i]: the spec's load at the address computed
                 // otherwise
                 if let Some(m) = self.memop(&x[2]).filter(|m| matches!(self.app(&m["index"], "some", 1), Some(_)) && nat(&m["scale"]) == Some(1) && nat(&m["disp"]) == Some(0)) {
@@ -1372,6 +1396,14 @@ impl<'e> Gen<'e> {
                     if x[3] != x[2] || self.tag(&x[4]) != Some((0, x[1].clone())) {
                         return Err(bad("not cmp r32, r32"));
                     }
+                    // (a register wider: its low 32 bits, tr.fs32_rrl -- a
+                    // call's result compared at once)
+                    let wide = |r: u128| self.reg(st, r).is_some_and(|(n, _)| n != 4);
+                    if wide(reg(&g)?) || wide(reg(&x[1])?) {
+                        let (n1, u0, u) = self.low(st, reg(&g)?, 32)?;
+                        let (n2, x0, xh) = self.low(st, reg(&x[1])?, 32)?;
+                        return self.compare(st, a, a2, insn, "fs32_rrl", &[&g, &x[1], &lit(n1), &u0, &u, &lit(n2), &x0, &xh], 9, Flags::Sub(32, u.clone(), xh.clone()));
+                    }
                     let u = self.need_reg(st, reg(&g)?, 4)?;
                     let xh = self.need_reg(st, reg(&x[1])?, 4)?;
                     return self.compare(st, a, a2, insn, "fs32_rr", &[&g, &x[1], &u, &xh], 7, Flags::Sub(32, u.clone(), xh.clone()));
@@ -1970,6 +2002,16 @@ impl<'e> Gen<'e> {
                 if nat(&f) != Some(8) {
                     return Err(bad("cbw (not cwde, cdqe)"));
                 }
+                // (rax wider: its low 32 bits, tr.cdqe_l -- a call's result
+                // sign-extended at once)
+                if self.reg(st, 0).is_some_and(|(n, _)| n != 4) {
+                    let (n, u0, u) = self.low(st, 0, 32)?;
+                    let (r, hr) = self.result(&self.mk("bits_sext", vec![lit(32), lit(64), u.clone()]))?;
+                    let tr = self.step("cdqe_l", a, insn, &[&lit(n), &u0, &u, &r], self.tail(st, insn, 4, vec![hr]));
+                    self.scratch.insert(0);
+                    let st2 = self.set_reg(st, a2, 0, 8, r);
+                    return self.then(tr, st2);
+                }
                 let u = self.need_reg(st, 0, 4)?;
                 let (r, hr) = self.result(&self.mk("bits_sext", vec![lit(32), lit(64), u.clone()]))?;
                 let tr = self.step("cdqe", a, insn, &[&u, &r], self.tail(st, insn, 3, vec![hr]));
@@ -2538,15 +2580,15 @@ impl<'e> Gen<'e> {
                 // (the objects released, `objs := objs with { live: live0 }`:
                 // the result's world w with the callers' objects L -- the
                 // entry's --, its own bytes kept, tr.ret_insn_w)
-                if let (Some(l), 8, None) = (self.live_back(pr), n, &eqf) {
+                if let (Some(l), 4 | 8, None) = (self.live_back(pr), n, &eqf) {
                     let ol = self.mk("fn_update", vec![self.mk("app", vec![st.w.clone(), Term::bytes(b"objs")]), Term::bytes(b"live"), l.clone()]);
                     let w2 = self.mk("fn_update", vec![st.w.clone(), Term::bytes(b"objs"), ol]);
                     let hw0 = self.hw0.clone().ok_or("the entry's world")?;
                     let wo = self.run(&mpf("tr.world_live", vec![t(&st.w), t(&self.vw), taut(vec![R::S(st.hw.clone())]), taut(vec![R::S(st.hw.clone())]),
                         taut(vec![R::S(hw0.clone())]), taut(vec![R::S(hw0)])]), &[])?;
-                    let res = mpf("tr.result64_live", vec![t(&st.w), t(val), t(&l), taut(vec![R::S(wo.clone())])]);
+                    let res = mpf(&format!("tr.result{}_live", 8 * n), vec![t(&st.w), t(val), t(&l), taut(vec![R::S(wo.clone())])]);
                     let mut v = vec![t(&self.s), t(&self.v), t(&self.base), t(&self.code), t(&lit(a)), t(&lit(insn.len)), t(&st.hst), t(&st.ds), t(&st.rs), t(pr), t(&st.w)];
-                    v.extend([t(&lit(8)), t(val), t(&w2), p(R::F(insn.name.clone())), simp_l(), simp_l(), p(self.cs_rs_pf(&st.rs))]);
+                    v.extend([t(&lit(n)), t(val), t(&w2), p(R::F(insn.name.clone())), simp_l(), simp_l(), p(self.cs_rs_pf(&st.rs))]);
                     v.extend((0..6).map(|_| taut(vec![R::S(wo.clone())])));
                     v.push(p(res));
                     return self.run(&mpf("tr.ret_insn_w", v), &[]);

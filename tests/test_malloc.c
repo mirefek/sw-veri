@@ -8,7 +8,8 @@
 
 #define N 8
 
-static unsigned char pat(int i, int j) { return (unsigned char)(31 * i + j); }
+/* (an int: C1 has no narrow return values yet) */
+static int pat(int i, int j) { return (31 * i + j) & 255; }
 
 static int size(int i) { return 16 + 40 * i; }
 

@@ -13,6 +13,21 @@ layers/claim_program.sl, `slc claim --program-exits 0,1`): every run of
 the process from an unprivileged exec state that ends exits with 0 or 1,
 or dies of a stack overflow as abi.sl's `abi_function` raises it; no
 other crash, never exit 42. Runs that never end are allowed (§2).
+- (c0) malloc.sl too weak for a client (found by (c)): across a call a
+  client needs (1) its live stack objects' bytes kept -- `alloc_frame`
+  keeps mapped bytes only, the C view hides the stack's pages; (2) a new
+  block apart from its stack objects -- `fresh_block` allows any unmapped
+  place; (3) errno in no live block -- `step_ok` lets the allocator own
+  errno's bytes (malloc's `extra`), a later block on them, a successful
+  malloc rewriting errno; (4) the program still loaded after the call --
+  the allocator may own (and so write) the image's read-only bytes.
+  Fix: alloc_frame keeps the unowned live objects' bytes and the program
+  loaded; pages newly mapped lie off the stack's space; errno never
+  owned; gimple.sl's `objs_fit` places objects in the stack's space (the
+  bridge's alloc_lv: below rsp) and world_ok has the live objects there.
+  Then musl_malloc again: top.core / top_free.core / free_step.core, and
+  the internal specs' `untouched` over the live objects (and mmap / brk's
+  pages off the stack's space).
 - (c) `main`: its readable GIMPLE, C1, a spec (returns 0 or 1) and C2
   against malloc.sl's malloc and free -- the client's reasoning: a block
   fresh and its own, its bytes kept by the other calls, at most NULL.
@@ -63,6 +78,13 @@ its dynamic linker, /lib/ld-musl-x86_64.so.1) loaded at a random base.
   from the library's claim and the program's own proofs.
 
 ## 4. The engine, when a function needs it
+
+- Frames with a frame pointer (`push rbp; mov rbp, rsp`, rbp-based
+  slots): C1 knows rsp-based frames only (musl's -fomit-frame-pointer);
+  the test program is compiled so too (scripts/build-musl.sh).
+- Narrow return values (a char returned in al, the rest of eax any):
+  C1 wants the register to hold the value's width; the test's helper
+  returns an int.
 
 - The entry variants entry_np, entry0p generic like tr.entry_n,
   tr.entry0 (optional).

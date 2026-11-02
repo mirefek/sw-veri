@@ -384,6 +384,14 @@ impl<'a> Lower<'a> {
             dims.push(if d.ends_with(':') { 0 } else { d.parse::<u64>().map_err(|_| format!("array size in `{}`", text))? });
             t = t[..i].to_string();
         }
+        // `T *[8]`: an array of pointers -- the element's stars
+        let mut inner = 0;
+        if !dims.is_empty() {
+            while let Some(v) = t.trim_end().strip_suffix('*') {
+                inner += 1;
+                t = v.to_string();
+            }
+        }
         let words: Vec<&str> = t
             .split_whitespace()
             .filter(|w| !matches!(*w, "const" | "volatile" | "restrict" | "__restrict" | "register" | "static"))
@@ -412,6 +420,9 @@ impl<'a> Lower<'a> {
         } else {
             return Err(format!("unknown type `{}`", text));
         };
+        for _ in 0..inner {
+            r = RT::Ptr(Box::new(r));
+        }
         // T[4][3]: dims were collected as [3, 4], the innermost first
         for d in dims.into_iter() {
             r = RT::Array(Box::new(r), d);

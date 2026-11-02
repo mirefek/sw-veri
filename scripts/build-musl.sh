@@ -26,6 +26,8 @@ cd "$obj"
 "$src/configure" --prefix="$prefix" --disable-shared CFLAGS="$opt" > "$root/build/musl$dsfx-configure.log" 2>&1
 make -j8 > "$root/build/musl$dsfx-make.log" 2>&1
 make install > "$root/build/musl$dsfx-install.log" 2>&1
-"$prefix/bin/musl-gcc" -static "$opt" "$root/tests/test_malloc.c" -o "$root/build/test_malloc$sfx"
+# (the test's frames as musl's own: no frame pointer -- the C1 engine's
+# frames are rsp-based)
+"$prefix/bin/musl-gcc" -static "$opt" -fomit-frame-pointer "$root/tests/test_malloc.c" -o "$root/build/test_malloc$sfx"
 "$root/slc/target/release/slc" claim malloc --elf "$root/build/test_malloc$sfx" --program-exits 0,1 -o "$root/build/musl_malloc$sfx.core"
 echo "built build/test_malloc$sfx, claim build/musl_malloc$sfx.core"
