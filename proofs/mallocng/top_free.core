@@ -818,3 +818,96 @@ proof
   qed
   show by defs(apply(abi.bridge_implements_lf, mp.hg_ok, fam, nl), abi.implements)
 qed
+
+// ----------------------------------------------------------------------
+//  One GIMPLE value of free for every state (a client's callee)
+
+// (the groups in use: at most 2^64 -- their metas sorted, each below 2^64)
+theorem mp.used_bound(c, A, vm, b): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> mallocng.holds_m(c, A, vm, b) ->
+  int_le(seq_len(A.used), 18446744073709551616)
+proof
+  assume hc hu ha hh
+  have {H = inv} := expand(hh, mallocng.holds_m)
+  have {pt = part} := expand(H, mallocng.holds)
+  have {so = sorted, us = used_slots, tk = taken} := expand(pt, mallocng.metas_partition)
+  have ul: A.used in list_type(omega) by simp(ha)
+  have lo: seq_len(A.used) in omega by simp(ul)
+  // (the k-th at least k)
+  let P(k) := int_lt(k, seq_len(A.used)) -> int_le(k, A.used[k])
+  have b0: P(0) proof
+    assume h
+    have t := mp(at_type[l := A.used, t := omega, i := 0], ul, (0 in omega by simp()), h)
+    show by arith(t)
+  qed
+  have st: all k. k in omega -> P(k) -> P(int_add(k, 1)) proof
+    fix k
+    assume hk hp h1
+    have s := mp(all_elim(so, {k}), hk, h1)
+    have pk := mp(hp, (int_lt(k, seq_len(A.used)) by arith(h1)))
+    show by arith(s, pk)
+  qed
+  have all := mp(nat_ind[p := k. P(k)], b0, st)
+  have c1: int_lt(0, seq_len(A.used)) -> int_le(seq_len(A.used), 18446744073709551616) proof
+    assume hn
+    let K := int_sub(seq_len(A.used), 1)
+    have ko: K in omega by arith(hn, lo)
+    have kl: int_lt(K, seq_len(A.used)) by arith(lo)
+    have ge := mp(mp(all_elim(all, {K}), ko), kl)
+    have ms := mp(all_elim(us, {K}), ko, kl)
+    have ut: mp.untaken(A, A.used[K]) proof
+      fix i
+      assume hi hil
+      assume e
+      have _ nu _ _ _ := mp(all_elim(tk, {i}), hi, hil)
+      have iu: mallocng.is_used(A, A.taken[i]) by defs(ex_intro({K}, taut(ko, kl, sym(e))), mallocng.is_used)
+      show by taut(nu, iu)
+    qed
+    have {bd = bound} := apply(mp.slot_meta, hc, hu, ha, hh, ms, ut)
+    show by arith(ge, bd)
+  qed
+  have c0: !int_lt(0, seq_len(A.used)) -> int_le(seq_len(A.used), 18446744073709551616) proof
+    assume hn
+    show by arith(hn, lo)
+  qed
+  show by taut(c0, c1)
+qed
+
+// free's code at its address: one GIMPLE value (nontrivial_free's and
+// free_group's recursion unfolded 2^64 deep, past any state's groups)
+// implemented there, refining the layer's free from every state
+theorem mp.free_low_all: all c statics eo b cd st. mp.fr_cfg(c) -> app(eo, empty) = 52 -> mp.code_img(c, app(b, empty), app(cd, empty), 1) ->
+  ex nf. tr.implements_at(4201081, c_src_malloc_free.free_fun(mp.FLF(nf)), 4198400, text.code, statics) &&
+    (all args w h. args in abi.ARGS -> w in abi.World -> w in univ(1) -> h in malloc.Heap.ghost -> abi.thread_ok(w.vm, w.fs_base) ->
+       abi.refines_ovf_at(c_src_malloc_free.free_fun(mp.FLF(nf))[args], abi.wide(malloc.Heap.ghost, mp.UFF(c, eo, b, cd, st))[args], malloc.Heap.ghost, w, h) &&
+       tr.div_low_at(c_src_malloc_free.free_fun(mp.FLF(nf))[args], abi.wide(malloc.Heap.ghost, mp.UFF(c, eo, b, cd, st))[args], malloc.Heap.ghost, w, h))
+proof
+  fix c statics eo b cd st
+  assume hcf he hci
+  have hc _ _ _ _ := hcf
+  let N := 18446744073709551616
+  obtain nf0, hk2 from mp(all_elim(mp(all_elim(mp.fl_all, {c}, {statics}), hcf), {N}), (N in omega by simp()))
+  let NF := mp.FNF(nf0)
+  have hnk: mp.nf_known(c, statics, N, NF) by taut(hk2)
+  have im _ := mp(all_elim(mp.fl_free, {c}, {statics}, {N}, {NF}), hcf, hnk)
+  have rf: all args w h. args in abi.ARGS -> w in abi.World -> w in univ(1) -> h in malloc.Heap.ghost -> abi.thread_ok(w.vm, w.fs_base) ->
+      abi.refines_ovf_at(c_src_malloc_free.free_fun(mp.FLF(NF))[args], abi.wide(malloc.Heap.ghost, mp.UFF(c, eo, b, cd, st))[args], malloc.Heap.ghost, w, h) &&
+      tr.div_low_at(c_src_malloc_free.free_fun(mp.FLF(NF))[args], abi.wide(malloc.Heap.ghost, mp.UFF(c, eo, b, cd, st))[args], malloc.Heap.ghost, w, h) proof
+    fix args w h
+    assume hA hw hwu hh hth
+    let S := union2(w, h)
+    // (any state the invariant holds in: its groups within N)
+    have na: ord_le(1, seq_len(args)) && !(args[0] = 0) && mp.MPRE(c, eo, b, cd, st, S) && !(S.blocks[args[0]] = none) ->
+        ex A. A in mallocng.Abs && mallocng.rep(c, A, S) && int_le(seq_len(A.used), N) proof
+      assume d
+      have _ _ hpre _ := d
+      have hinv _ _ := hpre
+      obtain A, ha hrep from apply(mallocng.inv_rep, hinv)
+      have {hm = mem} := expand(hrep, mallocng.rep)
+      have ub := apply(mp.used_bound, hc, apply(mallocng.abs_univ, ha), ha, hm)
+      show by ex_intro({A}, taut(ha, hrep, ub))
+    qed
+    show := apply(mp.tf_low[c := c, statics := statics, eo := eo, b := b, cd := cd, st := st, regs := args, w := w, h := h, n := N, nf := NF, k := 1],
+      hcf, he, hnk, hA, hw, hwu, hh, hth, na, hci)
+  qed
+  show by ex_intro({NF}, taut(im, rf))
+qed
