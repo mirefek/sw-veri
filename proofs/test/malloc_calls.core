@@ -105,3 +105,58 @@ proof
       malloc.world_ok(b, c, st, fn_update(s, "vm", vm))) by ex_intro({vm}, taut(hv, hst, rewrite(sym(hse), hwo)))
   show by simp(h, hi, he, hwo, hs, {l0 l. snd(l) in omega && int_le(snd(l), 4)}, {l. int_sub(4, snd(l))})
 qed
+
+// the ABI's malloc (its value widened to a pair of words), where defined:
+// malloc's return at its argument
+theorem tm.wm_ret(I, O, eo, b, cd, st, regs, S, X): regs in abi.ARGS -> ord_le(1, seq_len(regs)) ->
+  runs(abi.wide(malloc.Heap.ghost, malloc.malloc_fun(I, O, eo, b, cd, st))[regs], S, X) ->
+  S in rec_and(abi.World, malloc.Heap.ghost) -> S in I -> malloc.errno_ok(eo, S) -> malloc.world_ok(b, cd, st, S) ->
+  ex T v z. runs(malloc.malloc(I, O, eo, b, cd, st, regs[0]), S, ok(T, v)) && X = ok(T, pair(v, z))
+proof
+  assume hra h1 h ht hi he hwo
+  rsimp only, abi.wide, app_fn_build, hra in h
+  have b1 := apply(g.runs_elim, h)
+  obtain y, hy ky from expand(b1, bind_rel)
+  rsimp only, malloc.malloc_fun, app_fn_build, hra in hy
+  have b2 := apply(g.runs_elim, hy)
+  have b3: bind_rel(malloc.malloc(I, O, eo, b, cd, st, regs[0]), S, x3 x4. y = ok(x3, x4), x3 x4. y = exc(x3, x4), x3. y = diverge(x3)) by taut(b2, h1)
+  obtain Y, hY kY from expand(b3, bind_rel)
+  obtain T v, eY from apply(malloc.malloc_ret[i := I, o := O, e := eo, b := b, c := cd, st := st, n := regs[0], s := S, x := Y], hY, ht, hi, he, hwo)
+  have ey: y = ok(T, v) by simp(rewrite(eY, kY))
+  have kz: any_rel(x5. x5 in bits(64), x5. X = ok(T, pair(v, x5))) by simp(rewrite(ey, ky), keep(any_rel))
+  have ne: ex z. z in bits(64) by ex_intro({0}, simp())
+  obtain z, _ hz from apply(g.any_e, ne, kz)
+  show by ex_intro({T}, {v}, {z}, taut(rewrite(eY, hY), hz))
+qed
+
+// (a heap state's world and ghost parts: determined by it)
+theorem tm.union_inj(a, b, c, d): a in abi.World -> c in abi.World -> b in malloc.Heap.ghost -> d in malloc.Heap.ghost ->
+  union2(a, b) = union2(c, d) -> a = c && b = d
+proof
+  assume ha hc hb hd e
+  have da: dom(a) = abi.WKEYS by simp(expand(ha, abi.World))
+  have dc: dom(c) = abi.WKEYS by simp(expand(hc, abi.World))
+  have ka := apply(abi.keys_of, da)
+  have kc := apply(abi.keys_of, dc)
+  have gb: all z. z in b -> !(fst(z) in abi.WKEYS) proof
+    fix z
+    assume hz
+    have _ _ k := mp(all_elim(mp.hg_ok, {b}), hb)
+    have _ k2 := mp(all_elim(k, {z}), hz)
+    show := k2
+  qed
+  have gd: all z. z in d -> !(fst(z) in abi.WKEYS) proof
+    fix z
+    assume hz
+    have _ _ k := mp(all_elim(mp.hg_ok, {d}), hd)
+    have _ k2 := mp(all_elim(k, {z}), hz)
+    show := k2
+  qed
+  have r1 := apply(abi.restrict_union_l[a := a, b := b, d := abi.WKEYS], ka, gb)
+  have r2 := apply(abi.restrict_union_l[a := c, b := d, d := abi.WKEYS], kc, gd)
+  have g1 := apply(abi.ghost_part_union_r[a := a, b := b, d := abi.WKEYS], ka, gb)
+  have g2 := apply(abi.ghost_part_union_r[a := c, b := d, d := abi.WKEYS], kc, gd)
+  have ac: a = c := trans(sym(r1), trans(subst({y. restrict(union2(a, b), abi.WKEYS) = restrict(y, abi.WKEYS)}, e, refl({restrict(union2(a, b), abi.WKEYS)})), r2))
+  have bd: b = d := trans(sym(g1), trans(subst({y. ghost_part(union2(a, b), abi.WKEYS) = ghost_part(y, abi.WKEYS)}, e, refl({ghost_part(union2(a, b), abi.WKEYS)})), g2))
+  show by taut(ac, bd)
+qed
