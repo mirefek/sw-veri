@@ -707,9 +707,11 @@ pred reserves(A: Abs, A2: Abs, g: nat, i: nat) =
   (all h: nat. h != g -> A2.slots[h] = A.slots[h])
 
 // the stack's bounds and the program break's start as they were (as
-// malloc.sl's `alloc_frame` has them)
+// malloc.sl's `alloc_frame` has them); a stack page after one before (the
+// allocator maps none: malloc.sl's world_ok after a call)
 pred bounds_kept(vm: Vm, vm2: Vm) =
-  vm2.stack_top = vm.stack_top && vm2.stack_limit = vm.stack_limit && vm2.brk_start = vm.brk_start
+  vm2.stack_top = vm.stack_top && vm2.stack_limit = vm.stack_limit && vm2.brk_start = vm.brk_start &&
+  kinds: (all p: nat. p < TASK_SIZE / PAGE && vm2.pages[p] != none && vm2.pages[p].value.kind = stack -> vm2.pages[p] = vm.pages[p])
 
 // the memory outside the allocator's (in A) untouched, but for `extra` and
 // what was unmapped -- and the stack's free bytes (objs as at the start: a

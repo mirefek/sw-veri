@@ -579,15 +579,38 @@ qed
 theorem mp.bk_trans(v1, v2, v3): mallocng.bounds_kept(v1, v2) -> mallocng.bounds_kept(v2, v3) -> mallocng.bounds_kept(v1, v3)
 proof
   assume h1 h2
-  have a1 b1 c1 := expand(h1, mallocng.bounds_kept)
-  have a2 b2 c2 := expand(h2, mallocng.bounds_kept)
-  show by defs(taut(trans(a2, a1), trans(b2, b1), trans(c2, c1)), mallocng.bounds_kept)
+  have a1 b1 c1 k1 := expand(h1, mallocng.bounds_kept)
+  have a2 b2 c2 k2 := expand(h2, mallocng.bounds_kept)
+  // (a stack page at the end: at the middle, so at the start)
+  have k: all x0. x0 in omega -> (int_lt(x0, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) && !(v3.pages[x0] = none)) && snd(v3.pages[x0]).kind = 2 ->
+      v3.pages[x0] = v1.pages[x0] proof
+    fix p
+    assume hp h
+    have e2 := mp(all_elim(k2, {p}), hp, h)
+    have e1 := mp(all_elim(k1, {p}), hp, rewrite(e2, h))
+    show := trans(e2, e1)
+  qed
+  show by defs(taut(trans(a2, a1), trans(b2, b1), trans(c2, c1), k), mallocng.bounds_kept)
+qed
+
+// (... the pages the same: so)
+theorem mp.bk_pg(v, v2): v2.stack_top = v.stack_top -> v2.stack_limit = v.stack_limit -> v2.brk_start = v.brk_start -> v2.pages = v.pages ->
+  mallocng.bounds_kept(v, v2)
+proof
+  assume t l s p
+  have k: all x0. x0 in omega -> (int_lt(x0, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) && !(v2.pages[x0] = none)) && snd(v2.pages[x0]).kind = 2 ->
+      v2.pages[x0] = v.pages[x0] proof
+    fix q
+    assume _ _
+    show by simp(p)
+  qed
+  show by defs(taut(t, l, s, k), mallocng.bounds_kept)
 qed
 
 // (... by a store: so)
 theorem mp.bk_bytes(v, x): mallocng.bounds_kept(v, fn_update(v, "bytes", x))
 proof
-  show by defs(simp(), mallocng.bounds_kept)
+  show := apply(mp.bk_pg[v := v, v2 := fn_update(v, "bytes", x)], simp(), simp(), simp(), simp())
 qed
 
 // (... by a change of bytes only: so)
@@ -597,7 +620,51 @@ proof
   have t := mp(app_update_other[f := v2, k := "bytes", v := v.bytes, x := "stack_top"], simp())
   have l := mp(app_update_other[f := v2, k := "bytes", v := v.bytes, x := "stack_limit"], simp())
   have s := mp(app_update_other[f := v2, k := "bytes", v := v.bytes, x := "brk_start"], simp())
-  show by defs(taut(sym(rewrite(e, t)), sym(rewrite(e, l)), sym(rewrite(e, s))), mallocng.bounds_kept)
+  have p := mp(app_update_other[f := v2, k := "bytes", v := v.bytes, x := "pages"], simp())
+  show := apply(mp.bk_pg[v := v, v2 := v2], sym(rewrite(e, t)), sym(rewrite(e, l)), sym(rewrite(e, s)), sym(rewrite(e, p)))
+qed
+
+// (... by fresh pages, not the stack's: so)
+theorem mp.bk_fresh(v, v2, objs, p, n, pg): gimple.fresh_pages(v, v2, objs, p, n, pg) -> !(pg.kind = 2) -> mallocng.bounds_kept(v, v2)
+proof
+  assume hf hk
+  have _ ft fl fs fpg _ := expand(hf, gimple.fresh_pages)
+  have k: all x0. x0 in omega -> (int_lt(x0, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) && !(v2.pages[x0] = none)) && snd(v2.pages[x0]).kind = 2 ->
+      v2.pages[x0] = v.pages[x0] proof
+    fix q
+    assume hq h
+    have h1 _ h3 := h
+    have e := mp(all_elim(fpg, {q}), hq, h1)
+    have c1: int_le(p, q) && int_lt(q, int_add(p, n)) -> false proof
+      assume w
+      have w1 w2 := w
+      have ei: v2.pages[q] = some(pg) by simp(e, w1, w2)
+      have k2 := rewrite(ei, h3)
+      show by taut(hk, (pg.kind = 2 by simp(k2)))
+    qed
+    show by simp(e, c1)
+  qed
+  show by defs(taut(ft, fl, fs, k), mallocng.bounds_kept)
+qed
+
+// (... by pages gone: so)
+theorem mp.bk_gone(v, v2, p, n): gimple.gone_pages(v, v2, p, n) -> mallocng.bounds_kept(v, v2)
+proof
+  assume hg
+  have gt gl gs gpg _ := expand(hg, gimple.gone_pages)
+  have k: all x0. x0 in omega -> (int_lt(x0, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) && !(v2.pages[x0] = none)) && snd(v2.pages[x0]).kind = 2 ->
+      v2.pages[x0] = v.pages[x0] proof
+    fix q
+    assume hq h
+    have h1 h2 _ := h
+    have e := mp(all_elim(gpg, {q}), hq, h1)
+    have c1: int_le(p, q) && int_lt(q, int_add(p, n)) -> false proof
+      assume w
+      show by taut(h2, (v2.pages[q] = none by simp(e, w)))
+    qed
+    show by simp(e, c1)
+  qed
+  show by defs(taut(gt, gl, gs, k), mallocng.bounds_kept)
 qed
 
 theorem mp.unt_refl(c, A, b, vm, e): mallocng.kept_outside(c, A, b, vm, vm, e)
@@ -686,7 +753,7 @@ proof
   assume u1 u2 fg
   have a1 o1 b1 := expand(u1, mallocng.untouched)
   have a2 o2 b2 := expand(u2, mallocng.untouched)
-  have bt1 bl1 _ := expand(b1, mallocng.bounds_kept)
+  have bt1 bl1 _ _ := expand(b1, mallocng.bounds_kept)
   // (the callers' objects: kept twice -- in the stack's space, so in no
   // memory the allocator took between)
   have o: all x0. x0 in omega -> (((!(x0 in mallocng.footprint(c, A, b)) && !(x0 in e)) && x0 in objs.live) && mallocng.in_stack_space(V0, x0)) &&
@@ -1597,8 +1664,8 @@ proof
     have pq: V2.pages[int_div(a, x86_64_linux.PAGE)] = V.pages[int_div(a, x86_64_linux.PAGE)] by simp(ep)
     show by taut(bb, pq)
   qed
-  have bk: mallocng.bounds_kept(V, V2) by defs(taut(apply(mp.w32_keep[V := V, c := int_add(m, 24), v := NV, k := "stack_top"], simp()),
-    apply(mp.w32_keep[V := V, c := int_add(m, 24), v := NV, k := "stack_limit"], simp()), es), mallocng.bounds_kept)
+  have bk := apply(mp.bk_pg[v := V, v2 := V2], apply(mp.w32_keep[V := V, c := int_add(m, 24), v := NV, k := "stack_top"], simp()),
+    apply(mp.w32_keep[V := V, c := int_add(m, 24), v := NV, k := "stack_limit"], simp()), es, ep)
   have unt := apply(mp.ko_all[c := c, A := A, b := b, vm := V, V := V2, e := empty], ut, bk)
   have v2v := apply(mp.w32_vm[V := V, c := int_add(m, 24), v := NV], hv)
   show by taut(ra, ru, rs, ro, v2v, rh, unt)

@@ -969,7 +969,7 @@ theorem mp.fp_grow(c, A, A1, A2, b, V0, V1, objs, e): mallocng.untouched(c, A, b
 proof
   assume u1 f1 f2 ne
   have a1 _ b1 := expand(u1, mallocng.untouched)
-  have bt bl _ := expand(b1, mallocng.bounds_kept)
+  have bt bl _ _ := expand(b1, mallocng.bounds_kept)
   fix a
   assume ha h2
   have c1: a in mallocng.footprint(c, A1, b) -> a in mallocng.footprint(c, A, b) || (!x86_64_linux.mapped(V0, int_div(a, x86_64_linux.PAGE)) && !mallocng.in_stack_space(V0, a)) proof
@@ -1941,7 +1941,8 @@ proof
   have ebs: V2.brk_start = V.brk_start by simp(q0)
   have q1: fn_update(fn_update(fn_update(V2, "bytes", V.bytes), "pages", V.pages), "brk", V.brk).stack_top = V.stack_top := rewrite(sym(hre), refl({V.stack_top}), {1})
   have q2: fn_update(fn_update(fn_update(V2, "bytes", V.bytes), "pages", V.pages), "brk", V.brk).stack_limit = V.stack_limit := rewrite(sym(hre), refl({V.stack_limit}), {1})
-  have bk: mallocng.bounds_kept(V, V2) by defs(simp(q0, q1, q2), mallocng.bounds_kept)
+  have {hkd = kd} := P
+  have bk: mallocng.bounds_kept(V, V2) by defs(taut((V2.stack_top = V.stack_top by simp(q1)), (V2.stack_limit = V.stack_limit by simp(q2)), ebs, hkd), mallocng.bounds_kept)
   have un: mallocng.kept_outside(c, A1, B, V, V2, mp.errno(s.fs_base)) proof
     // (the context words written: the allocator's)
     have nrf: all a. a in omega -> !(a in mallocng.footprint(c, A1, B)) -> !mp.rfbyte(c, a) proof
@@ -2650,7 +2651,7 @@ proof
     have bb := mp(all_elim(jo, {bits_of_int(64, a)}), (bits_of_int(64, a) in bits(64) by simp()), rewrite(sym(ab), nc))
     show by taut(bb, (VG.pages[int_div(a, x86_64_linux.PAGE)] = V1.pages[int_div(a, x86_64_linux.PAGE)] by simp(gp)))
   qed
-  show := apply(mp.ko_all[c := c, A := A1, b := B, vm := V1, V := VG, e := e], r, (mallocng.bounds_kept(V1, VG) by defs(taut(gt, gl, gs), mallocng.bounds_kept)))
+  show := apply(mp.ko_all[c := c, A := A1, b := B, vm := V1, V := VG, e := e], r, apply(mp.bk_pg[v := V1, v2 := VG], gt, gl, gs, gp))
 qed
 
 // (the break asked for: not the one there is)
@@ -2753,6 +2754,12 @@ proof
     assume hy _ _ hn
     show by taut(mp(all_elim(by0, {y}), hy, hn), (VF.pages[int_div(y, x86_64_linux.PAGE)] = V1.pages[int_div(y, x86_64_linux.PAGE)] by simp(gp)))
   qed
+  have kd: all x0. x0 in omega -> (int_lt(x0, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) && !(VF.pages[x0] = none)) && snd(VF.pages[x0]).kind = 2 ->
+      VF.pages[x0] = V1.pages[x0] proof
+    fix q
+    assume _ _
+    show by simp(gp)
+  qed
   have rest := apply(mp.vm_rest[V := VF, W := V1], vfV, s1, (VF.stack_top = V1.stack_top by simp(gt)), (VF.stack_limit = V1.stack_limit by simp(gl)), (VF.brk_start = V1.brk_start by simp(gs)))
   have bo: mallocng.brk_ok(mp.refill(A1, 0, 0, M), VF.brk) by defs(simp(), mallocng.brk_ok)
   have fr: all a. a in omega -> int_le(0, a) -> int_lt(a, int_add(0, int_mul(4096, 0))) -> !x86_64_linux.mapped(V1, int_div(a, x86_64_linux.PAGE)) proof
@@ -2774,7 +2781,7 @@ proof
   // (no reserve: none to reprotect)
   have rs0: mp.rsv(mp.refill(A1, 0, 0, M), VF) by simp()
   have P: mp.rfpre(c, A1, V1, VF, B, 0, 0, M) by taut(hc, s3, s2, hbt, s1, vfV, s4, hid, h0, (0 in omega && 0 in omega && M in omega by simp()),
-    (0 = 0 && 0 = 0 by simp()), (int_mod(0, 4096) = 0 by simp()), fr, np, pg, by, stk, rest, bo, rs0, f40, f48, w72, f920)
+    (0 = 0 && 0 = 0 by simp()), (int_mod(0, 4096) = 0 by simp()), fr, np, pg, by, stk, kd, rest, bo, rs0, f40, f48, w72, f920)
   have kp0: int_div(0, x86_64_linux.PAGE) = 0 by defs(simp(), x86_64_linux.PAGE)
   have hof: g.cbytes_rng(s.objs, int_div(0, x86_64_linux.PAGE), 0) proof
     fix a
@@ -3271,7 +3278,28 @@ proof
   have ebs: VD.brk_start = V4.brk_start by simp(sym(rewrite(v5r, ub2)))
   have ut2 := mp(app_update_other[f := V5, k := "pages", v := V4.pages, x := "stack_top"], (!("stack_top" = "pages") by simp()))
   have ul2 := mp(app_update_other[f := V5, k := "pages", v := V4.pages, x := "stack_limit"], (!("stack_limit" = "pages") by simp()))
-  have bkd: mallocng.bounds_kept(V4, VD) by defs(simp(ebs, sym(rewrite(v5r, ut2)), sym(rewrite(v5r, ul2))), mallocng.bounds_kept)
+  have bt: VD.stack_top = V4.stack_top by simp(sym(rewrite(v5r, ut2)))
+  have bl: VD.stack_limit = V4.stack_limit by simp(sym(rewrite(v5r, ul2)))
+  // (no stack page made: the reserve's page the only new one, not the stack's)
+  have pk: all x0. x0 in omega -> (int_lt(x0, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) && !(VD.pages[x0] = none)) && snd(VD.pages[x0]).kind = 2 ->
+      VD.pages[x0] = V4.pages[x0] proof
+    fix q
+    assume hq h
+    have _ _ h3 := h
+    have c1: !(q = int_div(R, 4096)) -> VD.pages[q] = V4.pages[q] proof
+      assume ne
+      show by simp(mp(all_elim(hpq, {q}), hq, ne))
+    qed
+    have c2: q = int_div(R, 4096) -> false proof
+      assume e
+      have pg4: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
+      have pv := apply(mp.pg_view[vm := V5, fp := mallocng.all_bytes(), a := R], ro, (R in mallocng.all_bytes() by defs(simp(ro), mallocng.all_bytes)))
+      have k2: snd(V5.pages[int_div(R, 4096)]).kind = 2 by simp(rewrite(e, h3))
+      show by taut(hkd, (snd(mallocng.pg(mallocng.mview(V5, mallocng.all_bytes()), R)).kind = 2 by simp(pv, pg4, k2)))
+    qed
+    show by taut(c1, c2)
+  qed
+  have bkd: mallocng.bounds_kept(V4, VD) by defs(taut(bt, bl, ebs, pk), mallocng.bounds_kept)
   have pg: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
   // (a page other than the reserve's first: as it was)
   have opg: all a. a in omega -> !(a in mallocng.footprint(c, A4, B)) -> !(int_div(a, x86_64_linux.PAGE) = int_div(A4.reserve, 4096)) proof
@@ -3617,6 +3645,15 @@ proof
     have bx: Vx.bytes[y] = V3.bytes[y] by simp(mp(all_elim(xby, {y}), hy), o2)
     show by taut(trans(mp(all_elim(fo, {y}), hy, n1, n2), bx), (VF.pages[int_div(y, x86_64_linux.PAGE)] = V3.pages[int_div(y, x86_64_linux.PAGE)] by simp(vfp, mp(all_elim(xpg, {int_div(y, x86_64_linux.PAGE)}), qo, qt), o1)))
   qed
+  // (no stack page made: mmap's are anonymous)
+  have _ _ _ kx := expand(apply(mp.bk_fresh[v := V3, v2 := Vx, objs := s.objs, p := p, n := PN, pg := NPG], rewrite(pnf, hfr), simp()), mallocng.bounds_kept)
+  have kd: all x0. x0 in omega -> (int_lt(x0, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) && !(VF.pages[x0] = none)) && snd(VF.pages[x0]).kind = 2 ->
+      VF.pages[x0] = V3.pages[x0] proof
+    fix q
+    assume hq h
+    have k := mp(all_elim(kx, {q}), hq, rewrite(vfp, h))
+    show by simp(vfp, k)
+  qed
   have rest := apply(mp.vm_rest[V := VF, W := V3], vfV, s1, (VF.stack_top = V3.stack_top by simp(xt)), (VF.stack_limit = V3.stack_limit by simp(xl)),
     (VF.brk_start = V3.brk_start by simp(xs)))
   have bo: mallocng.brk_ok(mp.refill(A3, R2, KN, A3.brk), VF.brk) by defs(simp(wbo, hxb), mallocng.brk_ok)
@@ -3651,7 +3688,7 @@ proof
     (int_le(int_mul(p, 4096), mp.refill(A3, R2, KN, A3.brk).reserve) by arith(rer, hp)), (int_mod(mp.refill(A3, R2, KN, A3.brk).reserve, 4096) = 0 by arith(rer, hp)),
     (int_le(int_add(mp.refill(A3, R2, KN, A3.brk).reserve, int_mul(4096, mp.refill(A3, R2, KN, A3.brk).reserve_cnt)), int_mul(int_add(p, PN), 4096)) by arith(rer, rec, hp, pno, pnp)))
   have P: mp.rfpre(c, A3, V3, VF, B, R2, KN, A3.brk) by taut(hc, s3, s2, hbt, s1, vfV, s4, hid, hz0, hn3,
-    (int_lt(0, KN) && int_lt(0, R2) by arith(pnp, hp)), (int_mod(R2, 4096) = 0 by arith(hp)), frs, npg, pgs, bys, stk, rest, bo, rs2, w40, w48,
+    (int_lt(0, KN) && int_lt(0, R2) by arith(pnp, hp)), (int_mod(R2, 4096) = 0 by arith(hp)), frs, npg, pgs, bys, stk, kd, rest, bo, rs2, w40, w48,
     (int_lt(0, KN) -> gimple.bytes_at(VF, int_add(c.ctx, 72), 8) = R2 by taut(w72)), w920)
   have kp4: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
   have rdv: int_div(R2, x86_64_linux.PAGE) = int_add(p, 1) by arith(kp4, hp)
@@ -3796,7 +3833,7 @@ proof
       have ep: V.pages[int_div(a, x86_64_linux.PAGE)] = V1.pages[int_div(a, x86_64_linux.PAGE)] by simp(mp(all_elim(fpg, {int_div(a, x86_64_linux.PAGE)}), qo, qt), o1, gp)
       show by taut(rewrite(sym(ab), eb), ep)
     qed
-    have bk: mallocng.bounds_kept(V1, V) by defs(taut(trans(ft, gt), trans(fl, gl), trans(fs, gs)), mallocng.bounds_kept)
+    have bk := apply(mp.bk_trans[v1 := V1, v2 := VG, v3 := V], apply(mp.bk_pg[v := V1, v2 := VG], gt, gl, gs, gp), apply(mp.bk_fresh, gfr, simp()))
     show by defs(taut(r, u, bk), mallocng.kept_outside)
   qed
   have gd: g = 1 -> !x86_64_linux.mapped(V1, int_div(bb, 4096)) proof
@@ -3822,6 +3859,8 @@ def mp.gd_ok(c, s, V1, V, Vm, Ve, R2) := (all q. q in omega -> x86_64_linux.mapp
   (all y. y in bits(64) -> !(y in mp.errno(s.fs_base)) -> Ve.bytes[y] = V1.bytes[y]) &&
   (all y. y in bits(64) -> mallocng.in_stack_space(V1, y) -> Vm.pages[int_div(y, x86_64_linux.PAGE)] = V.pages[int_div(y, x86_64_linux.PAGE)] &&
      (!(int_le(int_add(c.ctx, 920), y) && int_lt(y, int_add(c.ctx, 928))) -> Vm.bytes[y] = Ve.bytes[y])) &&
+  (all x0. x0 in omega -> (int_lt(x0, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) && !(Vm.pages[x0] = none)) && snd(Vm.pages[x0]).kind = 2 ->
+     Vm.pages[x0] = V.pages[x0]) &&
   Vm.stack_top = V.stack_top && Vm.stack_limit = V.stack_limit && Vm.brk_start = V.brk_start && Vm.brk = V.brk &&
   Ve in x86_64_linux.Vm && fn_update(Ve, "bytes", V1.bytes) = V1 && Ve.pages = V1.pages
 
@@ -3841,7 +3880,7 @@ theorem mp.am_brkok(c, A, B, s, V1, A1, VG, g, nw, bb, V, Vm, Ve): mp.am_st(c, A
      gimple.gone_pages(VG, V, x86_64_linux.pages_for(nw), int_sub(x86_64_linux.pages_for(VG.brk), x86_64_linux.pages_for(nw))))) ->
   Vm in x86_64_linux.Vm ->
   ((g = 0 && Vm = V && Ve = V1) ||
-   (g = 1 && (ex pg. gimple.fresh_pages(V, Vm, s.objs, int_div(bb, 4096), 1, pg) && Vm.brk = V.brk) && Ve = V1) ||
+   (g = 1 && (ex pg. !(pg.kind = 2) && gimple.fresh_pages(V, Vm, s.objs, int_div(bb, 4096), 1, pg) && Vm.brk = V.brk) && Ve = V1) ||
    (g = 1 && (ex e. Vm = mallocng_specs.wr32(V, mallocng_specs.errno_at(s.fs_base), e) && Ve = mallocng_specs.wr32(V1, mallocng_specs.errno_at(s.fs_base), e)))) ->
   st: mp.am_j1(c, A, B, s, fn_update(Vm, "bytes", x86_64_linux.store_le(x86_64_linux.store_le(x86_64_linux.store_le(Vm.bytes,
     int_add(c.ctx, 920), 8, nw), int_add(c.ctx, 72), 8, bits_sub(64, nw, 4096)), int_add(c.ctx, 40), 8, bits_shr(64, 4096, 12))),
@@ -3853,7 +3892,7 @@ proof
   have cx: c.ctx in omega by simp(expand(hc, mallocng.Cfg))
   have {gp = pages, gt = top, gl = lim, gs = start, gbk = brk} := apply(mp.jg_parts, J, cx, hcb)
   have _ _ ubs0 := expand(su, mallocng.untouched)
-  have _ _ ubs := expand(ubs0, mallocng.bounds_kept)
+  have _ _ ubs _ := expand(ubs0, mallocng.bounds_kept)
   have pg: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
   have bs0: int_le(4096, V1.brk_start) by defs(simp(expand(hbs, abi.brk_start_ok), ubs, pg), x86_64_linux.PAGE)
   have {bno = nat, bnb = nwb, bpo = pos, bal = al, bsu = sub, bpo2 = po, bpn = pn, bgu = guard} := apply(mp.brk_pages, J, s1, bs0, rewrite(gs, hns))
@@ -3978,16 +4017,22 @@ proof
       qed
       show by taut(b, (Vm.pages[int_div(y, x86_64_linux.PAGE)] = V.pages[int_div(y, x86_64_linux.PAGE)] by simp(q1)))
     qed
-    show by defs(taut(a1, (Vm.pages[RP] = V.pages[RP] by simp(q1)), a3, a4, a5, a6, (Vm.stack_top = V.stack_top by simp(q1)), (Vm.stack_limit = V.stack_limit by simp(q1)),
+    have a7: all x0. x0 in omega -> (int_lt(x0, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) && !(Vm.pages[x0] = none)) && snd(Vm.pages[x0]).kind = 2 ->
+        Vm.pages[x0] = V.pages[x0] proof
+      fix q
+      assume _ _
+      show by simp(q1)
+    qed
+    show by defs(taut(a1, (Vm.pages[RP] = V.pages[RP] by simp(q1)), a3, a4, a5, a6, a7, (Vm.stack_top = V.stack_top by simp(q1)), (Vm.stack_limit = V.stack_limit by simp(q1)),
       (Vm.brk_start = V.brk_start by simp(q1)), (Vm.brk = V.brk by simp(q1)), (Ve in x86_64_linux.Vm by simp(q2, s1)),
       subst({y. fn_update(y, "bytes", V1.bytes) = V1}, sym(q2), v1rest),
       (Ve.pages = V1.pages by simp(q2))), mp.gd_ok)
   qed
   // the guard page mapped over: its page alone changed
-  have k1: g = 1 && (ex pg. gimple.fresh_pages(V, Vm, s.objs, int_div(bb, 4096), 1, pg) && Vm.brk = V.brk) && Ve = V1 -> mp.gd_ok(c, s, V1, V, Vm, Ve, R2) proof
+  have k1: g = 1 && (ex pg. !(pg.kind = 2) && gimple.fresh_pages(V, Vm, s.objs, int_div(bb, 4096), 1, pg) && Vm.brk = V.brk) && Ve = V1 -> mp.gd_ok(c, s, V1, V, Vm, Ve, R2) proof
     assume q
     have q0 qx q2 := q
-    obtain pgg, qf qb from qx
+    obtain pgg, qk qf qb from qx
     have _ gt1 gl1 gs1 gpg gby := expand(qf, gimple.fresh_pages)
     have b1 b2 b3 b4 := mp(bgu, q0)
     let GP := int_div(bb, 4096)
@@ -4055,7 +4100,9 @@ proof
       qed
       show by taut(b, (Vm.pages[int_div(y, x86_64_linux.PAGE)] = V.pages[int_div(y, x86_64_linux.PAGE)] by simp(mp(all_elim(gpg, {int_div(y, x86_64_linux.PAGE)}), qo, qt), ng)))
     qed
-    show by defs(taut(a1, a2, a3, a4, a5, a6, gt1, gl1, gs1, qb, (Ve in x86_64_linux.Vm by simp(q2, s1)), subst({y. fn_update(y, "bytes", V1.bytes) = V1}, sym(q2), v1rest),
+    // (the guard page: not the stack's)
+    have _ _ _ a7 := expand(apply(mp.bk_fresh[v := V, v2 := Vm, objs := s.objs, p := GP, n := 1, pg := pgg], qf, qk), mallocng.bounds_kept)
+    show by defs(taut(a1, a2, a3, a4, a5, a6, a7, gt1, gl1, gs1, qb, (Ve in x86_64_linux.Vm by simp(q2, s1)), subst({y. fn_update(y, "bytes", V1.bytes) = V1}, sym(q2), v1rest),
       (Ve.pages = V1.pages by simp(q2))), mp.gd_ok)
   qed
   // the guard page refused: errno written
@@ -4128,11 +4175,17 @@ proof
       show by taut(b, (Vm.pages[int_div(y, x86_64_linux.PAGE)] = V.pages[int_div(y, x86_64_linux.PAGE)] by simp(vmp)))
     qed
     have ver: fn_update(Ve, "bytes", V1.bytes) = V1 by simp(qe, v1rest, keep(mallocng_specs.errno_at), all_elim(ms.v_wr32, {V1}, {EA}, {e}))
-    show by defs(taut(a1, (Vm.pages[RP] = V.pages[RP] by simp(vmp)), a3, a4, a5, a6, rewrite(sym(qm), kt), rewrite(sym(qm), kl), rewrite(sym(qm), ks), rewrite(sym(qm), kb),
+    have a7: all x0. x0 in omega -> (int_lt(x0, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) && !(Vm.pages[x0] = none)) && snd(Vm.pages[x0]).kind = 2 ->
+        Vm.pages[x0] = V.pages[x0] proof
+      fix q
+      assume _ _
+      show by simp(vmp)
+    qed
+    show by defs(taut(a1, (Vm.pages[RP] = V.pages[RP] by simp(vmp)), a3, a4, a5, a6, a7, rewrite(sym(qm), kt), rewrite(sym(qm), kl), rewrite(sym(qm), ks), rewrite(sym(qm), kb),
       rewrite(sym(qe), apply(mp.w32_vm[V := V1, c := EA, v := e], s1)), ver, rewrite(sym(qe), kp1)), mp.gd_ok)
   qed
   have gd0: mp.gd_ok(c, s, V1, V, Vm, Ve, R2) by taut(hgd, k0, k1, k2)
-  have gmp gmr gmb gme gev gms0 gmt gml gms gmk gvv gvr gvp := expand(gd0, mp.gd_ok)
+  have gmp gmr gmb gme gev gms0 gkd gmt gml gms gmk gvv gvr gvp := expand(gd0, mp.gd_ok)
   // the memory before, errno as after: a run state
   have sve := apply(mp.am_errb[c := c, A := A, B := B, s := s, V := V1, A1 := A1, V2 := Ve], S, hw, hea, hfl, gvv, gvr, gev)
   let VF := fn_update(Vm, "bytes", x86_64_linux.store_le(x86_64_linux.store_le(x86_64_linux.store_le(Vm.bytes,
@@ -4255,6 +4308,17 @@ proof
     show by taut(trans(mp(all_elim(fo, {y}), hy, n1, n2, n3), mp(sb, n1)),
       (VF.pages[int_div(y, x86_64_linux.PAGE)] = Ve.pages[int_div(y, x86_64_linux.PAGE)] by simp(vfp, sp, vp, gvp)))
   qed
+  // (no stack page made: the break's pages the heap's, the guard's mmap's)
+  have _ _ _ kv := expand(apply(mp.bk_fresh, gfr, simp()), mallocng.bounds_kept)
+  have kd: all x0. x0 in omega -> (int_lt(x0, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) && !(VF.pages[x0] = none)) && snd(VF.pages[x0]).kind = 2 ->
+      VF.pages[x0] = Ve.pages[x0] proof
+    fix q
+    assume hq h
+    have h1 := rewrite(vfp, h)
+    have e1 := mp(all_elim(gkd, {q}), hq, h1)
+    have e2 := mp(all_elim(kv, {q}), hq, rewrite(e1, h1))
+    show by simp(vfp, e1, e2, gp, gvp)
+  qed
   have rest := apply(mp.vm_rest[V := VF, W := Ve], vfV, gvv, (VF.stack_top = Ve.stack_top by simp(gmt, ft, gt, sym(rewrite(gvr, u1)))),
     (VF.stack_limit = Ve.stack_limit by simp(gml, fl, gl, sym(rewrite(gvr, u2)))), (VF.brk_start = Ve.brk_start by simp(gms, fs, gs, sym(rewrite(gvr, u3)))))
   have bo: mallocng.brk_ok(mp.refill(A1, R2, 1, nw), VF.brk) by defs(simp(vfk, (int_mod(nw, 4096) = 0 by arith(bal, bno))), mallocng.brk_ok)
@@ -4299,7 +4363,7 @@ proof
     (int_le(int_mul(RP, 4096), mp.refill(A1, R2, 1, nw).reserve) by arith(rer, r2v)), (int_mod(mp.refill(A1, R2, 1, nw).reserve, 4096) = 0 by arith(rer, r2v, rpo)),
     (int_le(int_add(mp.refill(A1, R2, 1, nw).reserve, int_mul(4096, mp.refill(A1, R2, 1, nw).reserve_cnt)), int_mul(int_add(RP, 1), 4096)) by arith(rer, rec, r2v)))
   have P: mp.rfpre(c, A1, Ve, VF, B, R2, 1, nw) by taut(hc, s3, s2, hbt, gvv, vfV, hve, hid, h0, (R2 in omega && 1 in omega && nw in omega by taut(bno, (1 in omega by simp()))),
-    (int_lt(0, 1) && int_lt(0, R2) by taut((int_lt(0, 1) by arith()), bpo)), bal, frs, npg, pgs, bys, stk, rest, bo, rs2, w40, w48, (int_lt(0, 1) -> gimple.bytes_at(VF, int_add(c.ctx, 72), 8) = R2 by taut(w72)), w920)
+    (int_lt(0, 1) && int_lt(0, R2) by taut((int_lt(0, 1) by arith()), bpo)), bal, frs, npg, pgs, bys, stk, kd, rest, bo, rs2, w40, w48, (int_lt(0, 1) -> gimple.bytes_at(VF, int_add(c.ctx, 72), 8) = R2 by taut(w72)), w920)
   have kp5: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
   have hof0 := apply(mp.cbytes_in[objs := s.objs, p := PO, n := int_sub(PN, PO), q := RP, k := 1], gho, arith(prp, pon), arith(prp, rpo), arith(), prp, arith(pnv, prp, pon))
   have rdv: int_div(R2, x86_64_linux.PAGE) = RP by arith(kp5, r2v, rpo)
@@ -4659,7 +4723,7 @@ proof
                 assume hz
                 step e9 from tb5 with hz
                 have _ _ ubs0 := expand(s7, mallocng.untouched)
-                have _ _ ubs := expand(ubs0, mallocng.bounds_kept)
+                have _ _ ubs _ := expand(ubs0, mallocng.bounds_kept)
                 have bsW: abi.brk_start_ok(W1.vm) by defs(simp(expand(hbs, abi.brk_start_ok), ubs), abi.brk_start_ok)
                 // (the break: brk(0)'s contract)
                 step r, hk hrb from e9 with mp.brk0_q using conj(w1W, w1u, bsW, ths1, hsy, s1)
@@ -4743,7 +4807,7 @@ proof
                 let LN := pair(0, pair(a2, pair(g, pair(1, pair(nw, pair(a6, pair(4096, pair(a8, pair(a9, pair(a10, pair(a11, a12)))))))))))
                 // (the break moved: brk's contract)
                 have _ _ ubg0 := expand(s7, mallocng.untouched)
-                have _ _ ubg := expand(ubg0, mallocng.bounds_kept)
+                have _ _ ubg _ := expand(ubg0, mallocng.bounds_kept)
                 have bsg: int_le(4096, V1.brk_start) by defs(simp(expand(hbs, abi.brk_start_ok), ubg), x86_64_linux.PAGE)
                 have bg0: int_lt(0, V1.brk_start) by arith(bsg)
                 have wgs: int_lt(0, WG.vm.brk_start) by simp(gs, bg0)
@@ -4792,7 +4856,7 @@ proof
                     obtain y3, tb7 kx7 from e18
                     have kcb: int_le(int_add(c.ctx, 928), 18446744073709551616) by simp(cv)
                     have _ _ ubs0 := expand(s7, mallocng.untouched)
-                    have _ _ ubs := expand(ubs0, mallocng.bounds_kept)
+                    have _ _ ubs _ := expand(ubs0, mallocng.bounds_kept)
                     have bs0: int_le(4096, V1.brk_start) by defs(simp(expand(hbs, abi.brk_start_ok), ubs), x86_64_linux.PAGE)
                     have hns2: !int_lt(nw, VG.brk_start) := rewrite(wgv, hns)
                     have hg2 := rewrite(wgo, rewrite(wgv, hg))
@@ -4801,7 +4865,7 @@ proof
                     have {tv = thread, ev = errno} := apply(mp.am_side[c := c, A := A, B := B, s := s, V1 := V1, A1 := A1, V := V], hst, hw, hth, htl, heo, hea, fun, fpv)
                     let EA := mallocng_specs.errno_at(s.fs_base)
                     let GUARD(Vm, Ve) := (g = 0 && Vm = V && Ve = V1) ||
-                      (g = 1 && (ex pg. gimple.fresh_pages(V, Vm, s.objs, int_div(bb, 4096), 1, pg) && Vm.brk = V.brk) && Ve = V1) ||
+                      (g = 1 && (ex pg. !(pg.kind = 2) && gimple.fresh_pages(V, Vm, s.objs, int_div(bb, 4096), 1, pg) && Vm.brk = V.brk) && Ve = V1) ||
                       (g = 1 && (ex e. Vm = mallocng_specs.wr32(V, EA, e) && Ve = mallocng_specs.wr32(V1, EA, e)))
                     let TG(y) := (ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && y = exc(pair(fn_update(fn_update(s, "vm", v), "objs", ob), LN), pair("raise", OVF))) ||
                       (ex Vm Ve. (Vm in x86_64_linux.Vm && GUARD(Vm, Ve)) && y = ok(pair(fn_update(s, "vm", Vm), LN), empty))
@@ -4859,7 +4923,7 @@ proof
                       let FMM := mallocng_specs.mmap_spec_fun()
                       let ARGM := seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(gimple.arg(64, bb)), seq_one(gimple.arg(64, 4096))), seq_one(gimple.arg(32, bits_of_int(32, 0)))),
                         seq_one(gimple.arg(32, bits_of_int(32, 50)))), seq_one(gimple.arg(32, bits_of_int(32, int_neg(1))))), seq_one(gimple.arg(64, bits_of_int(64, 0))))
-                      let PG(Vm) := (ex pg. gimple.fresh_pages(V, Vm, s.objs, int_div(bb, 4096), 1, pg) && Vm.brk = V.brk) || (ex e. Vm = mallocng_specs.wr32(V, EA, e))
+                      let PG(Vm) := (ex pg. !(pg.kind = 2) && gimple.fresh_pages(V, Vm, s.objs, int_div(bb, 4096), 1, pg) && Vm.brk = V.brk) || (ex e. Vm = mallocng_specs.wr32(V, EA, e))
                       have mc: int_add(int_add(x86_64_linux.MAP_PRIVATE, x86_64_linux.MAP_ANONYMOUS), x86_64_linux.MAP_FIXED) = 50 by defs(simp(), x86_64_linux.MAP_PRIVATE,
                         x86_64_linux.MAP_ANONYMOUS, x86_64_linux.MAP_FIXED)
                       have qm: all regs o2. gc.regs_ok(regs, ARGM) -> runs(FMM[regs], WV, o2) ->
@@ -4902,7 +4966,7 @@ proof
                           have p41: x86_64_linux.pages_for(4096) = 1 by defs(simp(), x86_64_linux.pages_for, x86_64_linux.PAGE)
                           let NPG := fn_update(fn_update(empty, "prot", x86_64_linux.prot_of(bits_of_int(32, 0))), "kind", 0)
                           have fr3: gimple.fresh_pages(V, Vx, s.objs, int_div(bb, 4096), 1, NPG) := rewrite(p41, rewrite(trans(ip, pob), rewrite((WV.objs = s.objs by simp()), rewrite(wvv, hfr))))
-                          have pg3: PG(Vx) by disj({1}, ex_intro({NPG}, taut(fr3, rewrite(wvv, hbr))))
+                          have pg3: PG(Vx) by disj({1}, ex_intro({NPG}, taut((!(NPG.kind = 2) by simp()), fr3, rewrite(wvv, hbr))))
                           show by ex_intro({Vx}, {r}, taut(hvx, pg3, ho))
                         qed
                         show by taut(q, k2, k3)
@@ -4911,7 +4975,7 @@ proof
                       step Vm r, hy hR from e20 with qm using conj(wvW, wvu, thsv, hmm, bbb)
                         have hvm hpg := hR
                         have hy2: y3 = ok(pair(fn_update(s, "vm", Vm), LN), empty) by simp(hy)
-                        have p1: (ex pg. gimple.fresh_pages(V, Vm, s.objs, int_div(bb, 4096), 1, pg) && Vm.brk = V.brk) -> TG(y3) proof
+                        have p1: (ex pg. !(pg.kind = 2) && gimple.fresh_pages(V, Vm, s.objs, int_div(bb, 4096), 1, pg) && Vm.brk = V.brk) -> TG(y3) proof
                           assume f
                           show by disj({2}, ex_intro({Vm}, {V1}, taut(hvm, g1, f, refl({V1}), hy2)))
                         qed
