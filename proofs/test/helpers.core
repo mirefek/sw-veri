@@ -1,0 +1,119 @@
+// The test program's helpers by their purpose (layers/test_malloc.sl):
+// pat(i, j) block i's j-th pattern byte, size(i) its size, fill(b, i)
+// writes the pattern, intact(b, i) checks it.
+
+// ----------------------------------------------------------------------
+//  Arithmetic
+
+// (multiplying by 31, by 40: GIMPLE's signed product's low half, the
+// unsigned one)
+theorem tp.imul_31: tr.imul_by(31)
+proof
+  have g: all y. y in bits(32) -> bits_add(32, int_mul(sint(32, y), sint(32, 31)), 0) = bits_mul(32, y, 31) proof
+    fix y
+    assume hy
+    have c1: int_lt(y, 2147483648) -> bits_add(32, int_mul(sint(32, y), 31), 0) = bits_mul(32, y, 31) proof
+      assume hl
+      show by defs(simp(hy, hl), bits_add, bits_mul, sint)
+    qed
+    have c2: !int_lt(y, 2147483648) -> bits_add(32, int_mul(sint(32, y), 31), 0) = bits_mul(32, y, 31) proof
+      assume hl
+      have e: int_mod(int_mul(int_sub(y, 4294967296), 31), 4294967296) = int_mod(int_mul(y, 31), 4294967296) by arith(hy)
+      show by defs(simp(hy, hl, e), bits_add, bits_mul, sint)
+    qed
+    have e: bits_add(32, int_mul(sint(32, y), 31), 0) = bits_mul(32, y, 31) by taut(c1, c2)
+    show by simp(e)
+  qed
+  show by defs(g, tr.imul_by)
+qed
+
+theorem tp.imul_40: tr.imul_by(40)
+proof
+  have g: all y. y in bits(32) -> bits_add(32, int_mul(sint(32, y), sint(32, 40)), 0) = bits_mul(32, y, 40) proof
+    fix y
+    assume hy
+    have c1: int_lt(y, 2147483648) -> bits_add(32, int_mul(sint(32, y), 40), 0) = bits_mul(32, y, 40) proof
+      assume hl
+      show by defs(simp(hy, hl), bits_add, bits_mul, sint)
+    qed
+    have c2: !int_lt(y, 2147483648) -> bits_add(32, int_mul(sint(32, y), 40), 0) = bits_mul(32, y, 40) proof
+      assume hl
+      have e: int_mod(int_mul(int_sub(y, 4294967296), 40), 4294967296) = int_mod(int_mul(y, 40), 4294967296) by arith(hy)
+      show by defs(simp(hy, hl, e), bits_add, bits_mul, sint)
+    qed
+    have e: bits_add(32, int_mul(sint(32, y), 40), 0) = bits_mul(32, y, 40) by taut(c1, c2)
+    show by simp(e)
+  qed
+  show by defs(g, tr.imul_by)
+qed
+
+// (a dword's low byte: it mod 256)
+theorem tp.low8: all y. y in bits(32) -> bits_and(32, y, 255) = int_mod(y, 256)
+proof
+  fix y
+  assume hy
+  have y0: y in omega by simp(hy)
+  have p8: pow2(8) = 256 by simp()
+  have m255: int_sub(pow2(8), 1) = 255 by simp()
+  have mb: int_mod(y, pow2(8)) in bits(32) by arith(y0, p8)
+  have e0: bits_and(32, bits_of_int(32, y), int_sub(pow2(8), 1)) = int_mod(y, pow2(8)) by bitwise({32}, y0, mb)
+  have b32: bits_of_int(32, y) = y by defs(simp(hy), bits_of_int)
+  show := rewrite(b32, rewrite(p8, rewrite(m255, e0)))
+qed
+
+// ----------------------------------------------------------------------
+//  pat, size: their runs
+
+theorem tp.pat_run: all i j s o. i in bits(32) -> j in bits(32) -> int_lt(i, test_malloc.NBLK) -> int_lt(j, test_malloc.size_of(test_malloc.NBLK)) ->
+  s in univ(1) -> runs(c_tests_test_malloc.pat(i, j), s, o) -> o = ok(s, bits_of_int(32, test_malloc.pat_of(i, j)))
+proof
+  fix i j s o
+  assume hi hj hil hjl hu hr
+  have nb: test_malloc.NBLK = 8 by defs(refl({8}), test_malloc.NBLK)
+  have i8: int_lt(i, 8) := rewrite(nb, hil)
+  have j3: int_lt(j, 336) by defs(simp(rewrite(nb, hjl)), test_malloc.size_of)
+  have si := mp(all_elim(ms.sint_small, {i}), simp(hi), arith(i8))
+  have sj := mp(all_elim(ms.sint_small, {j}), simp(hj), arith(j3))
+  have s31 := mp(all_elim(ms.sint_small, {31}), simp(), arith())
+  have r1: int_le(0, int_mul(i, 31)) && int_lt(int_mul(i, 31), 2147483648) by arith(hi, i8)
+  have f1: tr.s32_fits(int_mul(sint(32, i), sint(32, 31))) by defs(simp(si, s31, r1), gimple.fits)
+  have d1 := apply(g.smul32_det, {s}, {i}, {31}, hu, hi, simp(), tp.imul_31, f1)
+  let M := bits_mul(32, i, 31)
+  have me: M = int_mul(i, 31) by defs(arith(hi, i8), bits_mul)
+  have sm := mp(all_elim(ms.sint_small, {M}), (M in omega by simp(me, hi)), arith(me, hi, i8))
+  have r2: int_le(0, int_add(j, int_mul(i, 31))) && int_lt(int_add(j, int_mul(i, 31)), 2147483648) by arith(hi, i8, hj, j3)
+  have f2: tr.s32_fits(int_add(sint(32, j), sint(32, M))) by defs(simp(sj, sm, me, r2), gimple.fits)
+  have d2 := apply(g.sadd32_det, {s}, {j}, {M}, hu, hj, simp(), f2)
+  step x1, c1 from hr with d1
+  step c2 from c1 with d2
+  have ae: bits_add(32, j, M) = int_add(j, int_mul(i, 31)) by defs(arith(me, hi, i8, hj, j3), bits_add)
+  have lo := mp(all_elim(tp.low8, {bits_add(32, j, M)}), simp())
+  have pv: bits_and(32, bits_add(32, j, M), 255) = bits_of_int(32, test_malloc.pat_of(i, j))
+    by defs(simp(lo, ae, r2), test_malloc.pat_of, bits_of_int)
+  show by simp(c2, pv)
+qed
+
+theorem tp.size_run: all i s o. i in bits(32) -> int_lt(i, test_malloc.NBLK) -> s in univ(1) ->
+  runs(c_tests_test_malloc.size(i), s, o) -> o = ok(s, bits_of_int(32, test_malloc.size_of(i)))
+proof
+  fix i s o
+  assume hi hil hu hr
+  have nb: test_malloc.NBLK = 8 by defs(refl({8}), test_malloc.NBLK)
+  have i8: int_lt(i, 8) := rewrite(nb, hil)
+  have si := mp(all_elim(ms.sint_small, {i}), simp(hi), arith(i8))
+  have s40 := mp(all_elim(ms.sint_small, {40}), simp(), arith())
+  have r1: int_le(0, int_mul(i, 40)) && int_lt(int_mul(i, 40), 2147483648) by arith(hi, i8)
+  have f1: tr.s32_fits(int_mul(sint(32, i), sint(32, 40))) by defs(simp(si, s40, r1), gimple.fits)
+  have d1 := apply(g.smul32_det, {s}, {i}, {40}, hu, hi, simp(), tp.imul_40, f1)
+  let M := bits_mul(32, i, 40)
+  have me: M = int_mul(i, 40) by defs(arith(hi, i8), bits_mul)
+  have sm := mp(all_elim(ms.sint_small, {M}), (M in omega by simp(me, hi)), arith(me, hi, i8))
+  have s16 := mp(all_elim(ms.sint_small, {16}), simp(), arith())
+  have r2: int_le(0, int_add(int_mul(i, 40), 16)) && int_lt(int_add(int_mul(i, 40), 16), 2147483648) by arith(hi, i8)
+  have f2: tr.s32_fits(int_add(sint(32, M), sint(32, 16))) by defs(simp(sm, s16, me, r2), gimple.fits)
+  have d2 := apply(g.sadd32_det, {s}, {M}, {16}, hu, simp(), simp(), f2)
+  step x1, c1 from hr with d1
+  step c2 from c1 with d2
+  have ae: bits_add(32, M, 16) = bits_of_int(32, test_malloc.size_of(i)) by defs(arith(me, hi, i8), bits_add, bits_of_int, test_malloc.size_of)
+  show by simp(c2, ae)
+qed
