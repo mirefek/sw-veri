@@ -1,0 +1,162 @@
+// main's invariant by the malloc layer (layers/malloc.sl): what the
+// allocator's steps and the client's writes keep. S0 is the state at
+// main's start, H the state now (the world joined with the ghost blocks).
+
+// ----------------------------------------------------------------------
+//  The memory outside the allocator's at main's start (and errno's)
+
+// a byte mapped at S0, none of the allocator's nor errno's: still none of
+// the allocator's, in no live block, its byte and page as at S0
+abbrev tm.kept(O, eo, S0, H) := all a. a in omega -> !(a in O[S0]) -> !(a in malloc.errno_bytes(eo, S0)) ->
+  x86_64_linux.mapped(S0.vm, int_div(a, x86_64_linux.PAGE)) ->
+  (!(a in O[H]) && !(a in malloc.live_of(H.blocks))) && H.vm.bytes[bits_of_int(64, a)] = S0.vm.bytes[bits_of_int(64, a)] &&
+  H.vm.pages[int_div(a, x86_64_linux.PAGE)] = S0.vm.pages[int_div(a, x86_64_linux.PAGE)]
+
+// (a page as at S0: mapped as at S0)
+theorem tm.mapped_eq(V, V0, q): V.pages[q] = V0.pages[q] -> x86_64_linux.mapped(V0, q) -> x86_64_linux.mapped(V, q)
+proof
+  assume e m
+  show by defs(rewrite(sym(e), expand(m, x86_64_linux.mapped)), x86_64_linux.mapped)
+qed
+
+// An allocator step from H to T with extra bytes X (errno's or a live
+// block's), the live bytes after only the live ones before, the
+// allocator's or unmapped ones: the bytes kept, kept still
+theorem tm.kept_step(I, O, eo, S0, H, T, X): tm.kept(O, eo, S0, H) -> malloc.step_ok(I, O, H, T, X) -> H.fs_base = S0.fs_base ->
+  (all a. a in X -> a in malloc.errno_bytes(eo, H) || a in malloc.live_of(H.blocks)) ->
+  (all a. a in malloc.live_of(T.blocks) -> (a in malloc.live_of(H.blocks) || a in O[H]) || !x86_64_linux.mapped(H.vm, int_div(a, x86_64_linux.PAGE))) ->
+  tm.kept(O, eo, S0, T)
+proof
+  assume hk hst hfs hx hl
+  have af _ ow := expand(hst, malloc.step_ok)
+  have f1 _ _ _ _ := expand(af, malloc.alloc_frame)
+  have eb: malloc.errno_bytes(eo, H) = malloc.errno_bytes(eo, S0) by defs(simp(hfs), malloc.errno_bytes)
+  fix a
+  assume ao no ne m0
+  have nh nl bh ph := mp(all_elim(hk, {a}), ao, no, ne, m0)
+  have mh := apply(tm.mapped_eq[V := H.vm, V0 := S0.vm, q := int_div(a, x86_64_linux.PAGE)], ph, m0)
+  have nx: !(a in X) proof
+    assume w
+    show by taut(rewrite(eb, mp(all_elim(hx, {a}), w)), ne, nl)
+  qed
+  have b1 p1 := mp(all_elim(f1, {a}), ao, conj(conj(nh, nx), mh))
+  have nt: !(a in O[T]) proof
+    assume w
+    show by taut(mp(all_elim(ow, {a}), ao, w), nh, nx, mh)
+  qed
+  have nlt: !(a in malloc.live_of(T.blocks)) proof
+    assume w
+    show by taut(mp(all_elim(hl, {a}), w), nl, nh, mh)
+  qed
+  show by taut(nt, nlt, trans(b1, bh), trans(p1, ph))
+qed
+
+// (malloc's new block p of z bytes, fresh: a live byte after a live one
+// before, or the allocator's, or unmapped)
+theorem tm.live_new(O, H, p, z, a): malloc.fresh_block(O, H, p, z) -> a in malloc.live_of(malloc.set_block(H.blocks, p, some(z))) ->
+  (a in malloc.live_of(H.blocks) || a in O[H]) || !x86_64_linux.mapped(H.vm, int_div(a, x86_64_linux.PAGE))
+proof
+  assume hf w
+  have ao ex := (a in omega && (ex q. q in bits(64) && (!(malloc.set_block(H.blocks, p, some(z))[q] = none) &&
+      a in malloc.range(q, snd(malloc.set_block(H.blocks, p, some(z))[q])))) by taut(apply(mp.live_def[b := malloc.set_block(H.blocks, p, some(z)), a := a]), w))
+  obtain q, hq hqn hqr from ex
+  have _ fr := expand(hf, malloc.fresh_block)
+  have c1: q = p -> (a in malloc.live_of(H.blocks) || a in O[H]) || !x86_64_linux.mapped(H.vm, int_div(a, x86_64_linux.PAGE)) proof
+    assume e
+    have sb: malloc.set_block(H.blocks, p, some(z))[q] = some(z) by defs(simp(e, hq), malloc.set_block)
+    have hr2: a in malloc.range(q, z) by simp(rewrite(sb, hqr))
+    have r1 r2 := (int_le(q, a) && int_lt(a, int_add(q, z)) by taut(set_select_def[s := omega, p := x. int_le(q, x) && int_lt(x, int_add(q, z)), z := a], expand(hr2, malloc.range)))
+    have re: a in malloc.range(p, malloc.extent(z)) by defs(sel(taut(ao, (int_le(p, a) by simp(e, r1)), (int_lt(a, int_add(p, ite(z = 0, 1, z))) by arith(e, r2, (int_le(z, ite(z = 0, 1, z)) by simp()))))), malloc.range, malloc.extent)
+    show by taut(mp(all_elim(fr, {a}), ao, re))
+  qed
+  have c2: !(q = p) -> (a in malloc.live_of(H.blocks) || a in O[H]) || !x86_64_linux.mapped(H.vm, int_div(a, x86_64_linux.PAGE)) proof
+    assume ne
+    have sb: malloc.set_block(H.blocks, p, some(z))[q] = H.blocks[q] by defs(simp(ne, hq), malloc.set_block)
+    have l: a in malloc.live_of(H.blocks) by taut(apply(mp.live_def[b := H.blocks, a := a]), ao,
+      (ex q2. q2 in bits(64) && (!(H.blocks[q2] = none) && a in malloc.range(q2, snd(H.blocks[q2]))) by ex_intro({q}, taut(hq, rewrite(sb, hqn), rewrite(sb, hqr)))))
+    show by taut(l)
+  qed
+  show by taut(c1, c2)
+qed
+
+// ----------------------------------------------------------------------
+//  The test's blocks: block k at q, its pattern
+
+// q block k's: a live block, at least size(k) bytes, its pattern
+abbrev tm.bk(H, q, k) := ((q in bits(64) && !(q = 0)) && !(H.blocks[q] = none)) && int_le(test_malloc.size_of(k), snd(H.blocks[q])) && test_malloc.has_pat(H.vm, q, k)
+
+// (a byte of a live block: live, none of the allocator's, mapped
+// read-write)
+theorem tm.live_facts(I, O, H, q, a): malloc.owned_private(I, O) -> malloc.inv_wf(I) -> H in rec_and(abi.World, malloc.Heap.ghost) -> H in I ->
+  q in bits(64) -> !(H.blocks[q] = none) -> a in omega -> int_le(q, a) -> int_lt(a, int_add(q, snd(H.blocks[q]))) ->
+  lv: a in malloc.live_of(H.blocks) && own: !(a in O[H]) && rw: malloc.rw_mapped(H.vm, a)
+proof
+  assume hop hwf ht hi hq hn ao h1 h2
+  have lv := apply(mp.blk_live[b := H.blocks, p := q, a := a], hq, hn, ao,
+    (a in malloc.range(q, snd(H.blocks[q])) by defs(sel(taut(ao, h1, h2)), malloc.range)))
+  have dj := expand(mp(all_elim(expand(hop, malloc.owned_private), {H}), ht, hi), malloc.disjoint)
+  have no: !(a in O[H]) by taut(mp(all_elim(dj, {a}), ao), (a in malloc.live(H) by defs(lv, malloc.live)))
+  have _ lr := expand(mp(all_elim(expand(hwf, malloc.inv_wf), {H}), ht, hi), malloc.heap_wf)
+  have rw := mp(all_elim(mp(all_elim(expand(lr, malloc.live_rw), {q}), hq, hn), {a}), ao, conj(h1, h2))
+  show by taut(lv, no, rw)
+qed
+
+// (block k's pattern at q: kept where its bytes are)
+theorem tm.pat_keep(V, V2, q, k): V in x86_64_linux.Vm -> V2 in x86_64_linux.Vm -> q in bits(64) ->
+  int_lt(int_add(q, test_malloc.size_of(k)), 18446744073709551616) -> test_malloc.has_pat(V, q, k) ->
+  (all a. a in omega -> int_le(q, a) -> int_lt(a, int_add(q, test_malloc.size_of(k))) -> V2.bytes[bits_of_int(64, a)] = V.bytes[bits_of_int(64, a)]) ->
+  test_malloc.has_pat(V2, q, k)
+proof
+  assume hv hv2 hq hl hp hag
+  have vt: V.bytes in fn_space(bits(64), bits(8)) by simp(expand(hv, x86_64_linux.Vm))
+  have vt2: V2.bytes in fn_space(bits(64), bits(8)) by simp(expand(hv2, x86_64_linux.Vm))
+  have g: all j. j in omega -> int_lt(j, test_malloc.size_of(k)) ->
+      gimple.bytes_at(V2, bits_add(64, q, bits_of_int(64, j)), 1) = test_malloc.pat_of(k, j) proof
+    fix j
+    assume hj hjl
+    let X := bits_add(64, q, bits_of_int(64, j))
+    have xe: X = int_add(q, j) by defs(arith(hq, hj, hjl, hl), bits_add, bits_of_int, pow2)
+    have xb: X in bits(64) by arith(xe, hq, hj, hjl, hl)
+    have bq: bits_of_int(64, int_add(q, j)) = int_add(q, j) by defs(arith(hq, hj, hjl, hl), bits_of_int, pow2)
+    have e := rewrite(bq, mp(all_elim(hag, {int_add(q, j)}), (int_add(q, j) in omega by arith(hq, hj)), (int_le(q, int_add(q, j)) by arith(hj)),
+      (int_lt(int_add(q, j), int_add(q, test_malloc.size_of(k))) by arith(hjl))))
+    have g0 := rewrite(xe, mp(all_elim(expand(hp, test_malloc.has_pat), {j}), hj, hjl))
+    have b1 := rewrite(xe, mp(all_elim(ms.bytes1, {V}, {X}), vt, xb))
+    have b2 := rewrite(xe, mp(all_elim(ms.bytes1, {V2}, {X}), vt2, xb))
+    show := rewrite(sym(xe), trans(trans(b2, e), trans(sym(b1), g0)))
+  qed
+  show by defs(g, test_malloc.has_pat)
+qed
+
+// An allocator step from H to T, its extra bytes none of block k's at q,
+// that block as it was: block k's still
+theorem tm.bk_step(I, O, H, T, X, q, k): k in omega -> malloc.owned_private(I, O) -> malloc.inv_wf(I) -> H in rec_and(abi.World, malloc.Heap.ghost) -> H in I ->
+  H.vm in x86_64_linux.Vm -> T.vm in x86_64_linux.Vm -> tm.bk(H, q, k) -> malloc.step_ok(I, O, H, T, X) ->
+  (all a. a in omega -> int_le(q, a) -> int_lt(a, int_add(q, snd(H.blocks[q]))) -> !(a in X)) -> T.blocks[q] = H.blocks[q] ->
+  tm.bk(T, q, k)
+proof
+  assume ko hop hwf ht hi hv hv2 hb hst hx hbe
+  have hq q0 hn hz hp := hb
+  have af _ _ := expand(hst, malloc.step_ok)
+  have f1 _ _ _ _ := expand(af, malloc.alloc_frame)
+  let SZ := test_malloc.size_of(k)
+  have s16: int_le(16, SZ) by defs(arith(ko), test_malloc.size_of)
+  // (the block's last byte mapped: below the task's end)
+  have lst := apply(tm.live_facts[I := I, O := O, H := H, q := q, a := int_sub(int_add(q, SZ), 1)], hop, hwf, ht, hi, hq, hn,
+    (int_sub(int_add(q, SZ), 1) in omega by arith(hq, s16)), (int_le(q, int_sub(int_add(q, SZ), 1)) by arith(s16)), (int_lt(int_sub(int_add(q, SZ), 1), int_add(q, snd(H.blocks[q]))) by arith(hz)))
+  have {rwl = rw} := lst
+  have ml _ _ := expand(rwl, malloc.rw_mapped)
+  have mt _ := expand(ml, x86_64_linux.mapped)
+  have hl: int_lt(int_add(q, SZ), 18446744073709551616) by defs(arith(mt, hq, s16), x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)
+  have ag: all a. a in omega -> int_le(q, a) -> int_lt(a, int_add(q, SZ)) -> T.vm.bytes[bits_of_int(64, a)] = H.vm.bytes[bits_of_int(64, a)] proof
+    fix a
+    assume ao h1 h2
+    have h3: int_lt(a, int_add(q, snd(H.blocks[q]))) by arith(h2, hz)
+    have {no = own, rw = rw} := apply(tm.live_facts[I := I, O := O, H := H, q := q, a := a], hop, hwf, ht, hi, hq, hn, ao, h1, h3)
+    have m _ _ := expand(rw, malloc.rw_mapped)
+    have b1 _ := mp(all_elim(f1, {a}), ao, conj(conj(no, mp(all_elim(hx, {a}), ao, h1, h3)), m))
+    show b1
+  qed
+  have p2 := apply(tm.pat_keep[V := H.vm, V2 := T.vm, q := q, k := k], hv, hv2, hq, hl, hp, ag)
+  show by taut(hq, q0, rewrite(sym(hbe), hn), rewrite(sym(hbe), hz), p2)
+qed
