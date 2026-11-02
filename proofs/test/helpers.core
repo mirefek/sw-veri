@@ -252,7 +252,7 @@ qed
 theorem tp.size_q: all t i regs o2. t in abi.World -> i in bits(32) -> int_lt(i, test_malloc.NBLK) ->
   gc.regs_ok(regs, seq_one(gimple.arg(32, i))) -> runs(test_malloc.size_spec_fun()[regs], t, o2) ->
   abi.ovf_out(t, o2) ||
-  (ex r. o2 = ok(fn_update(t, "vm", t.vm), r) && bits_of_int(32, fst(r)) = bits_of_int(32, test_malloc.size_of(i)) && fst(r) in bits(64))
+  (ex r. o2 = ok(fn_update(t, "vm", t.vm), r) && (bits_of_int(32, fst(r)) = bits_of_int(32, test_malloc.size_of(i)) && fst(r) in bits(64)))
 proof
   fix t i regs o2
   assume hw hi hil hro h2
@@ -273,15 +273,22 @@ proof
     assume hr
     show := mp(all_elim(g.result32_inv, {t}, {SV}, {o}), simp(), hr)
   qed
-  show := apply(tp.fun_ql[p := x0. test_malloc.size_spec(bits_of_int(32, x0[0])), w := 32, n := 1, regs := regs, s := t, o2 := o2, v := SV], ra, o1, hw, pc, res,
+  have q := apply(tp.fun_ql[p := x0. test_malloc.size_spec(bits_of_int(32, x0[0])), w := 32, n := 1, regs := regs, s := t, o2 := o2, v := SV], ra, o1, hw, pc, res,
     expand(h2, test_malloc.size_spec_fun))
+  have c: (ex r. o2 = ok(fn_update(t, "vm", t.vm), r) && bits_of_int(32, fst(r)) = SV && fst(r) in bits(64)) ->
+      (ex r. o2 = ok(fn_update(t, "vm", t.vm), r) && (bits_of_int(32, fst(r)) = SV && fst(r) in bits(64))) proof
+    assume e
+    obtain r, e1 e2 e3 from e
+    show by ex_intro({r}, taut(e1, e2, e3))
+  qed
+  show by taut(q, c)
 qed
 
 // pat(i, j): block i's j-th pattern byte, the world unchanged
 theorem tp.pat_q: all t i j regs o2. t in abi.World -> i in bits(32) -> j in bits(32) -> int_lt(i, test_malloc.NBLK) -> int_lt(j, test_malloc.size_of(test_malloc.NBLK)) ->
   gc.regs_ok(regs, seq_concat(seq_one(gimple.arg(32, i)), seq_one(gimple.arg(32, j)))) -> runs(test_malloc.pat_spec_fun()[regs], t, o2) ->
   abi.ovf_out(t, o2) ||
-  (ex r. o2 = ok(fn_update(t, "vm", t.vm), r) && bits_of_int(32, fst(r)) = bits_of_int(32, test_malloc.pat_of(i, j)) && fst(r) in bits(64))
+  (ex r. o2 = ok(fn_update(t, "vm", t.vm), r) && (bits_of_int(32, fst(r)) = bits_of_int(32, test_malloc.pat_of(i, j)) && fst(r) in bits(64)))
 proof
   fix t i j regs o2
   assume hw hi hj hil hjl hro h2
@@ -302,6 +309,274 @@ proof
     assume hr
     show := mp(all_elim(g.result32_inv, {t}, {PV}, {o}), simp(), hr)
   qed
-  show := apply(tp.fun_ql[p := x0. test_malloc.pat_spec(bits_of_int(32, x0[0]), bits_of_int(32, x0[1])), w := 32, n := 2, regs := regs, s := t, o2 := o2, v := PV], ra, o2l, hw, pc, res,
+  have q := apply(tp.fun_ql[p := x0. test_malloc.pat_spec(bits_of_int(32, x0[0]), bits_of_int(32, x0[1])), w := 32, n := 2, regs := regs, s := t, o2 := o2, v := PV], ra, o2l, hw, pc, res,
     expand(h2, test_malloc.pat_spec_fun))
+  have c: (ex r. o2 = ok(fn_update(t, "vm", t.vm), r) && bits_of_int(32, fst(r)) = PV && fst(r) in bits(64)) ->
+      (ex r. o2 = ok(fn_update(t, "vm", t.vm), r) && (bits_of_int(32, fst(r)) = PV && fst(r) in bits(64))) proof
+    assume e
+    obtain r, e1 e2 e3 from e
+    show by ex_intro({r}, taut(e1, e2, e3))
+  qed
+  show by taut(q, c)
+qed
+
+// ----------------------------------------------------------------------
+//  fill: its run
+
+// (a callee g called as F)
+abbrev tp.calls(g, F) := all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(g[regs], s, o) -> runs(F[regs], s, o)
+
+// fill's loop: V the memory s0 with block i's first j pattern bytes written at b
+abbrev tp.finv(s0, V, b, i, j) := V in x86_64_linux.Vm && fn_update(V, "bytes", s0.bytes) = s0 &&
+  (all k. k in omega -> int_lt(k, j) -> gimple.bytes_at(V, bits_add(64, b, bits_of_int(64, k)), 1) = test_malloc.pat_of(i, k)) &&
+  (all a. a in bits(64) -> !(int_le(b, a) && int_lt(a, int_add(b, j))) -> V.bytes[a] = s0.bytes[a])
+
+// (the next pattern byte stored at b + j)
+theorem tp.finv_step(s0, V, b, i, j, A, v): tp.finv(s0, V, b, i, j) -> b in bits(64) -> j in omega -> int_lt(int_add(b, j), 18446744073709551616) ->
+  A = int_add(b, j) -> bits_of_int(8, v) = test_malloc.pat_of(i, j) ->
+  tp.finv(s0, fn_update(V, "bytes", x86_64_linux.store_le(V.bytes, A, 1, v)), b, i, int_add(j, 1))
+proof
+  assume hf hb hj hl ha hv
+  have vV e0 pf of := hf
+  let V2 := fn_update(V, "bytes", x86_64_linux.store_le(V.bytes, A, 1, v))
+  have v2V := mp(all_elim(ms.wr_any, {V}, {A}, {1}, {v}), vV)
+  have bt: V.bytes in fn_space(bits(64), bits(8)) by simp(vV)
+  have e2: fn_update(V2, "bytes", s0.bytes) = s0 := trans((fn_update(V2, "bytes", s0.bytes) = fn_update(V, "bytes", s0.bytes) by simp()), e0)
+  have ab: A in bits(64) by arith(ha, hb, hj, hl)
+  have p2: all k. k in omega -> int_lt(k, int_add(j, 1)) -> gimple.bytes_at(V2, bits_add(64, b, bits_of_int(64, k)), 1) = test_malloc.pat_of(i, k) proof
+    fix k
+    assume hk hkl
+    have kb: bits_add(64, b, bits_of_int(64, k)) = int_add(b, k) by defs(arith(hb, hk, hkl, hl), bits_add, bits_of_int, pow2)
+    have b2: V2.bytes in fn_space(bits(64), bits(8)) by simp(mp(all_elim(x86.store_typed, {V.bytes}, {A}, {1}, {v}), bt))
+    have kb64: int_add(b, k) in bits(64) by arith(hb, hk, hkl, hl)
+    have r2 := mp(all_elim(ms.bytes1, {V2}, {int_add(b, k)}), simp(b2), kb64)
+    have g1 := subst({y. gimple.bytes_at(V2, bits_add(64, b, bits_of_int(64, k)), 1) = gimple.bytes_at(V2, y, 1)}, kb, refl({gimple.bytes_at(V2, bits_add(64, b, bits_of_int(64, k)), 1)}))
+    have vb: V2.bytes = x86_64_linux.store_le(V.bytes, A, 1, v) by simp()
+    have c1: k = j -> gimple.bytes_at(V2, bits_add(64, b, bits_of_int(64, k)), 1) = test_malloc.pat_of(i, k) proof
+      assume e
+      have st := apply(mp.st1_at[z := V.bytes, a := A, v := v], ab)
+      have ak: A = int_add(b, k) by arith(ha, e)
+      have st2 := rewrite(sym(vb), subst({y. x86_64_linux.store_le(V.bytes, A, 1, v)[y] = bits_of_int(8, v)}, ak, st))
+      have hv2: bits_of_int(8, v) = test_malloc.pat_of(i, k) := rewrite(sym(e), hv)
+      show := trans(g1, trans(r2, trans(st2, hv2)))
+    qed
+    have c2: !(k = j) -> gimple.bytes_at(V2, bits_add(64, b, bits_of_int(64, k)), 1) = test_malloc.pat_of(i, k) proof
+      assume ne
+      have kl: int_lt(k, j) by arith(hkl, ne)
+      have so := apply(mp.st_out[B := V.bytes, c := A, k := 1, v := v, x := int_add(b, k)], kb64, ab, simp(), arith(ha, hl, hj),
+        (int_le(int_add(A, 1), int_add(b, k)) || int_lt(int_add(b, k), A) by arith(ha, kl)))
+      have r1 := mp(all_elim(ms.bytes1, {V}, {int_add(b, k)}), simp(bt), kb64)
+      have pk := rewrite(kb, mp(all_elim(pf, {k}), hk, kl))
+      have vk: V.bytes[int_add(b, k)] = test_malloc.pat_of(i, k) := trans(sym(r1), pk)
+      show := trans(g1, trans(r2, trans(rewrite(sym(vb), so), vk)))
+    qed
+    show by taut(c1, c2)
+  qed
+  have o2: all a. a in bits(64) -> !(int_le(b, a) && int_lt(a, int_add(b, int_add(j, 1)))) -> V2.bytes[a] = s0.bytes[a] proof
+    fix a
+    assume ha2 hn
+    have so := apply(mp.st_out[B := V.bytes, c := A, k := 1, v := v, x := a], ha2, ab, simp(), arith(ha, hl, hj),
+      (int_le(int_add(A, 1), a) || int_lt(a, A) by arith(ha, hn)))
+    have oo := mp(all_elim(of, {a}), ha2, (!(int_le(b, a) && int_lt(a, int_add(b, j))) by arith(hn)))
+    show by simp(so, oo)
+  qed
+  show by taut(v2V, e2, p2, o2)
+qed
+
+// (the thread pointer sound after the writes: its word none of the block's)
+theorem tp.th_fill(s0, V, b, i, j, fs): fs in bits(64) -> abi.thread_ok(s0, fs) -> tp.finv(s0, V, b, i, j) -> int_le(j, test_malloc.size_of(i)) ->
+  b in bits(64) -> (all k. k in omega -> int_lt(k, test_malloc.size_of(i)) -> !(int_add(b, k) in malloc.range(fs, 8))) -> abi.thread_ok(V, fs)
+proof
+  assume hfb ht hf hjl hb hap
+  have vV e0 _ of := hf
+  have {fsl = fsl} := apply(mp.top_fsl, hfb, ht)
+  have up2 := mp(app_update_other[f := V, k := "bytes", v := s0.bytes, x := "pages"], (!("pages" = "bytes") by simp()))
+  have uvp: V.pages = s0.pages := sym(rewrite(e0, up2))
+  have same: all x. x in omega -> int_lt(x, 8) -> V.bytes[bits_of_int(64, int_add(fs, x))] = s0.bytes[bits_of_int(64, int_add(fs, x))] &&
+      V.pages[int_div(int_add(fs, x), x86_64_linux.PAGE)] = s0.pages[int_div(int_add(fs, x), x86_64_linux.PAGE)] proof
+    fix x
+    assume hx hxl
+    have ea: bits_of_int(64, int_add(fs, x)) = int_add(fs, x) by defs(arith(hfb, hx, hxl, fsl), bits_of_int, pow2)
+    have ab: int_add(fs, x) in bits(64) by arith(hfb, hx, hxl, fsl)
+    have nb: !(int_le(b, int_add(fs, x)) && int_lt(int_add(fs, x), int_add(b, j))) proof
+      assume w
+      have w1 w2 := w
+      let K := int_sub(int_add(fs, x), b)
+      have ko: K in omega by arith(w1, hb, hfb, hx)
+      have kl: int_lt(K, test_malloc.size_of(i)) by arith(w2, hjl)
+      have inr: int_add(b, K) in malloc.range(fs, 8) by defs(sel(arith(hfb, hx, hxl, hb)), malloc.range)
+      show by taut(mp(all_elim(hap, {K}), ko, kl), inr)
+    qed
+    have oo := mp(all_elim(of, {int_add(fs, x)}), ab, nb)
+    show by taut(rewrite(sym(ea), oo), (V.pages[int_div(int_add(fs, x), x86_64_linux.PAGE)] = s0.pages[int_div(int_add(fs, x), x86_64_linux.PAGE)] by simp(uvp)))
+  qed
+  show := apply(mp.th_same[V0 := s0, V1 := V, fs := fs], hfb, ht, same)
+qed
+
+theorem tp.fill_run: all b i gp gs s o. b in bits(64) -> i in bits(32) -> int_lt(i, test_malloc.NBLK) -> s in abi.World -> s in univ(1) ->
+  abi.thread_ok(s.vm, s.fs_base) -> test_malloc.blk_usable(s.vm, s.objs, b, i, true) ->
+  (all k. k in omega -> int_lt(k, test_malloc.size_of(i)) -> !(int_add(b, k) in malloc.range(s.fs_base, 8))) ->
+  tp.calls(gp, test_malloc.pat_spec_fun()) -> tp.calls(gs, test_malloc.size_spec_fun()) ->
+  runs(c_tests_test_malloc.fill(b, i, gp, gs), s, o) ->
+  abi.ovf_out(s, o) || (ex V. tp.finv(s.vm, V, b, i, test_malloc.size_of(i)) && o = ok(fn_update(s, "vm", V), empty))
+proof
+  fix b i gp gs s o
+  assume hb hi hil hw hu hth hus hap hgp hgs hr
+  let SZ := test_malloc.size_of(i)
+  let OVF := exc_val("stack_overflow", empty)
+  have fsb: s.fs_base in bits(64) by simp(expand(hw, abi.World))
+  step j0, h1 from hr
+  obtain r, wl kr from h1
+  let BODY(x, y) := loop_body(wl)
+  let W(V) := fn_update(s, "vm", V)
+  let G3(j, V, y) := (int_lt(j, SZ) && (ex V2. tp.finv(s.vm, V2, b, i, int_add(j, 1)) && y = ok(pair(W(V2), int_add(j, 1)), empty))) ||
+    (j = SZ && y = exc(pair(W(V), j), pair("brk", empty))) ||
+    (ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && y = exc(pair(fn_update(W(v), "objs", ob), j), pair("raise", OVF)))
+  have trip: all j V y. j in omega -> int_le(j, SZ) -> tp.finv(s.vm, V, b, i, j) -> BODY(pair(W(V), j), y) -> G3(j, V, y) proof
+    fix j V y
+    assume hj hjl hf hbd
+    have vV e0 _ _ := hf
+    have wW wu := apply(mp.am_world, hw, hu, vV)
+    have th := apply(tp.th_fill[s0 := s.vm, V := V, b := b, i := i, j := j, fs := s.fs_base], fsb, hth, hf, hjl, hb, hap)
+    have thW: abi.thread_ok(W(V).vm, W(V).fs_base) by simp(th)
+    step r1, e1 hr1 from hbd with tp.size_q using hgs, wW, wu, thW, hi, hil
+    have hz _ := hr1
+    have ww: fn_update(fn_update(s, "vm", V), "vm", app(fn_update(s, "vm", V), "vm")) = fn_update(s, "vm", V) by simp()
+    have e2 := rewrite(ww, rewrite(hz, e1))
+    have nb: test_malloc.NBLK = 8 by defs(refl({8}), test_malloc.NBLK)
+    have i8: int_lt(i, 8) := rewrite(nb, hil)
+    have szl: int_le(SZ, 296) by defs(arith(i8, hi), test_malloc.size_of)
+    have sz0: int_le(0, SZ) by defs(arith(hi), test_malloc.size_of)
+    have szo: SZ in omega by defs(arith(hi), test_malloc.size_of)
+    have p32: int_pow(2, 32) = 4294967296 by simp()
+    have bS: bits_of_int(32, SZ) = SZ by defs(arith(szl, sz0, szo, p32), bits_of_int, pow2)
+    have sS: sint(32, bits_of_int(32, SZ)) = SZ := rewrite(sym(bS), mp(all_elim(ms.sint_small, {SZ}), szo, arith(szl)))
+    have sj: sint(32, j) = j := mp(all_elim(ms.sint_small, {j}), hj, arith(hjl, szl))
+    have cA: j = SZ -> G3(j, V, y) proof
+      assume e
+      have ca: int_le(sint(32, bits_of_int(32, SZ)), sint(32, j)) by simp(sS, sj, e)
+      step eA from e2 with ca
+      show by taut(e, eA)
+    qed
+    have cB: int_lt(j, SZ) -> G3(j, V, y) proof
+      assume lt
+      have cb: !int_le(sint(32, bits_of_int(32, SZ)), sint(32, j)) by simp(sS, sj, (!int_le(SZ, j) by arith(lt)))
+      have jb: j in bits(32) by arith(hj, hjl, szl)
+      have jl: int_lt(j, test_malloc.size_of(test_malloc.NBLK)) by defs(arith(hjl, szl, nb), test_malloc.size_of)
+      step q2 r2, e3 hr2 from e2 with cb, tp.pat_q using hgp, wW, wu, thW, hi, jb, hil, jl
+      have hz2 _ := hr2
+      // (the pattern byte: below 256)
+      let PT := test_malloc.pat_of(i, j)
+      have pto: PT in omega by defs(arith(hi, hj), test_malloc.pat_of)
+      have ptl: int_lt(PT, 256) by defs(arith(hi, hj), test_malloc.pat_of)
+      have pb32: bits_of_int(32, PT) = PT by defs(arith(pto, ptl, p32), bits_of_int, pow2)
+      have p8: bits_of_int(8, PT) = PT by defs(arith(pto, ptl), bits_of_int, pow2)
+      have e4 := rewrite(p8, rewrite(pb32, rewrite(hz2, rewrite(ww, e3))))
+      // (b + j: the byte's address)
+      let T64 := fn_update(fn_update(empty, "prec", 64), "signed", true)
+      have xb _ sv _ _ := mp(all_elim(tr.sext_vals, {j}), jb)
+      have sx: gimple.sval(T64, bits_sext(32, 64, j)) = j := trans(sv, sj)
+      have bu1 bu2 bu3 := expand(hus, test_malloc.blk_usable)
+      have bjl: int_lt(int_add(b, j), 18446744073709551616) by arith(bu2, lt, szl)
+      have pd := apply(g.padd_det, {W(V)}, {b}, {bits_sext(32, 64, j)}, wu, hb, xb,
+        (int_le(0, int_add(b, gimple.sval(T64, bits_sext(32, 64, j)))) by arith(sx, hb, hj)),
+        (int_lt(int_add(b, gimple.sval(T64, bits_sext(32, 64, j))), pow2(64)) by defs(arith(sx, bjl), pow2)))
+      let A := int_add(b, gimple.sval(T64, bits_sext(32, 64, j)))
+      have ae: A = int_add(b, j) by simp(sx)
+      have ab: A in bits(64) by arith(ae, hb, hj, bjl)
+      have z0: int_add(A, 0) = int_add(b, j) by arith(ae)
+      have uj := mp(all_elim(bu3, {j}), hj, lt)
+      have uV := apply(mp.usable_bytes[v := s.vm, v2 := V, objs := s.objs, a := int_add(b, j), n := 1, w := true], e0, uj)
+      have md: g.mem_defined(W(V), A, 0, 1, true) by simp(z0, uV, (!(A = 0) by arith(ae, bu1, hb, hj)), (int_lt(int_add(b, j), pow2(64)) by defs(arith(bjl), pow2)))
+      have sd := mp(all_elim(ms.st8_det, {W(V)}, {A}, {0}, {PT}), wW, wu, ab, simp(), md)
+      let V2 := fn_update(V, "bytes", x86_64_linux.store_le(V.bytes, int_add(A, 0), 1, PT))
+      have v2V := mp(all_elim(ms.wr_any, {V}, {int_add(A, 0)}, {1}, {PT}), vV)
+      have w2W w2u := apply(mp.am_world, hw, hu, v2V)
+      have ew: fn_update(W(V), "vm", fn_update(W(V).vm, "bytes", x86_64_linux.store_le(W(V).vm.bytes, int_add(A, 0), 1, PT))) = W(V2) by simp()
+      have s1 := mp(all_elim(ms.sint_small, {1}), simp(), arith())
+      have fj: tr.s32_fits(int_add(sint(32, j), sint(32, 1))) by defs(simp(sj, s1, (int_lt(int_add(j, 1), 2147483648) by arith(lt, szl)), (int_le(0, j) by arith(hj))), gimple.fits)
+      have ad := apply(g.sadd32_det, {W(V2)}, {j}, {1}, w2u, jb, simp(), fj)
+      step e5 from e4 with pd, sd, ew, ad
+      have j1: bits_add(32, j, 1) = int_add(j, 1) by defs(arith(lt, szl, hj, p32), bits_add, pow2)
+      have fi := apply(tp.finv_step[s0 := s.vm, V := V, b := b, i := i, j := j, A := int_add(A, 0), v := PT], hf, hb, hj, bjl, z0, p8)
+      have k1: ex V3. tp.finv(s.vm, V3, b, i, int_add(j, 1)) && y = ok(pair(W(V3), int_add(j, 1)), empty)
+        by ex_intro({V2}, taut(fi, rewrite(j1, e5)))
+      show by taut(lt, k1)
+    qed
+    show by taut(cA, cB, (j = SZ || int_lt(j, SZ) by arith(hjl)))
+  qed
+  // the loop: j bytes written, j up to SZ
+  let PI(x) := ex j V. ((j in omega && int_le(j, SZ)) && tp.finv(s.vm, V, b, i, j)) && x = pair(W(V), j)
+  let M(x) := int_sub(SZ, snd(x))
+  have pv pf pd pbt := apply(ms.world_parts, hw)
+  have ss: fn_update(s, "vm", s.vm) = s := mp(fn_update_same[f := s, k := "vm"], pf, pd)
+  have vb0: fn_update(s.vm, "bytes", s.vm.bytes) = s.vm by simp(pv)
+  have szo: SZ in omega by defs(arith(hi), test_malloc.size_of)
+  have f0: tp.finv(s.vm, s.vm, b, i, 0) proof
+    have a1: all k. k in omega -> int_lt(k, 0) -> gimple.bytes_at(s.vm, bits_add(64, b, bits_of_int(64, k)), 1) = test_malloc.pat_of(i, k) proof
+      fix k
+      assume hk hkl
+      show by arith(hk, hkl)
+    qed
+    have a2: all a. a in bits(64) -> !(int_le(b, a) && int_lt(a, int_add(b, 0))) -> s.vm.bytes[a] = s.vm.bytes[a] proof
+      fix a
+      assume _ _
+      show := refl({s.vm.bytes[a]})
+    qed
+    show by taut(pv, vb0, a1, a2)
+  qed
+  have p0: PI(pair(s, 0)) by ex_intro({0}, {s.vm}, taut((0 in omega by simp()), (int_le(0, SZ) by arith(szo)), f0, (pair(s, 0) = pair(W(s.vm), 0) by simp(ss))))
+  have pm: all x. PI(x) -> M(x) in omega proof
+    fix x
+    assume hp
+    obtain j V, hj hjl _ _ _ _ hx from hp
+    show by simp(hx, (int_sub(SZ, j) in omega by arith(hj, hjl)))
+  qed
+  have nx: all x x2. PI(x) -> BODY(x, ok(x2, empty)) -> PI(x2) && int_lt(M(x2), M(x)) proof
+    fix x x2
+    assume hp hbd
+    obtain j V, hj hjl f1 f2 f3 f4 hx from hp
+    have hf: tp.finv(s.vm, V, b, i, j) by taut(f1, f2, f3, f4)
+    have t := mp(all_elim(trip, {j}, {V}, {ok(x2, empty)}), hj, hjl, hf, rewrite(hx, hbd))
+    have nb: !(ok(x2, empty) = exc(pair(W(V), j), pair("brk", empty))) by defs(simp(), ok, exc)
+    have no: !(ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && ok(x2, empty) = exc(pair(fn_update(W(v), "objs", ob), j), pair("raise", OVF))) proof
+      assume e
+      obtain v ob, _ _ he from e
+      show by defs(simp(he), ok, exc)
+    qed
+    have lt ex2 := (int_lt(j, SZ) && (ex V2. tp.finv(s.vm, V2, b, i, int_add(j, 1)) && ok(x2, empty) = ok(pair(W(V2), int_add(j, 1)), empty)) by taut(t, nb, no))
+    obtain V2, g1 g2 g3 g4 he2 from ex2
+    have hf2: tp.finv(s.vm, V2, b, i, int_add(j, 1)) by taut(g1, g2, g3, g4)
+    have xe: x2 = pair(W(V2), int_add(j, 1)) by simp(he2)
+    have p2: PI(x2) by ex_intro({int_add(j, 1)}, {V2}, taut((int_add(j, 1) in omega by arith(hj)), (int_le(int_add(j, 1), SZ) by arith(lt)), hf2, xe))
+    have m2: int_lt(M(x2), M(x)) by simp(xe, hx, (int_lt(int_sub(SZ, int_add(j, 1)), int_sub(SZ, j)) by arith(hj)))
+    show by taut(p2, m2)
+  qed
+  have wv := apply(g.loop[b := x y. BODY(x, y), p := x. PI(x), m := x. M(x)], p0, pm, nx, wl)
+  obtain x, hpl bb nk from wv
+  obtain j V, hj hjl f1 f2 f3 f4 hx from hpl
+  have hf: tp.finv(s.vm, V, b, i, j) by taut(f1, f2, f3, f4)
+  have t := mp(all_elim(trip, {j}, {V}, {r}), hj, hjl, hf, rewrite(hx, bb))
+  have c1: (int_lt(j, SZ) && (ex V2. tp.finv(s.vm, V2, b, i, int_add(j, 1)) && r = ok(pair(W(V2), int_add(j, 1)), empty))) -> false proof
+    assume h
+    have _ e := h
+    obtain V2, _ _ _ _ he from e
+    have io: is_ok(r) by defs(ex_intro({pair(W(V2), int_add(j, 1))}, {empty}, he), is_ok)
+    show by taut(io, nk)
+  qed
+  have c2: j = SZ && r = exc(pair(W(V), j), pair("brk", empty)) ->
+      abi.ovf_out(s, o) || (ex V3. tp.finv(s.vm, V3, b, i, SZ) && o = ok(fn_update(s, "vm", V3), empty)) proof
+    assume h
+    have ej er := h
+    have oe: o = ok(W(V), empty) by simp(rewrite(er, kr))
+    show by disj({2}, ex_intro({V}, taut(rewrite(ej, hf), oe)))
+  qed
+  have c3: (ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && r = exc(pair(fn_update(W(v), "objs", ob), j), pair("raise", OVF))) ->
+      abi.ovf_out(s, o) || (ex V3. tp.finv(s.vm, V3, b, i, SZ) && o = ok(fn_update(s, "vm", V3), empty)) proof
+    assume h
+    obtain v ob, hv hob er from h
+    have oe: o = exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF) by simp(rewrite(er, kr))
+    show by disj({1}, ex_intro({v}, {ob}, taut(hv, hob, oe)))
+  qed
+  show by taut(t, c1, c2, c3)
 qed

@@ -49,13 +49,16 @@ pred blk_usable(vm: Vm, objs: Objs, b: Addr, i: nat, w: bool) =
 // block i's pattern at b
 pred has_pat(vm: Vm, b: Addr, i: nat) = all j: nat. j < size_of(i) -> bytes_at(vm, b + bits[64](j), 1) = pat_of(i, j)
 
-// fill(b, i): block i's pattern written at b, nothing else changed
+// fill(b, i): block i's pattern written at b, nothing else changed (the
+// thread sound, the block none of its pointer's word: calls go on after
+// the writes)
 proc[World] fill_spec(b: Addr, i: bits[32]) {
-  require uint(i) < NBLK && blk_usable(vm, objs, b, uint(i), true)
+  require uint(i) < NBLK && blk_usable(vm, objs, b, uint(i), true) && thread_ok(vm, fs_base) &&
+    (all j: nat. j < size_of(uint(i)) -> uint(b) + j notin range(fs_base, 8))
   either { overflow() } or {
     let before = vm
     havoc vm where (vm with { bytes: before.bytes }) = before && has_pat(vm, b, uint(i)) &&
-      (all a: nat. !(uint(b) <= a && a < uint(b) + size_of(uint(i))) -> vm.bytes[bits[64](a)] = before.bytes[bits[64](a)])
+      (all a: Addr. !(uint(b) <= uint(a) && uint(a) < uint(b) + size_of(uint(i))) -> vm.bytes[a] = before.bytes[a])
   }
 }
 
@@ -67,7 +70,7 @@ fn fill_spec_fun() -> CFun2[World] = (args: Args) => {
 
 // intact(b, i): 1 when block i's pattern is at b, else 0
 proc[World] intact_spec(b: Addr, i: bits[32]) -> bits[32] {
-  require uint(i) < NBLK && blk_usable(vm, objs, b, uint(i), false)
+  require uint(i) < NBLK && blk_usable(vm, objs, b, uint(i), false) && thread_ok(vm, fs_base)
   either { overflow() } or {
     if has_pat(vm, b, uint(i)) { return 1 }
     return 0
