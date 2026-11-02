@@ -836,6 +836,70 @@ proof
   show by defs(apply(abi.bridge_implements_lf, mp.hg_ok, fam, nl), abi.implements)
 qed
 
+// free's code at a call (a caller's call rule): where the layer's free is
+// defined, an overflow (the ABI's), or a return to the world with its
+// memory changed -- the ABI's free from it, joined with h, to that world
+// joined with some ghost part
+theorem mp.tf_call(c, statics, eo, b, cd, st, regs, w, h, n, nf, k, o): mp.fr_cfg(c) -> app(eo, empty) = 52 -> mp.nf_known(c, statics, n, nf) ->
+  regs in abi.ARGS -> w in abi.World -> w in univ(1) -> h in malloc.Heap.ghost -> abi.thread_ok(w.vm, w.fs_base) ->
+  (ord_le(1, seq_len(regs)) && !(regs[0] = 0) && mp.MPRE(c, eo, b, cd, st, union2(w, h)) && !(union2(w, h).blocks[regs[0]] = none) ->
+     ex A. A in mallocng.Abs && mallocng.rep(c, A, union2(w, h)) && int_le(seq_len(A.used), n)) -> mp.code_img(c, app(b, empty), app(cd, empty), k) ->
+  runs(c_src_malloc_free.free_fun(mp.FLF(nf))[regs], w, o) -> ord_le(1, seq_len(regs)) -> malloc.world_ok(b, cd, st, union2(w, h)) ->
+  (!(regs[0] = 0) -> mp.MPRE(c, eo, b, cd, st, union2(w, h)) && !(union2(w, h).blocks[regs[0]] = none)) ->
+  abi.ovf_out(w, o) ||
+  (ex V rr h2. (V in x86_64_linux.Vm && h2 in malloc.Heap.ghost &&
+     runs(abi.wide(malloc.Heap.ghost, mp.UFF(c, eo, b, cd, st))[regs], union2(w, h), ok(union2(fn_update(w, "vm", V), h2), pair(0, 0)))) &&
+   o = ok(fn_update(w, "vm", V), rr))
+proof
+  assume hcf he hk hra hw hwu hh hth hna hci hr o1l hwk hpre
+  have hc _ _ _ _ := hcf
+  let S := union2(w, h)
+  let W := abi.wide(malloc.Heap.ghost, mp.UFF(c, eo, b, cd, st))
+  let GOAL := abi.ovf_out(w, o) ||
+    (ex V rr h2. (V in x86_64_linux.Vm && h2 in malloc.Heap.ghost && runs(W[regs], S, ok(union2(fn_update(w, "vm", V), h2), pair(0, 0)))) &&
+     o = ok(fn_update(w, "vm", V), rr))
+  have _ _ onf _ := hk
+  have _ lfn := mp(all_elim(mp.fl_free, {c}, {statics}, {n}, {nf}), hcf, hk)
+  have lf0 := apply(mp.fl_lf0, onf)
+  have y0: 0 in bits(64) by simp()
+  have k1: abi.ovf_out(w, o) -> GOAL proof
+    assume q
+    show by disj({1}, q)
+  qed
+  have cz: regs[0] = 0 -> GOAL proof
+    assume r0
+    have post := apply(mp.fr_post0[g := mp.FLF(nf), regs := regs, t := w, o2 := o], lf0, hra, o1l, r0, hw, hth, hr)
+    have k2: (ex V r. (V in x86_64_linux.Vm && V = w.vm) && o = ok(fn_update(w, "vm", V), r)) -> GOAL proof
+      assume e
+      obtain V rr, hv ev eo1 from e
+      have r := apply(mp.tf_zero[c := c, eo := eo, b := b, cd := cd, st := st, regs := regs, s := w, h := h, y0 := 0, y1 := 0], hra, o1l, r0, hw, hwu, hh, hwk, y0, y0)
+      have r2 := rewrite(sym(ev), rewrite(all_elim(abi.wg_ok, {fn_update(w, "vm", w.vm)}, {pair(0, 0)}, {h}), r))
+      show by disj({2}, ex_intro({V}, {rr}, {h}, taut(hv, hh, r2, eo1)))
+    qed
+    show by taut(post, k1, k2)
+  qed
+  have cb: !(regs[0] = 0) -> GOAL proof
+    assume hp0
+    have hq := mp(hpre, hp0)
+    have hpre2: mp.MPRE(c, eo, b, cd, st, S) by taut(hq)
+    have hbl: !(S.blocks[regs[0]] = none) by taut(hq)
+    obtain A, ha hrep hdep from mp(hna, taut(o1l, hp0, hpre2, hbl))
+    have post := apply(mp.tf_post[c := c, eo := eo, b := b, cd := cd, st := st, n := n, g := mp.FLF(nf), regs := regs, s := w, h := h, A := A, o := o],
+      he, lfn, hra, o1l, hw, hh, hpre2, hbl, ha, hrep, hdep, hr)
+    have k2: (ex V r. (V in x86_64_linux.Vm && mp.lf_res(c, A, h.blocks, regs[0], w, V)) && o = ok(fn_update(w, "vm", V), r)) -> GOAL proof
+      assume e
+      obtain V rr, hV hres eo1 from e
+      have lp: mp.lf_post(c, A, h.blocks, regs[0], w, V) by taut(hres, hp0)
+      obtain h2, hh2 r from apply(mp.tf_blk[c := c, eo := eo, b := b, cd := cd, st := st, regs := regs, s := w, h := h, A := A, V := V, y0 := 0, y1 := 0, k := k],
+        hc, he, hra, o1l, hw, hwu, hh, hp0, hpre2, hbl, ha, hrep, apply(mp.arg0_bits, hra, o1l), hV, y0, y0, lp, hci)
+      have r2 := rewrite(all_elim(abi.wg_ok, {fn_update(w, "vm", V)}, {pair(0, 0)}, {h2}), r)
+      show by disj({2}, ex_intro({V}, {rr}, {h2}, taut(hV, hh2, r2, eo1)))
+    qed
+    show by taut(post, k1, k2)
+  qed
+  show by taut(cz, cb)
+qed
+
 // ----------------------------------------------------------------------
 //  One GIMPLE value of free for every state (a client's callee)
 
@@ -896,7 +960,13 @@ theorem mp.free_low_all: all c statics eo b cd st. mp.fr_cfg(c) -> app(eo, empty
   ex nf. tr.implements_at(4201081, c_src_malloc_free.free_fun(mp.FLF(nf)), 4198400, text.code, statics) &&
     (all args w h. args in abi.ARGS -> w in abi.World -> w in univ(1) -> h in malloc.Heap.ghost -> abi.thread_ok(w.vm, w.fs_base) ->
        mp.ref_s(c_src_malloc_free.free_fun(mp.FLF(nf))[args], abi.wide(malloc.Heap.ghost, mp.UFF(c, eo, b, cd, st))[args], malloc.Heap.ghost, w, h) &&
-       tr.div_low_at(c_src_malloc_free.free_fun(mp.FLF(nf))[args], abi.wide(malloc.Heap.ghost, mp.UFF(c, eo, b, cd, st))[args], malloc.Heap.ghost, w, h))
+       tr.div_low_at(c_src_malloc_free.free_fun(mp.FLF(nf))[args], abi.wide(malloc.Heap.ghost, mp.UFF(c, eo, b, cd, st))[args], malloc.Heap.ghost, w, h) &&
+       (all o. runs(c_src_malloc_free.free_fun(mp.FLF(nf))[args], w, o) -> ord_le(1, seq_len(args)) -> malloc.world_ok(b, cd, st, union2(w, h)) ->
+          (!(args[0] = 0) -> mp.MPRE(c, eo, b, cd, st, union2(w, h)) && !(union2(w, h).blocks[args[0]] = none)) ->
+          abi.ovf_out(w, o) ||
+          (ex V rr h2. (V in x86_64_linux.Vm && h2 in malloc.Heap.ghost &&
+             runs(abi.wide(malloc.Heap.ghost, mp.UFF(c, eo, b, cd, st))[args], union2(w, h), ok(union2(fn_update(w, "vm", V), h2), pair(0, 0)))) &&
+           o = ok(fn_update(w, "vm", V), rr))))
 proof
   fix c statics eo b cd st
   assume hcf he hci
@@ -908,7 +978,13 @@ proof
   have im _ := mp(all_elim(mp.fl_free, {c}, {statics}, {N}, {NF}), hcf, hnk)
   have rf: all args w h. args in abi.ARGS -> w in abi.World -> w in univ(1) -> h in malloc.Heap.ghost -> abi.thread_ok(w.vm, w.fs_base) ->
       mp.ref_s(c_src_malloc_free.free_fun(mp.FLF(NF))[args], abi.wide(malloc.Heap.ghost, mp.UFF(c, eo, b, cd, st))[args], malloc.Heap.ghost, w, h) &&
-      tr.div_low_at(c_src_malloc_free.free_fun(mp.FLF(NF))[args], abi.wide(malloc.Heap.ghost, mp.UFF(c, eo, b, cd, st))[args], malloc.Heap.ghost, w, h) proof
+      tr.div_low_at(c_src_malloc_free.free_fun(mp.FLF(NF))[args], abi.wide(malloc.Heap.ghost, mp.UFF(c, eo, b, cd, st))[args], malloc.Heap.ghost, w, h) &&
+      (all o. runs(c_src_malloc_free.free_fun(mp.FLF(NF))[args], w, o) -> ord_le(1, seq_len(args)) -> malloc.world_ok(b, cd, st, union2(w, h)) ->
+         (!(args[0] = 0) -> mp.MPRE(c, eo, b, cd, st, union2(w, h)) && !(union2(w, h).blocks[args[0]] = none)) ->
+         abi.ovf_out(w, o) ||
+         (ex V rr h2. (V in x86_64_linux.Vm && h2 in malloc.Heap.ghost &&
+            runs(abi.wide(malloc.Heap.ghost, mp.UFF(c, eo, b, cd, st))[args], union2(w, h), ok(union2(fn_update(w, "vm", V), h2), pair(0, 0)))) &&
+          o = ok(fn_update(w, "vm", V), rr))) proof
     fix args w h
     assume hA hw hwu hh hth
     let S := union2(w, h)
@@ -923,8 +999,20 @@ proof
       have ub := apply(mp.used_bound, hc, apply(mallocng.abs_univ, ha), ha, hm)
       show by ex_intro({A}, taut(ha, hrep, ub))
     qed
-    show := apply(mp.tf_low_s[c := c, statics := statics, eo := eo, b := b, cd := cd, st := st, regs := args, w := w, h := h, n := N, nf := NF, k := 1],
+    have rs dv := apply(mp.tf_low_s[c := c, statics := statics, eo := eo, b := b, cd := cd, st := st, regs := args, w := w, h := h, n := N, nf := NF, k := 1],
       hcf, he, hnk, hA, hw, hwu, hh, hth, na, hci)
+    have cl: all o. runs(c_src_malloc_free.free_fun(mp.FLF(NF))[args], w, o) -> ord_le(1, seq_len(args)) -> malloc.world_ok(b, cd, st, union2(w, h)) ->
+        (!(args[0] = 0) -> mp.MPRE(c, eo, b, cd, st, union2(w, h)) && !(union2(w, h).blocks[args[0]] = none)) ->
+        abi.ovf_out(w, o) ||
+        (ex V rr h2. (V in x86_64_linux.Vm && h2 in malloc.Heap.ghost &&
+           runs(abi.wide(malloc.Heap.ghost, mp.UFF(c, eo, b, cd, st))[args], union2(w, h), ok(union2(fn_update(w, "vm", V), h2), pair(0, 0)))) &&
+         o = ok(fn_update(w, "vm", V), rr)) proof
+      fix o
+      assume hr ol hwk hp
+      show := apply(mp.tf_call[c := c, statics := statics, eo := eo, b := b, cd := cd, st := st, regs := args, w := w, h := h, n := N, nf := NF, k := 1, o := o],
+        hcf, he, hnk, hA, hw, hwu, hh, hth, na, hci, hr, ol, hwk, hp)
+    qed
+    show by taut(rs, dv, cl)
   qed
   show by ex_intro({NF}, taut(im, rf))
 qed

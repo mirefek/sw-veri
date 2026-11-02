@@ -1694,6 +1694,76 @@ proof
 qed
 
 
+// malloc's code at a call (a caller's call rule): where the layer's malloc
+// is defined, an overflow (the ABI's), or a return to the world with its
+// memory changed -- the ABI's malloc from it, joined with h, to that
+// world joined with some ghost part, the value's first word
+theorem mp.top_call(c, eo, b, cd, st, g, regs, k, s, h, o): c in mallocng.Cfg -> app(eo, empty) = 52 -> mp.mi_call(c, g) -> regs in abi.ARGS ->
+  mp.code_img(c, app(b, empty), app(cd, empty), k) -> s in abi.World -> s in univ(1) -> h in malloc.Heap.ghost ->
+  runs(c_src_malloc_lite_malloc.default_malloc_fun(g)[regs], s, o) -> ord_le(1, seq_len(regs)) -> mp.MPRE(c, eo, b, cd, st, union2(s, h)) ->
+  abi.ovf_out(s, o) ||
+  (ex V rr h2. (V in x86_64_linux.Vm && h2 in malloc.Heap.ghost &&
+     runs(abi.wide(malloc.Heap.ghost, mp.UF(c, eo, b, cd, st))[regs], union2(s, h), ok(union2(fn_update(s, "vm", V), h2), pair(fst(rr), 0)))) &&
+   o = ok(fn_update(s, "vm", V), rr))
+proof
+  assume hc he hmi hra hci hs su hh hr o1l hpre
+  let S := union2(s, h)
+  let W := abi.wide(malloc.Heap.ghost, mp.UF(c, eo, b, cd, st))
+  let GOAL := abi.ovf_out(s, o) ||
+    (ex V rr h2. (V in x86_64_linux.Vm && h2 in malloc.Heap.ghost && runs(W[regs], S, ok(union2(fn_update(s, "vm", V), h2), pair(fst(rr), 0)))) &&
+     o = ok(fn_update(s, "vm", V), rr))
+  obtain A, ha hrep hpost from apply(mp.top_post[c := c, eo := eo, b := b, cd := cd, st := st, g := g, regs := regs, s := s, h := h, o := o], he, hmi, hra, hs, hh, hr, o1l, hpre)
+  let HA := union2(h, fn_update(empty, "A", A))
+  have hdm: dom(h) = insert("blocks", empty) by simp(expand(hh, malloc.Heap.ghost))
+  have aA: HA.A = A by simp(hdm)
+  have bA: HA.blocks = h.blocks by simp(hdm)
+  have rl _ := (regs in list_type(bits(64)) && ord_le(seq_len(regs), 6) by simp(hra))
+  have lo: seq_len(regs) in omega by simp(rl)
+  have l1: int_le(1, seq_len(regs)) proof
+    have c1: 1 in seq_len(regs) -> int_le(1, seq_len(regs)) proof
+      assume m
+      show by arith(apply(nat_mem_lt[k := seq_len(regs), i := 1], lo, m))
+    qed
+    have c2: 1 = seq_len(regs) -> int_le(1, seq_len(regs)) proof
+      assume e
+      show by arith(e)
+    qed
+    show by taut(expand(o1l, ord_le), c1, c2)
+  qed
+  have r0b := apply(at_type[l := regs, t := bits(64), i := 0], rl, simp(), (int_lt(0, seq_len(regs)) by arith(l1)))
+  have hn: regs[0] in omega by arith(r0b)
+  have y0: 0 in bits(64) by simp()
+  have k1: abi.ovf_out(s, o) -> GOAL proof
+    assume w
+    show by disj({1}, w)
+  qed
+  have k2: (ex V rr. (V in x86_64_linux.Vm && (ex A2. mp.mi_ret(c, HA.A, regs[0], HA.blocks, s, A2, V, fst(rr)))) && o = ok(fn_update(s, "vm", V), rr)) -> GOAL proof
+    assume w
+    obtain V rr, hv2 hex ho from w
+    obtain A2, hret0 from hex
+    have hret := rewrite(bA, rewrite(aA, hret0))
+    have z: fst(rr) = 0 && mp.mi_zero(c, A, h.blocks, s, A2, V) -> GOAL proof
+      assume q
+      have q0 qz := q
+      have r := apply(mp.top_zero[c := c, eo := eo, b := b, cd := cd, st := st, regs := regs, s := s, h := h, A := A, A2 := A2, V := V, y := 0, k := k],
+        hc, he, hra, o1l, hs, su, hh, hpre, ha, hrep, hv2, y0, qz, hci)
+      have pe: pair(0, 0) = pair(fst(rr), 0) by simp(q0)
+      have r2 := rewrite(pe, rewrite(all_elim(abi.wg_ok, {fn_update(s, "vm", V)}, {pair(0, 0)}, {h}), r))
+      show by disj({2}, ex_intro({V}, {rr}, {h}, taut(hv2, hh, r2, ho)))
+    qed
+    have kb: !(fst(rr) = 0) && mp.mi_blk(c, A, regs[0], h.blocks, s, A2, V, fst(rr)) -> GOAL proof
+      assume q
+      have _ qb := q
+      obtain h2, hh2 r from apply(mp.top_blk[c := c, eo := eo, b := b, cd := cd, st := st, regs := regs, s := s, h := h, A := A, A3 := A2, V := V, p := fst(rr), y := 0, k := k],
+        hc, he, hra, o1l, hs, su, hh, hpre, ha, hrep, hv2, y0, hn, qb, hci)
+      have r2 := rewrite(all_elim(abi.wg_ok, {fn_update(s, "vm", V)}, {pair(fst(rr), 0)}, {h2}), r)
+      show by disj({2}, ex_intro({V}, {rr}, {h2}, taut(hv2, hh2, r2, ho)))
+    qed
+    show by taut(hret, z, kb)
+  qed
+  show by taut(hpost, k1, k2)
+qed
+
 theorem mp.top_ref(c, eo, b, cd, st, g, regs, k): c in mallocng.Cfg -> app(eo, empty) = 52 -> mp.mi_call(c, g) -> regs in abi.ARGS ->
   mp.code_img(c, app(b, empty), app(cd, empty), k) ->
   abi.refines_ovf(c_src_malloc_lite_malloc.default_malloc_fun(g)[regs], abi.wide(malloc.Heap.ghost, mp.UF(c, eo, b, cd, st))[regs], malloc.Heap.ghost)

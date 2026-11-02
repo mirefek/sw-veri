@@ -19,11 +19,11 @@ other crash, never exit 42. Runs that never end are allowed (§2).
 - (c) `main` (its spec: layers/test_malloc.sl's `main_spec`, 0 or 1, the
   memory outside the allocator's and errno kept; the helpers done:
   proofs/test/helpers.core). Left:
-  - `tm.otyped` (outcome shapes, worlds) for musl's malloc and free
-    values, so `tm.malloc_q` / `tm.free_q` (proofs/test/malloc_calls.core)
-    apply to them; what a block's bytes keep across the other calls
-    (alloc_frame, live_apart, owned_private); a world written in a block
-    still world_ok (live_apart, code_at unwritable);
+  - what a block's bytes keep across the other calls (alloc_frame,
+    live_apart, owned_private); a world written in a block still world_ok
+    (live_apart, code_at unwritable). (The call rules: `tm.malloc_q` /
+    `tm.free_q` in proofs/test/malloc_calls.core, over `tm.mcall` /
+    `tm.fcall`, which musl's code meets: `mp.top_call`, `mp.free_low_all`.)
   - main's C2: four loops, the invariant over the ghost blocks -- p[k]
     live, its size, its pattern; the memory outside the allocator's at
     main's start kept (main_frame); the array object none of the
