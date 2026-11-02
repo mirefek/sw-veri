@@ -51,7 +51,7 @@ LEAF_SL=""
 for t in $LEAVES; do name=${t#*:}; name=${name%%:*}; LEAF_SL="$LEAF_SL build/gimple-O0/sl/$name.sl $B/cfg_$name.sl"; done
 # the claim (from the layers and the -O0 binary), then the layers and the
 # readable GIMPLE elaborated, what the claim states already left out
-$S claim malloc --elf build/test_malloc_O0 -o "$B/claim.core" >/dev/null || exit 1
+$S claim malloc --elf build/test_malloc_O0 --program-exits 0,1 -o "$B/claim.core" >/dev/null || exit 1
 $S elab spec layers build/gimple-O0/sl/c_mallocng_malloc.sl "$B/cfg.sl" $LEAF_SL --after "$B/claim.core" -o "$B/gimple.core" >/dev/null || exit 1
 LOC=""
 [ -e build/locmap_O0.core ] && LOC=build/locmap_O0.core

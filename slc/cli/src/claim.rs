@@ -24,10 +24,12 @@ const MUSL_ERRNO_OFFSET: u64 = 0x34;
 
 pub fn claim(args: &[String]) -> CResult {
     if args.first().map(|s| s.as_str()) != Some("malloc") {
-        return Err("usage: slc claim malloc --elf ELF [-o OUT.core] [--owned SYM ...]".into());
+        return Err("usage: slc claim malloc --elf ELF [-o OUT.core] [--owned SYM ...] [--program-exits N,..]".into());
     }
     let mut elf_path = None;
     let mut out = None;
+    // (the program's claim too: its exit statuses allowed)
+    let mut exits: Option<Vec<u64>> = None;
     // (musl's data symbols: owned if present; those given: required)
     let mut owned: Vec<(String, bool)> = MUSL_OWNED.iter().map(|s| (s.to_string(), false)).collect();
     let mut it = args[1..].iter();
@@ -36,6 +38,11 @@ pub fn claim(args: &[String]) -> CResult {
             "--elf" => elf_path = it.next().cloned(),
             "-o" => out = it.next().map(PathBuf::from),
             "--owned" => owned.push((it.next().ok_or("--owned needs a symbol")?.clone(), true)),
+            "--program-exits" => {
+                let l = it.next().ok_or("--program-exits needs a list, e.g. 0,1")?;
+                let v: Result<Vec<u64>, _> = l.split(',').map(|s| s.trim().parse::<u64>()).collect();
+                exits = Some(v.map_err(|_| format!("--program-exits: `{}` is not a list of numbers", l))?);
+            }
             other => return Err(format!("unknown argument `{}`", other)),
         }
     }
@@ -155,6 +162,18 @@ pub fn claim(args: &[String]) -> CResult {
     let inner = el.b.and(laws, body);
     let statement = el.b.ex(&[inv, own], inner);
     el.claims.push(("musl_malloc".into(), statement));
+    // the program's claim (layers/claim_program.sl): every run that ends
+    // exits with one of the statuses, or dies of a stack overflow
+    if let Some(exits) = &exits {
+        let mut set = el.b.empty();
+        for x in exits.iter().rev() {
+            set = el.b.app("insert", vec![el.b.nat(*x), set]);
+        }
+        let set = named(&mut el, "exits", set)?;
+        let file = el.b.app("musl_malloc.file", vec![]);
+        let st = el.b.app("claim_program.program_ok", vec![file, set]);
+        el.claims.push(("musl_program".into(), st));
+    }
 
     // re-check with the kernel from the text, then write
     let text = el.core_text();
@@ -166,7 +185,7 @@ pub fn claim(args: &[String]) -> CResult {
     println!("kernel check: ok (definitions conservative, claims closed, no axioms outside the prelude)");
 
     // human-readable summary of everything the claim rests on
-    let summary = summary(&root, &prelude, &elf_path, &bytes, &elf, (main_at, malloc_at, free_at), &ranges, &env, &sm, &el);
+    let summary = summary(&root, &prelude, &elf_path, &bytes, &elf, (main_at, malloc_at, free_at), &ranges, exits.as_deref(), &env, &sm, &el);
     let spath = out.with_extension("summary.txt");
     std::fs::write(&spath, &summary).map_err(|e| e.to_string())?;
     println!("wrote {}", spath.display());
@@ -182,6 +201,7 @@ fn summary(
     elf: &Elf,
     addrs: (u64, u64, u64),
     ranges: &[(u64, u64, String)],
+    exits: Option<&[u64]>,
     env: &Env,
     sm: &sl_syntax::SourceMap,
     el: &sl_elab::Elab,
@@ -203,6 +223,13 @@ fn summary(
     s.push_str("                                                           (for runs started without privileges:\n");
     s.push_str("                                                           claim_malloc.unprivileged)\n");
     s.push_str("    && implements(malloc) && implements(free)            -- layers/abi.sl, layers/malloc.sl\n\n");
+    if let Some(x) = exits {
+        let l: Vec<String> = x.iter().map(|v| v.to_string()).collect();
+        s.push_str("CLAIM musl_program\n==================\n\n");
+        s.push_str(&format!("  program_ok(FILE, {{{}}})                              -- layers/claim_program.sl\n", l.join(", ")));
+        s.push_str("    every run from an unprivileged exec state that ends exits with one of these statuses,\n");
+        s.push_str("    or dies of a stack overflow; no other crash (runs that never end allowed)\n\n");
+    }
     s.push_str(&format!("Binary: {}\n  size {} bytes, sha256 {}\n  entry {:#x}\n", elf_path, bytes.len(), sha256::hex(bytes), elf.entry));
     s.push_str(&format!(
         "  main = {:#x}, malloc = {:#x}, free = {:#x}\n  errno: thread pointer + {:#x}\n",
