@@ -3,16 +3,72 @@
 The current plans, in order. When an item is done it is deleted here and
 summarized in docs/done.md.
 
-## 1. Next: a run reaching main
+## 1. Next: the program's claim (tests/test_malloc.c)
 
-The claim `musl_malloc` is proven (proofs/mallocng/claim.core, no open
-lemma). Its `Init` is about the runs that reach `main`: it would hold
-vacuously if none did. Left: a witness that some unprivileged exec state
-reaches `main` (`_start_c`'s spec has main entered -- `at_main` -- or a
-stack overflow; `ui.main_exists` shows to_main's havoc satisfiable, not
-that the machine run gets there).
+The claim's binary is now a client of malloc and free only
+(tests/test_malloc.c: blocks filled with patterns, half freed and
+allocated again, all checked; exit 1 when malloc returns NULL, 42 when a
+pattern changed, else 0). The claim about it, beside `musl_malloc`:
+every run of the process from an unprivileged exec state that ends exits
+with 0 or 1, or dies of a stack overflow (a segv as abi.sl's
+`overflow_at` has it, below the initial rsp); no other crash, never
+exit 42. Runs that never end are allowed (§2).
+- (a) The chain on the new binary: the pinned local functions' addresses
+  in scripts/check.sh remapped (by source file), the generated files
+  remade; the proofs' hard-coded layout (init.core: main's address, the
+  segments, the tables' file offsets, .bss) updated.
+- (b) The statement: layers/claim_program.sl (the process run until it
+  exits or faults; its outcomes), `slc claim` stating it for the binary.
+- (c) `main`: its readable GIMPLE, C1, a spec (returns 0 or 1) and C2
+  against malloc.sl's malloc and free -- the client's reasoning: a block
+  fresh and its own, its bytes kept by the other calls, at most NULL.
+  The static helpers (`pat`, `size`, `intact`, `fill`) the same way.
+- (d) After main: stage2's `exit(main(..))` -- musl's `exit`,
+  `__funcs_on_exit`, `__libc_exit_fini` (.fini_array, `_fini`),
+  `__stdio_exit`, `_Exit` (exit_group): C1, specs, C2, as the startup's.
+- (e) The whole run: startup linked with main as a callee by its
+  contract (not a breakpoint), the invariant from `musl.init` at its
+  entry, the exit path after; the claim proven.
 
-## 2. The engine, when a function needs it
+The malloc claim's `Init` is about the runs that reach `main`, vacuous
+if none did; (e) shows nothing more of that (a witness that some exec
+state reaches main is a separate statement).
+
+## 2. Termination (planned)
+
+The program claim allows runs that never end. To exclude them: every
+call of malloc and free returns (or overflows the stack), and the
+startup and exit paths end.
+- malloc.sl's specs and mallocng's: no divergence (the layer's specs may
+  diverge now -- check each); the loops' variants: alloc_group's, the
+  activation and span loops (try_avail), dequeue's, the free path's
+  recursion (nontrivial_free <-> free_group: depth-indexed already);
+  system calls returning (brk, mmap, munmap, mprotect in the model).
+- C1 keeps divergence (a diverging machine run only for a diverging
+  GIMPLE one): termination proven at GIMPLE level, carried down.
+- The startup's and exit's loops (auxv, the constructors, TLS copy).
+- The statement: every run ends -- exit 0/1 or a stack overflow.
+
+## 3. Shared libraries (planned)
+
+The standard setup: the program dynamically linked, musl's libc.so (also
+its dynamic linker, /lib/ld-musl-x86_64.so.1) loaded at a random base.
+- The exec model (spec/linux/exec.sl, static non-PIE only now):
+  PT_INTERP -- the interpreter from the file system mapped at a random
+  base, auxv's AT_BASE / AT_PHDR / AT_ENTRY for it; a PIE program at a
+  random base.
+- The library's claim about libc.so alone: malloc and free correct
+  wherever it is loaded -- C1 proofs relative to the load base (code at
+  base + offset, RIP-relative data; `implements2_at` / `loaded` take a
+  base already, the engine and the generated steps do not).
+- Startup is the dynamic linker (ldso/dlstart.c, dynlink.c):
+  self-relocation, the program's and libc's relocations (GOT entries for
+  malloc and free), TLS, then the program's `_start`; calls through the
+  PLT.
+- The program's claim then for a program and the library file: proven
+  from the library's claim and the program's own proofs.
+
+## 4. The engine, when a function needs it
 
 - The entry variants entry_np, entry0p generic like tr.entry_n,
   tr.entry0 (optional).
@@ -38,7 +94,7 @@ that the machine run gets there).
   the effective address a parameter, each form by its address equation
   (as tr.rsp_bd_ea), if cold checks need to be faster.
 
-## 3. The CFG path's remaining engineering
+## 5. The CFG path's remaining engineering
 
 - The structured form generated and checked in one run (`slc gimple`
   running the refinement); a callee's refinement a theorem of its own, not
@@ -64,7 +120,7 @@ that the machine run gets there).
   `steps` line's 90 s; only after the binary changes): the decoder's
   `members` and the `exec_insn` unfolding, per encoding.
 
-## 4. The invariant and the laws
+## 6. The invariant and the laws
 
 - The C world owning only its statics, heap and stack objects.
 - `slc heapcheck` on larger heaps: each byte's view membership (`held`)
@@ -73,7 +129,7 @@ that the machine run gets there).
   An interval form of the footprint per check would make it linear.
 
 
-## 5. Usability
+## 7. Usability
 
 - `rsimp` for the machine's semantics (proofs/linux_sys.core) instead of
   hand lemmas: a dispatch's live case is `rsimp(h, tag)` already; a
