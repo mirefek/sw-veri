@@ -22,18 +22,21 @@ other crash, never exit 42. Runs that never end are allowed (§2).
   dummy), `__libc_exit_fini` (.fini_array: gcc's `__do_global_dtors_aux`,
   `deregister_tm_clones`, readable models as frame_dummy's), `_Exit`
   (exit_group, then exit, through its unit's `__syscall1`). The exit as
-  an outcome at every level, as the stop at main:
-  - GIMPLE (layer change): `sys_call1` with 60 / 231 raises the
-    machine's `exit(a1[7:0])`;
-  - the bridge (done): undefined behaviour leaves exits out
-    (`abi.nstop`), and the exit is an outcome of the claims and
-    contracts (`tr.xo`: the machine's exit, the spec raising the same),
-    carried through the callee rules; the ABI's contract still counts it
-    a raise (`abi.raises_ab`);
-  - next: the syscall rule for exit / exit_group giving `tr.xo` (the
-    machine's step raising `exit(rdi[7:0])`), the C1 engine using it;
-  - C1 of the exit path, specs, C2; stage2 with main as a callee by its
-    contract and exit after.
+  an outcome at every level (done: GIMPLE's `sys_call1` exit, the
+  bridge's `tr.xo`, the syscall rule). C1 of the whole path done
+  (proofs/mallocng/machine/c1_exit.core: the fini_array's entries through
+  the code map, `tr.calli`). Next:
+  - the link (as link_start.core's): exit with its callees -- `__get_tp`,
+    `a_cas`, the dummies, `_Exit` with its `__syscall1`, `__libc_exit_fini`
+    with the code map at 0x401180 (`__do_global_dtors_aux` with
+    `deregister_tm_clones`) and `_fini`; `a_crash` and `__syscall0` (no
+    C1: the hlt, a 0-argument syscall) by the undefined contract
+    (`mp.undef_implements`) -- their calls undefined in the spec;
+  - specs and C2: exit raises `exit(code[7:0])` from a world with
+    exit_lock 0, the thread's tid not 0, the fini_array's word at
+    0x407fd0 the dtors' address, completed.0 any, the `__cxa_finalize`
+    GOT word 0 (all kept from exec through main);
+  - stage2 with main as a callee by its contract and exit after.
 - (e) The whole run: startup linked with main as a callee by its
   contract (not a breakpoint), the invariant from `musl.init` at its
   entry, the exit path after; the claim proven.
