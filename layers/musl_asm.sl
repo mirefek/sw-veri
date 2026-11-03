@@ -258,6 +258,67 @@ fn register_tm_clones_fun() -> CFun2[World] = (args: Args) => {
 }
 
 ///////////////////////////////////////////////////////////////////////
+//  deregister_tm_clones (crtstuff.c: __do_global_dtors_aux's call)
+//
+//   lea rdi, [__TMC_END__]; lea rax, [__TMC_END__]; cmp rax, rdi; je 1f
+//   mov rax, 0; test rax, rax; je 1f; jmp rax
+//   1: ret
+//
+// the clone table empty (its start and end both __TMC_END__), its
+// deregistration (_ITM_deregisterTMCloneTable, weak, not linked: 0) -- so
+// nothing
+proc[World] deregister_tm_clones() {
+  var ax: bits[64] = any bits[64]
+  var di: bits[64] = any bits[64]
+  di := __TMC_END__
+  ax := __TMC_END__
+  if ax = di {
+    return
+  }
+  ax := 0
+  if ax = 0 {
+    return
+  }
+  // (jmp rax: no code at 0)
+  undefined
+}
+fn deregister_tm_clones_fun() -> CFun2[World] = (args: Args) => {
+  deregister_tm_clones()
+  return (any bits[64], any bits[64])
+}
+
+///////////////////////////////////////////////////////////////////////
+//  __do_global_dtors_aux (crtstuff.c: the fini_array's one entry)
+//
+//   endbr64; cmp byte [completed.0], 0; jne 2f
+//   push rbp; cmp qword [__cxa_finalize@got], 0; mov rbp, rsp; je 1f
+//   mov rdi, [__dso_handle]; addr32 call __cxa_finalize
+//   1: call deregister_tm_clones; mov byte [completed.0], 1; pop rbp; ret
+//   2: ret
+//
+// once (completed.0 set after it): deregister_tm_clones; __cxa_finalize a
+// weak symbol not linked (its GOT word 0 -- else undefined here, the call's
+// code not decoded)
+const completed_0: Addr = 0x408020
+const cxa_finalize_got: Addr = 0x407fe0
+proc[World] __do_global_dtors_aux(deregister_tm_clones: CFun2[World]) {
+  var c: bits[8] = any bits[8]
+  var g: bits[64] = any bits[64]
+  c := ld8(completed_0, 0)
+  if c != 0 {
+    return
+  }
+  g := ld64(cxa_finalize_got, 0)
+  require g = 0
+  call(deregister_tm_clones, [])
+  st8(completed_0, 0, 1)
+}
+fn __do_global_dtors_aux_fun(deregister_tm_clones: CFun2[World]) -> CFun2[World] = (args: Args) => {
+  __do_global_dtors_aux(deregister_tm_clones)
+  return (any bits[64], any bits[64])
+}
+
+///////////////////////////////////////////////////////////////////////
 //  frame_dummy (crtstuff.c: the init_array's entry)
 //
 //   endbr64; jmp register_tm_clones

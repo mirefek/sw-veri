@@ -317,3 +317,44 @@ fn register_tm_clones_fun() -> CFun2[World] = (args: Args) => {
   register_tm_clones()
   return (any bits[64], any bits[64])
 }
+
+// deregister_tm_clones: the blocks at 401110 (2), the deregistration's
+// test (3), its call (4)
+proc[World] deregister_tm_clones() {
+  var bb: nat = 2
+  var ax: bits[64] = any bits[64]
+  var di: bits[64] = any bits[64]
+  loop {
+    if bb < 3 {
+      // <bb 2>
+      di := __TMC_END__
+      ax := __TMC_END__
+      if ax = di {
+        return
+      } else {
+        bb := 3
+      }
+    } else {
+      if bb < 4 {
+        // <bb 3>
+        ax := 0
+        if ax = 0 {
+          return
+        } else {
+          bb := 4
+        }
+      } else {
+        // <bb 4>
+        undefined
+      }
+    }
+  }
+}
+// (locals: ax, di -- in rax, rdi)
+fn deregister_tm_clones_cfg_live() -> List[(nat, nat)] = [(2, 0), (3, 0), (4, 1)]
+fn deregister_tm_clones_cfg_widths() -> List[nat] = [64, 64]
+fn deregister_tm_clones_cfg_regs() -> List[(nat, nat)] = [(0, 0), (1, 7)]
+fn deregister_tm_clones_fun() -> CFun2[World] = (args: Args) => {
+  deregister_tm_clones()
+  return (any bits[64], any bits[64])
+}

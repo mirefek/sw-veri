@@ -1239,6 +1239,15 @@ impl<'e> Gen<'e> {
                         return self.then(tr, st2);
                     }
                 }
+                // (mov r64, rsp: rsp's value, the entry's less the frame --
+                // gcc's frame pointer, tr.mov64_rsp)
+                if n == 8 && g == 4 {
+                    let u = self.parse(&format!("int_sub(app(app({}, \"gpr\"), 4), {})", self.print(&self.s), self.fr))?;
+                    let tr = self.step("mov64_rsp", a, insn, &[&h, &x[3], &x[4]], self.tail(st, insn, 2, vec![]));
+                    self.scratch.insert(hn);
+                    let st2 = self.set_reg(st, a2, hn, 8, u);
+                    return self.then(tr, st2);
+                }
                 if let Some(pf) = self.widen(st, g, n)? {
                     return Ok(pf);
                 }
@@ -1711,8 +1720,20 @@ impl<'e> Gen<'e> {
                 self.compare(st, a, a2, insn, "fs32_hi32", &[&d, &lit(cn), &x[4], &lit(imm), &u], 7, Flags::Sub(32, u.clone(), lit(imm)))
             }
             // sub r32, imm8: GIMPLE's x + -k
+            // cmp byte [rip + d], imm8: a static's byte (tr.fs8_ri8_rip)
+            24 => {
+                let x = self.pairs(&f, 4).ok_or_else(|| bad("fields"))?;
+                if nat(&x[0]) != Some(7) || x[1] != x[2] || !self.memop(&x[1]).is_some_and(|m| self.tag(&m["base"]).is_some_and(|b| b.0 == 1)) {
+                    return Err(bad("not cmp byte [rip + d], imm8"));
+                }
+                self.cmp_rip_imm8(st, a, a2, insn, 1, &x[1], &x[3])
+            }
             60 => {
                 let x = self.pairs(&f, 5).ok_or_else(|| bad("fields"))?;
+                // cmp qword [rip + d], imm8: a static's word (tr.fs64_ri8_rip)
+                if nat(&x[0]) == Some(8) && nat(&x[1]) == Some(7) && x[2] == x[3] && self.memop(&x[2]).is_some_and(|m| self.tag(&m["base"]).is_some_and(|b| b.0 == 1)) {
+                    return self.cmp_rip_imm8(st, a, a2, insn, 8, &x[2], &x[4]);
+                }
                 // add / cmp dword [rsp + d], imm8: the home d (u)
                 if let Some(d) = self.rsp_mem(&x[2]) {
                     let dn = nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?;
@@ -2785,6 +2806,33 @@ impl<'e> Gen<'e> {
                 st2.a = a2;
                 self.then(tr, st2)
             }
+            // endbr64: rip on (tr.endbr64)
+            155 => {
+                let tr = mpf(
+                    "tr.endbr64",
+                    vec![
+                        t(&self.s.clone()),
+                        t(&self.v.clone()),
+                        t(&self.base.clone()),
+                        t(&self.code.clone()),
+                        t(&lit(self.fr)),
+                        t(&lit(a)),
+                        t(&lit(a2)),
+                        t(&lit(insn.len)),
+                        t(&st.hst),
+                        t(&st.ds),
+                        t(&st.rs),
+                        t(&self.p(&st.spec)),
+                        t(&st.w),
+                        p(R::F(insn.name.clone())),
+                        simp_l(),
+                        p(R::Slot("NEXT")),
+                    ],
+                );
+                let mut st2 = st.clone();
+                st2.a = a2;
+                self.then(tr, st2)
+            }
             // jmp rel8 / rel32
             124 | 125 => {
                 let r = nat(&f).ok_or_else(|| bad("a displacement that is not a literal"))?;
@@ -2993,6 +3041,85 @@ impl<'e> Gen<'e> {
     /// against the old bytes with the field replaced, `(H * 2^k + F) *
     /// 2^pos + L` (tr.bf_val; the old bytes' bound tr.bf_old)
     #[allow(clippy::too_many_arguments)]
+    /// cmp byte / qword [rip + d], imm8 (n bytes): the spec's load of the
+    /// static there (u) against the immediate (tr.fs8_ri8_rip,
+    /// tr.fs64_ri8_rip), the flags kept to the jump with the memory's
+    /// coupling (tr.flags_set_m)
+    #[allow(clippy::too_many_arguments)]
+    fn cmp_rip_imm8(&mut self, st: &St, a: u128, a2: u128, insn: &Insn, n: u128, mem: &Term, k: &Term) -> Result<Seq, String> {
+        let bad = |what: &str| format!("{:x}: cmp [rip + d], imm8: {}", a, what);
+        let m = self.memop(mem).ok_or_else(|| bad("not a memory operand"))?;
+        let d = nat(&m["disp"]).ok_or_else(|| bad("a displacement that is not a literal"))?;
+        let imm = nat(k).ok_or_else(|| bad("an immediate that is not a literal"))?;
+        let biga = (a2 + d) % P64;
+        let wn = self.print(&st.w);
+        let mut args = self.head(a, insn);
+        let (rule, u, kk) = if n == 1 {
+            // (a byte: the spec's byte load at bigA defined, as movzx8_rip's)
+            let hc = self.static_hyp(st, biga, false)?;
+            let v = self.parse(&format!("bits_of_int(8, gimple.bytes_at(app({wn}, \"vm\"), {biga}, 1))"))?;
+            // (the spec's load of the byte already named -- at the static's
+            // name for the address: that name, equal by evaluation)
+            let addr = self.app(hc.concl(), "and", 2).and_then(|x| self.app(&x[1], "gimple.usable", 5).map(|u| u[2].clone()));
+            let shared = match addr {
+                Some(ad) => {
+                    let v0 = self.parse(&format!("bits_of_int(8, gimple.bytes_at(app({wn}, \"vm\"), {}, 1))", self.print(&ad)))?;
+                    let c = self.canon(&v0);
+                    if matches!(c.node(), Node::Var(..)) {
+                        let e = self.mk("eq", vec![c.clone(), v.clone()]);
+                        Some((c, s(&self.evp(&RP::Simp(false, vec![], vec![], false), &e, &[])?)))
+                    } else {
+                        None
+                    }
+                }
+                None => None,
+            };
+            let (u, hu) = match shared {
+                Some(x) => x,
+                None => self.result(&v)?,
+            };
+            args.extend([t(&lit(d)), t(k), t(&lit(biga)), t(&u), t(&st.hst), t(&st.rs), t(&st.w), p(f(&insn.name))]);
+            args.extend((0..4).map(|_| simp_l()));
+            args.extend([simp_lw(vec![R::S(hc.clone())]), hu]);
+            ("fs8_ri8_rip", u, k.clone())
+        } else {
+            let (pp, off, hc) = self.static_mem_hyp(st, biga, n)?;
+            let v = self.parse(&format!("bits_of_int({}, gimple.bytes_at(app({wn}, \"vm\"), bits_add(64, {}, {}), {}))", 8 * n, self.print(&pp), self.print(&off), n))?;
+            let (u, hu) = self.result(&v)?;
+            let kk = lit(if imm >= 128 { imm + 0xffff_ffff_ffff_ff00 } else { imm });
+            args.extend([t(&lit(d)), t(k), t(&kk), t(&pp), t(&off), t(&u), t(&st.hst), t(&st.rs), t(&st.w), p(f(&insn.name))]);
+            args.extend((0..7).map(|_| simp_l()));
+            args.extend([s(&hc), hu]);
+            ("fs64_ri8_rip", u, kk)
+        };
+        let step = mpf(&format!("tr.{rule}"), args);
+        let fl = Flags::Sub(8 * n, u, kk);
+        let ff = self.ff_term(&fl);
+        let rargs = vec![
+            t(&self.s.clone()),
+            t(&self.v.clone()),
+            t(&self.base.clone()),
+            t(&self.code.clone()),
+            t(&lit(self.fr)),
+            t(&lit(a)),
+            t(&lit(a2)),
+            t(&st.hst),
+            t(&st.ds),
+            t(&st.rs),
+            t(&self.p(&st.spec)),
+            t(&st.w),
+            p(step),
+            simp_l(),
+            p(R::Slot("NEXT")),
+        ];
+        let rule = mp(R::Inst("tr.flags_set_m".into(), vec![("ff", ff)]), rargs);
+        let mut st2 = st.clone();
+        st2.a = a2;
+        st2.fk = Some(fl);
+        self.trace(|| format!("at {:x}: a static's compare, the flags kept to the jump on", a));
+        self.then(rule, st2)
+    }
+
     fn bf_merge(&mut self, st: &St, w: &Term, a: &Term, n: u128, pos: &Term, k: &Term, fv: &Term, u: &Term, low: &Term) -> Result<RA, String> {
         let pw = |g: &Gen, e: &Term| g.mk("pow2", vec![e.clone()]);
         let (pp, pk) = (pw(self, pos), pw(self, k));

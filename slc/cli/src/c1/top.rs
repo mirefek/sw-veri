@@ -428,7 +428,10 @@ impl<'e> Gen<'e> {
                 }
             }
         }
-        let mut fd = k0;
+        // (gcc's frame pointer pushed past the entry -- after a test: its
+        // word too)
+        let pushes = self.insns.values().filter(|i| i.row == 114 && nat(&i.fields) == Some(5)).count() as u128;
+        let mut fd = k0.max(8 * pushes);
         for i in self.insns.values() {
             let mut ds = Vec::new();
             rsp_disps(self, &i.fields, &mut ds);

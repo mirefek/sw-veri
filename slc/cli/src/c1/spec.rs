@@ -203,6 +203,12 @@ impl<'e> Gen<'e> {
             return None;
         }
         if let Some(a) = self.app(t, "or", 2) {
+            // (`require C`, `!C || R`, with C holding: R)
+            if let Some(c) = self.app(&a[0], "not", 1).map(|x| x[0].clone()).filter(|c| c.loose_depth(&self.env.binders_fn()) == 0) {
+                if let Some((true, _)) = self.guard(&c, hyps) {
+                    return Some(vec![Pick::R]);
+                }
+            }
             // (choosing an alternative: not by a branch condition spent)
             // (each spent once: the same condition tested again by the
             // machine, usable)

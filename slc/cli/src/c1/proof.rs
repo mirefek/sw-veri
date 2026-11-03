@@ -696,6 +696,9 @@ impl<'e> Gen<'e> {
             // alternatives)
             *self.spent_now.borrow_mut() = st.spent.iter().map(|&i| self.expand(&st.hyps[i].0)).collect();
             self.picked.borrow_mut().clear();
+            if let Some(pf) = self.req_ub(&st, qi)? {
+                return Ok(pf);
+            }
             let red = self.reduce(qi, &st.hyps)?;
             // (the flags kept: the rest's plain reductions only, tr.wred_f)
             if st.fk.is_some() && !matches!(red, None | Some(Red::Q(..))) {
@@ -939,6 +942,46 @@ impl<'e> Gen<'e> {
             taut(vec![R::S(st.hw.clone())]),
         ];
         self.run(&mp(inst, args), &[]).map(Some)
+    }
+
+    /// the rest qi at `require C` with C false by the facts in scope: it
+    /// raises (tr.req_raise), any claim (tr.wub)
+    fn req_ub(&mut self, st: &St, qi: usize) -> Result<Option<Seq>, String> {
+        let Some(body) = self.app(&self.qs[qi], "mkprog", 1).map(|x| x[0].clone()) else { return Ok(None) };
+        let Some(e) = self.app(&body, "ex", 1).and_then(|e| self.app(&e[0], "and", 2).map(|x| x.to_vec())) else { return Ok(None) };
+        let Some(eq) = self.app(&e[1], "eq", 2).map(|x| x.to_vec()) else { return Ok(None) };
+        if !(matches!(eq[0].node(), Node::BVar(1)) && matches!(eq[1].node(), Node::BVar(0))) {
+            return Ok(None);
+        }
+        let Some(or) = self.app(&e[0], "or", 2).map(|x| x.to_vec()) else { return Ok(None) };
+        let Some(c) = self.app(&or[0], "not", 1).map(|x| x[0].clone()).filter(|c| c.loose_depth(&self.env.binders_fn()) == 0) else { return Ok(None) };
+        let Some(r) = self.lam(&or[1], &["x0", "x1", "x2"], &["x0", "x2"]) else { return Ok(None) };
+        let nc = self.mk("not", vec![c.clone()]);
+        let Some((true, hn)) = self.guard(&nc, &st.hyps) else { return Ok(None) };
+        self.trace(|| format!("at {:x}: undefined (required {} false)", st.a, self.print(&c)));
+        let vw = self.vw.clone();
+        let hw0 = self.hw0.clone().unwrap();
+        let ru = mp(R::Inst("tr.req_raise".into(), vec![("C", c), ("R", r)]), vec![t(&st.w), t(&vw), taut(vec![R::S(st.hw.clone())]), p(self.hvu0_r()), hn]);
+        let inst = R::Inst(
+            "tr.wub".into(),
+            vec![
+                ("s", self.s.clone()),
+                ("v", self.v.clone()),
+                ("base", self.base.clone()),
+                ("code", self.code.clone()),
+                ("fr", lit(st.fr)),
+                ("a", lit(st.a)),
+                ("hs", st.hst.clone()),
+                ("ds", st.ds.clone()),
+                ("rs", st.rs.clone()),
+                ("w", st.w.clone()),
+                ("q", self.qs[qi].clone()),
+                ("kw", self.kw3()),
+                ("bkp", self.bkp.clone()),
+                ("bka", self.bka.clone()),
+            ],
+        );
+        self.run(&mp(inst, vec![t(&vw), taut(vec![R::S(hw0)]), p(self.hvu0_r()), p(ru)]), &[]).map(Some)
     }
 
     /// `tr.psplit` at st over cond (the program qi's): the raise u when not,
