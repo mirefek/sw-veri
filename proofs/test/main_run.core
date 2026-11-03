@@ -299,6 +299,13 @@ proof
   show := trans(e1, rewrite(vo, rewrite(t2, u)))
 qed
 
+// (an overflow's world from W(Vx): from w, its memory and objects any)
+theorem tm.ovw(w, Vx, v, O, ob): fn_update(fn_update(fn_update(fn_update(w, "vm", Vx), "objs", O), "vm", v), "objs", ob) = fn_update(fn_update(w, "vm", v), "objs", ob)
+proof
+  show := rewrite(fn_update_twice[f := fn_update(w, "vm", v), k := "objs", a := O, b := ob],
+    rewrite(tm.wvv[w := w, V := Vx, V2 := v, O := O], refl({fn_update(fn_update(fn_update(fn_update(w, "vm", Vx), "objs", O), "vm", v), "objs", ob)}), {2}))
+qed
+
 // ----------------------------------------------------------------------
 //  main's run
 
@@ -624,6 +631,116 @@ proof
     obtain V2 g2, hv2 hg2 hwk2 hr1e from e
     step qq from rewrite(hr1e, kr1)
     show := mp(all_elim(fin, {V2}, {g2}, {1}), hv2, hg2, hwk2, (1 = 0 || 1 = 1 by simp()), qq)
+  qed
+  // an overflow: main's
+  have covf: all Vx v ob ii RR rr. (v in x86_64_linux.Vm && ob in abi.Objs) -> rr = exc(pair(fn_update(fn_update(W(Vx), "vm", v), "objs", ob), pair(ii, RR)), pair("raise", OVF)) ->
+      o = exc(fn_update(fn_update(W(Vx), "vm", v), "objs", ob), OVF) -> GM proof
+    fix Vx v ob ii RR rr
+    assume hvo _ hoe
+    have hv hob := hvo
+    show by disj({1}, ex_intro({v}, {ob}, taut(hv, hob, rewrite(tm.ovw[w := w, Vx := Vx, v := v, O := O1, ob := ob], hoe))))
+  qed
+  let OVF1 := ex Vx v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && r1 = exc(pair(fn_update(fn_update(W(Vx), "vm", v), "objs", ob), pair(i1, R)), pair("raise", OVF))
+  have cvf1: OVF1 -> GM proof
+    assume e
+    obtain Vx v ob, hv hob hr1e from e
+    step qq from rewrite(hr1e, kr1)
+    show := mp(all_elim(covf, {Vx}, {v}, {ob}, {i1}, {R}, {r1}), conj(hv, hob), hr1e, qq)
+  qed
+  // ---- loop 1 done: blocks 0 .. 7
+  let BRK1 := i1 = 8 && r1 = exc(pair(W(V1), pair(i1, R)), pair("brk", empty))
+  have cbrk1: BRK1 -> GM proof
+    assume e
+    have e8 hr1e := e
+    step h2 from rewrite(hr1e, kr1)
+    have hmi8 := rewrite(e8, hmi1)
+    // ---- loop 2: the even blocks below i freed
+    let K2(n) := set_select(omega, k. int_lt(k, 8) && (int_mod(k, 2) = 1 || int_le(n, k)))
+    obtain r2, wl2 kr2 from h2
+    let BODY2(x, y) := loop_body(wl2)
+    let G2(i, V, y) := (int_lt(i, 8) && (ex V2 g2. ((V2 in x86_64_linux.Vm && g2 in malloc.Heap.ghost) && tm.mi(I, O, eo, b, cd, st, S0, H(V2, g2), l[0], K2(int_add(i, 2)))) &&
+        y = ok(pair(W(V2), pair(int_add(i, 2), R)), empty))) ||
+      (i = 8 && y = exc(pair(W(V), pair(i, R)), pair("brk", empty))) ||
+      (ex Vx v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && y = exc(pair(fn_update(fn_update(W(Vx), "vm", v), "objs", ob), pair(i, R)), pair("raise", OVF)))
+    have trip2: all i V g y. i in omega -> int_le(i, 8) -> int_mod(i, 2) = 0 -> V in x86_64_linux.Vm -> g in malloc.Heap.ghost ->
+        tm.mi(I, O, eo, b, cd, st, S0, H(V, g), l[0], K2(i)) -> BODY2(pair(W(V), pair(i, R)), y) -> G2(i, V, y) proof
+      fix i V g y
+      assume hi0 hil hev hv hg hmi hbd
+      have wW wu := apply(g.alloc_world[s := w, V := V, l := l, sz := SZ], hw, hu, hv)
+      have Ht := apply(rec_and_intro, wW, hg)
+      have hiH heH hwH _ _ _ hbk := hmi
+      have {fv = vm, ff = fs} := apply(tm.u2f[w := w, h := g, V := V, O := O1], hw, hg)
+      have _ _ th _ _ _ _ _ _ := expand(hwH, malloc.world_ok)
+      have thW: abi.thread_ok(W(V).vm, W(V).fs_base) by simp(rewrite(ff, rewrite(fv, th)))
+      have ths: gc.sound(W(V)) by simp(thW)
+      have si: sint(32, i) = i := mp(all_elim(ms.sint_small, {i}), hi0, arith(hil))
+      have s7v: sint(32, 7) = 7 := mp(all_elim(ms.sint_small, {7}), simp(), arith())
+      have c8: i = 8 -> G2(i, V, y) proof
+        assume e
+        have cf: !int_le(sint(32, i), sint(32, 7)) by simp(si, s7v, e)
+        step eA from hbd with cf
+        show by taut(e, eA)
+      qed
+      have clt: int_lt(i, 8) -> G2(i, V, y) proof
+        assume hil8
+        have ib: i in bits(32) by arith(hi0, hil8)
+        have s7: int_le(sint(32, i), sint(32, 7)) by simp(si, s7v, (int_le(i, 7) by arith(hil8)))
+        have sxi := apply(ms.sext_small, ib, (int_lt(i, 2147483648) by arith(hil8)))
+        let A := int_add(l[0], int_mul(8, i))
+        have ab: A in bits(64) by arith(l64, hil8, hi0, l0o)
+        have z0: int_add(A, 0) = A by arith()
+        have el := apply(g.elem8_det, {W(V)}, {l[0]}, {i}, wu, l0b, hi0, (int_lt(i, 2147483648) by arith(hil8)), (int_lt(A, 18446744073709551616) by arith(l64, hil8, hi0)))
+        have els: g.det(gimple.elem(l[0], bits_sext(32, 64, i), 8), W(V), ok(W(V), A)) := rewrite(sym(sxi), el, {1})
+        have md := apply(tm.cell_md[b := b, cd := cd, st := st, W := W(V), h := g, l0 := l[0], i := i, wr := false], wW, hg, hwH, l0o, l0z, l64, hi0, hil8, all_elim(arrW, {V}))
+        have ld := rewrite(z0, mp(all_elim(g.ld64_det, {W(V)}, {A}, {0}), wu, ab, simp(), md))
+        // the block of word i: block i's
+        let Q := tm.cell(H(V, g).vm, l[0], i)
+        have iK: i in K2(i) by sel(taut(hi0, hil8, (int_le(i, i) by arith())))
+        have qb q0 qn qz qp := mp(all_elim(hbk, {i}), hi0, hil8, iK)
+        have qv: gimple.bytes_at(W(V).vm, A, 8) = Q by simp(fv)
+        have bq: bits_of_int(64, Q) = Q by defs(arith(qb), bits_of_int, pow2)
+        have cq: bits_of_int(64, gimple.bytes_at(W(V).vm, A, 8)) = Q := rewrite(sym(qv), bq)
+        have hpre: !(Q = 0) -> (union2(W(V), g) in I && malloc.errno_ok(eo, union2(W(V), g))) && !(union2(W(V), g).blocks[Q] = none) proof
+          assume _
+          show by taut(hiH, heH, qn)
+        qed
+        step c1 c2 V2 r2b, e2 kx2 hf from hbd with s7, els, ld, cq, tm.free_q using hfs, hfc, wW, wu, ths, hg, hwH, hpre, qb
+        have hv2 hex := hf
+        obtain g2, hg2 hrunf from hex
+        have ww2 := tm.wvv[w := w, V := V, V2 := V2, O := O1]
+        have hrunf2 := rewrite(ww2, hrunf)
+        have e2b := rewrite(ww2, e2)
+        have fo := apply(malloc.free_out[i := I, o := O, e := eo, b := b, c := cd, st := st, p := Q, s := H(V, g), x := ok(H(V2, g2), empty)], hfs, hrunf2, Ht, qb, hwH, hpre)
+        have fo2: ex Vp. Vp in x86_64_linux.Vm && ok(H(V2, g2), empty) = ok(fn_update(fn_update(H(V, g), "blocks", malloc.set_block(H(V, g).blocks, Q, none)), "vm", Vp), empty) &&
+            malloc.step_ok(I, O, H(V, g), fn_update(fn_update(H(V, g), "blocks", malloc.set_block(H(V, g).blocks, Q, none)), "vm", Vp), malloc.range(Q, snd(H(V, g).blocks[Q]))) &&
+            malloc.world_ok(b, cd, st, fn_update(fn_update(H(V, g), "blocks", malloc.set_block(H(V, g).blocks, Q, none)), "vm", Vp)) &&
+            malloc.errno_ok(eo, fn_update(fn_update(H(V, g), "blocks", malloc.set_block(H(V, g).blocks, Q, none)), "vm", Vp)) by taut(fo, q0)
+        obtain Vp, hvp hxe hst hwT heT from fo2
+        have hTe: H(V2, g2) = fn_update(fn_update(H(V, g), "blocks", malloc.set_block(H(V, g).blocks, Q, none)), "vm", Vp) by simp(hxe)
+        have ksub2: all k. k in omega -> k in K2(int_add(i, 2)) -> k in K2(i) && !(k = i) proof
+          fix k
+          assume hk2 hkK
+          have _ c1k c2k := unsel(hkK)
+          have m: k in K2(i) by sel(taut(hk2, c1k, (int_mod(k, 2) = 1 || int_le(i, k) by arith(c2k))))
+          show by taut(m, (!(k = i) by arith(c2k, hev)))
+        qed
+        have hvH: H(V, g).vm in x86_64_linux.Vm := rewrite(sym(fv), hv)
+        have mf := apply(tm.mi_free[I := I, O := O, eo := eo, b := b, cd := cd, st := st, S0 := S0, H := H(V, g), l0 := l[0], K := K2(i), K2 := K2(int_add(i, 2)), j := i, V := Vp],
+          hl, he, Ht, hvH, hvp, l0o, l64, hmi, hi0, hil8, iK, ksub2, hst, hwT, heT)
+        have mi2: tm.mi(I, O, eo, b, cd, st, S0, H(V2, g2), l[0], K2(int_add(i, 2))) by taut(rewrite(sym(hTe), mf))
+        have w2W w2u := apply(g.alloc_world[s := w, V := V2, l := l, sz := SZ], hw, hu, hv2)
+        have s2v: sint(32, 2) = 2 := mp(all_elim(ms.sint_small, {2}), simp(), arith())
+        have fj: tr.s32_fits(int_add(sint(32, i), sint(32, 2))) by defs(simp(si, s2v, (int_lt(int_add(i, 2), 2147483648) by arith(hil8)), (int_le(0, i) by arith(hi0))), gimple.fits)
+        have ad := apply(g.sadd32_det, {W(V2)}, {i}, {2}, w2u, ib, simp(), fj)
+        step e3 from conj(e2b, kx2) with ad
+        have j2: bits_add(32, i, 2) = int_add(i, 2) by defs(arith(hil8, hi0), bits_add, pow2)
+        have ex4: ex Vn gn. ((Vn in x86_64_linux.Vm && gn in malloc.Heap.ghost) && tm.mi(I, O, eo, b, cd, st, S0, H(Vn, gn), l[0], K2(int_add(i, 2)))) &&
+            y = ok(pair(W(Vn), pair(int_add(i, 2), R)), empty) by ex_intro({V2}, {g2}, taut(hv2, hg2, mi2, rewrite(j2, e3)))
+        show by taut(hil8, ex4)
+      qed
+      show by taut(c8, clt, (i = 8 || int_lt(i, 8) by arith(hil)))
+    qed
+    show by taut()
   qed
   show by taut()
 qed
