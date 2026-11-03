@@ -872,9 +872,10 @@ fn load_mode(
                         stop = Some((t, k));
                     }
                 }
-                // (... `startup`: the startup mode; `both`: either mode)
+                // (... `startup`: the startup mode; `both`: either mode;
+                // `startup` alone: the startup mode without a stop)
                 let mut mode = 0u8;
-                if stop.is_some() && matches!(&p.tok, Tok::Ident(s) if s == "startup" || s == "both") {
+                if kw == "c1" && (stop.is_some() && matches!(&p.tok, Tok::Ident(s) if s == "startup" || s == "both") || matches!(&p.tok, Tok::Ident(s) if s == "startup")) {
                     mode = if matches!(&p.tok, Tok::Ident(s) if s == "both") { 2 } else { 1 };
                     p.bump()?;
                 }

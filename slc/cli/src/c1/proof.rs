@@ -1231,8 +1231,8 @@ impl<'e> Gen<'e> {
         // t: r holding p -- the register, the instruction's rest, p, G)
         let mut ind: Option<(u128, Term, Term, Term)> = None;
         let g = if indirect {
-            if self.stop.is_none() && (self.startup || one) {
-                return Err(format!("{:x}: a call through a pointer without a stop: only call, not in the startup mode", a));
+            if self.stop.is_none() && !self.startup && one {
+                return Err(format!("{:x}: a call through a pointer without a stop: only call in the main mode", a));
             }
             let gp = self.app(&g, "app", 2).ok_or_else(|| format!("{:x}: `call *%r`, the spec's callee {} not the code map's entry", a, self.print(&g)))?.to_vec();
             let fl = self.app(&insn.fields, "pair", 2).ok_or_else(|| format!("{:x}: `call *`: not a register", a))?.to_vec();
@@ -1311,7 +1311,17 @@ impl<'e> Gen<'e> {
             None => self.callee_facts(st, &g, fa, nargs, aligned, stk, &ind)?,
         };
         // (the callee's contract at this call: the ABI's if aligned, else the one for any entry)
-        let ccname = if self.startup && stk { "tr.ccs_ms" } else if self.startup { "tr.ccs_m" } else if self.stop.is_some() { "tr.callee_contract_s" } else { "tr.callee_contract" };
+        let ccname = if self.startup && self.stop.is_none() {
+            "tr.ccs_d"
+        } else if self.startup && stk {
+            "tr.ccs_ms"
+        } else if self.startup {
+            "tr.ccs_m"
+        } else if self.stop.is_some() {
+            "tr.callee_contract_s"
+        } else {
+            "tr.callee_contract"
+        };
         let hcon = if lib.is_some() {
             defs(RP::Taut(vec![R::S(hcall.clone())]), &[ccname])
         } else if (stk && !self.startup) || ind.is_some() {
@@ -1351,9 +1361,14 @@ impl<'e> Gen<'e> {
                 // (stopping at t: the callee's contract with the stop at t, as
                 // the caller's -- k)
                 let hc = match self.stop {
-                    // (through the code map, no stop: tr.code_okn, and G typed)
+                    // (through the code map, no stop: tr.code_okn -- the
+                    // startup mode's tr.code_okd(false, ..) -- and G typed)
                     None if ind.is_some() => {
-                        let hc = self.mk("tr.code_okn", vec![g.clone(), lit(nargs as u128), lit(st.fr), lb, lc, statics]);
+                        let hc = if self.startup {
+                            self.mk("tr.code_okd", vec![self.bm(), g.clone(), lit(nargs as u128), lit(st.fr), lb, lc, statics])
+                        } else {
+                            self.mk("tr.code_okn", vec![g.clone(), lit(nargs as u128), lit(st.fr), lb, lc, statics])
+                        };
                         let fs = self.mk("fn_space", vec![self.mk("abi.ARGS", vec![]), self.mk("powerset", vec![self.mk("univ", vec![lit(1)])])]);
                         let ht = self.mk("in", vec![g.clone(), self.mk("fn_space", vec![self.mk("bits", vec![lit(64)]), fs])]);
                         self.hcall[gi] = Some(self.assume(&hc)?);
@@ -1390,6 +1405,14 @@ impl<'e> Gen<'e> {
                     Some((tt, k)) if !stk => {
                         let kt = self.mk(if k { "true" } else { "false" }, vec![]);
                         self.mk(if aligned { "tr.implements_stop" } else { "tr.implements_stop_u" }, vec![lit(fa), g.clone(), lit(tt), kt, lb, lc, statics])
+                    }
+                    // (the startup mode without a stop: tr.impl_d(false, u, ..))
+                    None if self.startup => {
+                        if stk {
+                            return Err(format!("{:x}: a call with stack arguments in the startup mode without a stop: not yet", a));
+                        }
+                        let (ff, ut) = (self.bm(), self.mk(if aligned { "false" } else { "true" }, vec![]));
+                        self.mk("tr.impl_d", vec![ff, ut, lit(fa), g.clone(), lb, lc, statics])
                     }
                     _ => self.mk(imp, vec![lit(fa), g.clone(), lb, lc, statics]),
                 };
@@ -1634,6 +1657,8 @@ impl<'e> Gen<'e> {
         }
         let rname = match (self.stop.is_some(), one) {
             _ if lib.is_some() => "tr.call0_stb",
+            (false, true) if self.startup => "tr.call1_0_d",
+            (false, false) if self.startup => "tr.call0_d",
             (false, true) => "tr.call1",
             (false, false) => "tr.call",
             (true, true) if self.startup => "tr.call1_0_st",
@@ -1780,10 +1805,16 @@ impl<'e> Gen<'e> {
                 &[],
             );
         }
-        // (through the code map, no stop: tr.calli)
+        // (through the code map, no stop: tr.calli -- the startup mode's
+        // tr.calli0_d, tr.calli1_0_d)
         if let (Some((r, z, tp, gv)), None) = (ind.clone(), self.stop) {
+            let rn = match (self.startup, one) {
+                (true, true) => "tr.calli1_0_d",
+                (true, false) => "tr.calli0_d",
+                _ => "tr.calli",
+            };
             let inst = R::Inst(
-                "tr.calli".into(),
+                rn.into(),
                 vec![
                     ("s", self.s.clone()),
                     ("v", self.v.clone()),
@@ -1822,13 +1853,11 @@ impl<'e> Gen<'e> {
             let cfr = defs(RP::Simp(false, vec![], vec![], false), &["tr.cfr"]);
             let hal = if aligned { taut(vec![R::S(self.sal16()?)]) } else { simp0() };
             let (ha, ho) = (p(self.hap_pf(&st.hst)), p(self.ofr_pf(&lit(st.fr))));
+            let pre = if one { vec![simp0(), ha, ho] } else { vec![simp0(), ho, ha] };
             return self.run(
                 &mp(
                     inst,
-                    vec![
-                        simp0(),
-                        ho,
-                        ha,
+                    [pre, vec![
                         p(f(&insn.name)),
                         simp_l(),
                         simp0(),
@@ -1854,7 +1883,8 @@ impl<'e> Gen<'e> {
                         s(&hd),
                         s(&pc),
                         self.nobp_below(&self.bkp.clone(), st.fr),
-                    ],
+                    ]]
+                    .concat(),
                 ),
                 &[],
             );

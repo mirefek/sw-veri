@@ -92,6 +92,13 @@ pub fn c1(env: &mut Env, fname: &str, spec_name: &str, prefix: &str, stop: Optio
             g.mk("tr.at_t", vec![Term::bvar(2), Term::bvar(1), Term::bvar(0)])
         };
         g.bka = g.mk("and", vec![kt, at]);
+    } else if startup {
+        // (the startup mode without a stop: no breakpoints, the runs
+        // tr.run_d -- the contract tr.impl_d)
+        if mode == 2 {
+            return Err("`both` needs a stop".into());
+        }
+        g.startup = true;
     }
     g.top(fname, spec_name, ssym, sbody, sparams, entry)
 }
@@ -735,6 +742,9 @@ impl<'e> Gen<'e> {
                     let hle = self.assume(&hle_t)?;
                     self.run(&mp(inst, vec![simp0(), s_(&hsub), h_e, s_(&hregs), s_(&body_in), simp0(), simp0(), simp0(), s_(&sq.hstk), simp0(), s_(&hle)]), &[])?
                 } else {
+                if self.startup {
+                    return Err("stack arguments in the startup mode without a stop: not yet".into());
+                }
                 let inst = R::Inst(
                     "tr.entry_ns".into(),
                     vec![
@@ -799,6 +809,9 @@ impl<'e> Gen<'e> {
                 self.run(&mp(R::Inst("tr.entry_gkpm".into(), gk_binds), vec![super::rec::p(fin), ub, h_e, s_(&hpro)]), &[])?
             } else if let Some((_, _, bl3)) = &plain_g {
                 // (past the guard any program of the arguments)
+                if self.startup {
+                    return Err("a spec past its guard any program, in the startup mode without a stop: not yet".into());
+                }
                 let inst = R::Inst(
                     "tr.entry_np".into(),
                     vec![
@@ -866,6 +879,47 @@ impl<'e> Gen<'e> {
                 let gk = R::Inst(if sm { "tr.entry_gkm" } else { "tr.entry_gk" }.into(), gk_binds);
                 let (fin, ub) = self.fin_ub(tt, &b, &kt);
                 self.run(&mp(gk, vec![super::rec::p(fin), ub, h_e, s_(&hpro)]), &[])?
+            } else if self.startup {
+                // (the startup mode without a stop: tr.entry_nkm, tr.entry_gkm
+                // with no breakpoints, the runs tr.run_d -- tr.fin_dm, tr.ub_km)
+                let nk_binds = vec![
+                    ("b", self.bm()),
+                    ("lb", lb.clone()),
+                    ("lc", lc.clone()),
+                    ("base", b.clone()),
+                    ("code", c.clone()),
+                    ("statics", statics.clone()),
+                    ("f", b.clone()),
+                    ("n", lit(nargs)),
+                    ("fd", lit(fd)),
+                    ("rs", rsl),
+                    ("q", ql.clone()),
+                    ("kw", kwl.clone()),
+                    ("E", e_lam.clone()),
+                    ("B", self.bkp.clone()),
+                    ("A", self.bka.clone()),
+                ];
+                let hpro = self.run(&mp(R::Inst("tr.entry_nkm".into(), nk_binds), vec![simp0(), s_(&hsub), h_e.clone(), s_(&hregs), s_(&body_in), simp0()]), &[])?;
+                let run_l = self.mk("tr.run_d", vec![Term::bvar(1), Term::bvar(1), Term::bvar(0)]);
+                let kf = self.mk("false", vec![]);
+                let match_l = self.match_k(&kf);
+                let gk_binds = vec![
+                    ("b", self.bm()),
+                    ("base", lb.clone()),
+                    ("code", lc.clone()),
+                    ("statics", statics.clone()),
+                    ("f", b.clone()),
+                    ("n", lit(nargs)),
+                    ("q", ql),
+                    ("kw", kwl),
+                    ("E", e_lam.clone()),
+                    ("B", self.bkp.clone()),
+                    ("A", self.bka.clone()),
+                    ("RUN", run_l),
+                    ("MATCH", match_l),
+                ];
+                let (fin, ub) = self.fin_ub_d(&b);
+                self.run(&mp(R::Inst("tr.entry_gkm".into(), gk_binds), vec![super::rec::p(fin), ub, h_e, s_(&hpro)]), &[])?
             } else {
             let inst = R::Inst(
                 "tr.entry_n".into(),
@@ -924,6 +978,9 @@ impl<'e> Gen<'e> {
                 let (fin, _) = self.fin_ub(tt, &b, &kt);
                 self.run(&mp(inst, vec![super::rec::p(fin), simp0(), simp0(), s_(&hsub), h_e, s_(&hregs), s_(&body_in)]), &[])?
             } else {
+            if self.startup {
+                return Err("a function of no arguments in the startup mode without a stop: not yet".into());
+            }
             let inst = match &plain {
                 Some(pp) => R::Inst(
                     "tr.entry0p".into(),
@@ -1027,6 +1084,27 @@ impl<'e> Gen<'e> {
             let imp_goal = self.mk("tr.impl_m", vec![ff, ut, b.clone(), spec_app.clone(), lit(tt), kt, lb.clone(), lc.clone(), statics.clone()]);
             let imps = self.evp(&RP::Defs(Box::new(RP::By(R::S(m))), vec!["tr.impl_m".into()]), &imp_goal, &[])?;
             out.push((format!("{p}.impl_m"), self.close(imps, &cprem, &gvs)?));
+            self.callee_effects(&p, ssym, &cns, &mut out)?;
+            return Ok(out);
+        }
+        // (... without a stop: tr.impl_d(false, u, ..))
+        if self.startup && self.stop.is_none() {
+            let up = if aligned { "false" } else { "true" };
+            let m_goal = self.parse(&format!(
+                "all args objs mem s o. args in abi.ARGS -> objs in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) -> \
+                 abi.loaded(app(s, \"vm\"), {lbp}, {lcp}, statics) -> app(s, \"rip\") = {bp} -> tr.eok({mb}, {up}, s, args) -> tr.objs_ok(s, objs) -> tr.vok({mb}, s, objs, mem) -> tr.run_d(s, s, o) -> \
+                 tr.mtv({mb}, s, abi.wob(objs, tr.cbm({mb}, app(s, \"fs_base\"))), app({sp}, args), tr.vw({mb}, s, objs, mem), o, false)",
+                lbp = self.print(&lb),
+                lcp = self.print(&lc),
+                bp = self.print(&b),
+                sp = self.print(&spec_app),
+                mb = self.print(&self.bm())
+            ))?;
+            let m = self.evp(&RP::Defs(Box::new(RP::By(R::S(m0))), vec![spec_name.to_string()]), &m_goal, &[])?;
+            let (ff, ut) = (self.bm(), self.mk(up, vec![]));
+            let imp_goal = self.mk("tr.impl_d", vec![ff, ut, b.clone(), spec_app.clone(), lb.clone(), lc.clone(), statics.clone()]);
+            let imps = self.evp(&RP::Defs(Box::new(RP::By(R::S(m))), vec!["tr.impl_d".into()]), &imp_goal, &[])?;
+            out.push((format!("{p}.impl_d"), self.close(imps, &cprem, &gvs)?));
             self.callee_effects(&p, ssym, &cns, &mut out)?;
             return Ok(out);
         }
@@ -1136,6 +1214,12 @@ impl<'e> Gen<'e> {
     /// tr.entry_gk's premises: the claim at the entry f matching (tr.fin_k),
     /// the spec undefined matching (tr.ub_k) -- the startup mode's tr.fin_km,
     /// tr.ub_km
+    fn fin_ub_d(&self, f: &Term) -> (R, RA) {
+        let ff = self.bm();
+        let kf = self.mk("false", vec![]);
+        (mpf("tr.fin_dm", vec![t(&ff), t(f)]), p(R::Inst("tr.ub_km".into(), vec![("b", ff), ("k", kf)])))
+    }
+
     fn fin_ub(&self, tt: u128, f: &Term, kt: &Term) -> (R, RA) {
         if self.startup {
             let ff = self.bm();
