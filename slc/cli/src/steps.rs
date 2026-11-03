@@ -51,6 +51,8 @@ fn byte_eq(k: usize, v: u8) -> String {
 /// files): its name and symbol -- an assembly function without its size
 /// (`.size`, e.g. musl's memcpy) up to the next symbol
 fn function<'a>(elf: &'a Elf, s: &'a str) -> R<(&'a str, sl_interp::elf::Symbol)> {
+    // (`!ADDR+LEN` suffixes: instructions skipped, `skips`)
+    let s = s.split('!').next().unwrap_or(s);
     // (`name:len`: a symbol without its size, its bytes given -- crti's
     // `_init`, its section's end before the next symbol)
     if let Some((n, l)) = s.split_once(':') {
@@ -72,6 +74,19 @@ fn function<'a>(elf: &'a Elf, s: &'a str) -> R<(&'a str, sl_interp::elf::Symbol)
         elf.symbols.iter().filter(|y| y.value > sym.value).map(|y| y.value).min().ok_or_else(|| format!("{}: no size, no symbol after it", s))? - sym.value
     };
     Ok((name, sl_interp::elf::Symbol { name: sym.name.clone(), value: sym.value, size }))
+}
+
+/// A function's `!ADDR+LEN` suffixes: instructions (address, length, hex)
+/// passed over without a decode fact -- ones the model's decoder has not,
+/// on no path the function runs (gcc's `addr32 call` of a weak symbol
+/// absent); the boundaries are untrusted, so are these
+fn skips(s: &str) -> R<Vec<(u64, u64)>> {
+    s.split('!').skip(1).map(|p| {
+        let (a, l) = p.split_once('+').ok_or_else(|| format!("{}: skip `{}` not ADDR+LEN", s, p))?;
+        let a = u64::from_str_radix(a.trim_start_matches("0x"), 16).map_err(|e| format!("{}: {}", s, e))?;
+        let l: u64 = l.parse().map_err(|e| format!("{}: {}", s, e))?;
+        Ok((a, l))
+    }).collect()
 }
 
 /// `slc steps ELF SYMBOL... -o STEPS.core [--text TEXT.core]`: the chain
@@ -234,9 +249,16 @@ fn decode_facts(env: &mut Env, elf: &Elf, fns: &[String]) -> R<Vec<(String, Opti
     for s in fns {
         let (ns, sym) = function(&elf, s)?;
         let code = elf.bytes_at(sym.value, sym.size as usize).ok_or_else(|| format!("{}: no bytes", s))?.to_vec();
+        let skip = skips(s)?;
         let mut insns = Vec::new();
         let mut addr = sym.value;
         while addr < sym.value + sym.size {
+            // (an instruction the model's decoder has not: no fact, the C1
+            // of a run reaching it fails there)
+            if let Some(&(_, l)) = skip.iter().find(|(a, _)| *a == addr) {
+                addr += l;
+                continue;
+            }
             let window = elf.bytes_at(addr, 15).unwrap_or(&[]).to_vec();
             let len = interp.decode(&window).first().map(|m| m.len).ok_or_else(|| format!("{:x}: not decoded", addr))?;
             encodings.entry(window[..len].to_vec()).or_insert_with(|| window.clone());
