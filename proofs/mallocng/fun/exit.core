@@ -579,3 +579,63 @@ proof
   qed
   show by taut(hp, q1, q2)
 qed
+
+// __libc_exit_fini at a call
+theorem xt.fini_q: all D F regs s o2. s in abi.World -> s in univ(1) -> abi.thread_ok(s.vm, s.fs_base) -> abi.thread_ok(xt.DONE(s.vm), s.fs_base) ->
+  mp.calls(D, musl_asm.deregister_tm_clones_fun()) -> mp.calls(F, musl_asm._init_fun()) ->
+  gimple.usable(s.vm, s.objs, musl_asm.completed_0, 1, true) -> gimple.usable(s.vm, s.objs, musl_asm.completed_0, 1, false) ->
+  gimple.usable(s.vm, s.objs, musl_asm.cxa_finalize_got, 8, false) -> gimple.bytes_at(s.vm, musl_asm.cxa_finalize_got, 8) = 0 ->
+  gimple.usable(s.vm, s.objs, c_src_exit_exit.__fini_array_start, 8, false) -> gimple.bytes_at(s.vm, c_src_exit_exit.__fini_array_start, 8) = 4198784 ->
+  gc.regs_ok(regs, empty) -> runs(c_src_exit_exit.libc_exit_fini_fun(lxp.FP(4198784, xt.DT(D)), F)[regs], s, o2) ->
+  abi.ovf_out(s, o2) || (ex V r. (V in x86_64_linux.Vm && (V = s.vm || V = xt.DONE(s.vm))) && o2 = ok(fn_update(s, "vm", V), r))
+proof
+  fix D F regs s o2
+  assume hw hu ht htd hD hF huw hur hug hg0 hfu hfv hr h
+  have rl rn := apply(gc.regs0, hr)
+  have lo: seq_len(regs) in omega by simp(rl)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, ol, keep(ord_le))
+  rsimp only, c_src_exit_exit.libc_exit_fini_fun, app_fn_build, ra in h
+  have b := apply(g.runs_elim, h)
+  obtain o3, hs3 hk3 from expand(b, bind_rel)
+  let GO := abi.ovf_out(s, o2) || (ex V r. (V in x86_64_linux.Vm && (V = s.vm || V = xt.DONE(s.vm))) && o2 = ok(fn_update(s, "vm", V), r))
+  have ne: ex y. y in bits(64) by ex_intro({0}, simp())
+  have fr := mp(all_elim(xt.fini_run, {D}, {F}, {s}, {o3}), hw, hu, ht, htd, hD, hF, huw, hur, hug, hg0, hfu, hfv, hs3)
+  have c1: abi.ovf_out(s, o3) -> GO proof
+    assume q
+    obtain v ob, hv hob e from q
+    have oe: o2 = exc(fn_update(fn_update(s, "vm", v), "objs", ob), exc_val("stack_overflow", empty)) by simp(rewrite(e, hk3))
+    have l: abi.ovf_out(s, o2) by ex_intro({v}, {ob}, taut(hv, hob, oe))
+    show by taut(l)
+  qed
+  have c2: (ex V. (V in x86_64_linux.Vm && (V = s.vm || V = xt.DONE(s.vm))) && o3 = ok(fn_update(s, "vm", V), empty)) -> GO proof
+    assume q
+    obtain V, hv hvv e from q
+    have k2: any_rel(x5. x5 in bits(64), x5. any_rel(x6. x6 in bits(64), x6. o2 = ok(fn_update(s, "vm", V), pair(x5, x6)))) by simp(rewrite(e, hk3), keep(any_rel))
+    obtain y1, hy1 k3 from apply(g.any_e, ne, k2)
+    obtain y2, hy2 hoy from apply(g.any_e, ne, k3)
+    have l: ex V2 r. (V2 in x86_64_linux.Vm && (V2 = s.vm || V2 = xt.DONE(s.vm))) && o2 = ok(fn_update(s, "vm", V2), r)
+      by ex_intro({V}, {pair(y1, y2)}, taut(hv, hvv, hoy))
+    show by taut(l)
+  qed
+  show by taut(fr, c1, c2)
+qed
+
+// ----------------------------------------------------------------------
+//  exit's writes: apart from the thread's word, so the thread kept
+
+theorem xt.th_store: all V fs a n v. abi.thread_ok(V, fs) -> fs in bits(64) -> a in bits(64) -> n in omega ->
+  int_lt(int_add(fs, 8), 9223372036854775808) -> int_lt(int_add(a, n), 9223372036854775808) -> (int_le(int_add(fs, 8), a) || int_le(int_add(a, n), fs)) ->
+  abi.thread_ok(fn_update(V, "bytes", x86_64_linux.store_le(V.bytes, a, n, v)), fs)
+proof
+  fix V fs a n v
+  assume ht hf ha hn h1 h2 hd
+  have far: all k. k in omega -> int_lt(k, 8) -> !int_lt(bits_sub(64, bits_add(64, fs, bits_of_int(64, k)), a), n) proof
+    fix k
+    assume hk hkl
+    have bk: bits_of_int(64, k) = k := apply(nf.boi_in[n := 64, x := k], eval(), (k in bits(64) by arith(hk, hkl)))
+    show by defs(arith(rewrite(bk, refl({bits_add(64, fs, bits_of_int(64, k))})), hk, hkl, hf, ha, hn, h1, h2, hd), bits_sub, bits_add, pow2)
+  qed
+  have le := apply(x86.le_store_far[b := V.bytes, r := fs, a := a, n := n, v := v], hf, ha, far)
+  show := apply(ms.thread_keep, {V}, {x86_64_linux.store_le(V.bytes, a, n, v)}, {fs}, ht, le)
+qed
