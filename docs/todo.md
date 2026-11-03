@@ -24,24 +24,25 @@ other crash, never exit 42. Runs that never end are allowed (§2).
   runs without a stop (`tr.run_d`), and a contract of those says nothing of
   a run's prefix -- so no stop address works for a caller of main (a stop
   address no rip can be needs every reached state typed, which the x86
-  model does not give). Steps:
-  1. Bridge (GIMPLE->CPU translation, generic): the startup mode without a
-     stop -- `tr.impl_d(b, ..)` (tr.run_d, the mode's view), from a
-     contract never stopping (`tr.impl_m(.., false)`) and from
-     `tr.implements_at`; its entry and call rules (direct, through a code
-     map), adapted from the stop ones (`tr.callee_sim_smc` with
-     `tr.run_split_k`, no stop case).
-  2. Engine: `startup` without `stop` / `nostop` picks them.
-  3. Bridge: a main-mode callee from a startup-mode caller -- its spec
-     wrapped to switch the world's C bytes (the canary hidden during the
-     call, restored after); the thread and canary sound at the call.
-  4. main without its ghost (GIMPLE, C2): `main_spec` with the blocks none
-     at entry, the ghost dropped; its contract from `tm.main_top`'s parts.
-  5. C1 of stage2, __libc_start_main, _start_c in the new mode; link.
-  6. C2: their specs on to exit -- `exit_pre` at main's return (the tid set
-     by __init_tp; exit_lock 0, the fini_array word, completed.0, the
-     `__cxa_finalize` GOT word kept: binary statics outside the allocator's
-     at main's entry, which main's frame keeps).
+  model does not give). Done: the startup mode without a stop
+  (`tr.impl_d`, proofs/translate_nobrk.core; engine: `c1 .. startup`
+  alone), a main-mode callee from a startup caller (`tr.as_su`,
+  proofs/translate_mode.core), the C1s (c1_whole.core) and the link
+  (link_whole.core, proofs/test/main_whole.core: `tm.whole_link`, the
+  machine code from _start_c's entry implementing the linked GIMPLE --
+  __libc_start_init by its purpose, main's and exit's linked code wrapped).
+  Next, C2 of that linked GIMPLE (GIMPLE spec proving): from _start_c's
+  precondition, an exit 0 or 1 or an overflow --
+  - at main's call: main's spec's precondition (`tm.PRE` on the world with
+    the canary hidden and no blocks): the invariant there at GIMPLE level
+    (the machine-level Init proof, `ui.rep_main` / `ui.owned_main`, works
+    on a machine at main; reuse it on a machine built from the GIMPLE
+    world, or restate it on a world's memory); main's outcomes then by
+    `tm.main_out` (its CFG to its structured form by `main_ref`);
+  - at exit's call: `exit_pre` -- the tid set by __init_tp; exit_lock 0,
+    the fini_array word, completed.0, the `__cxa_finalize` GOT word kept
+    (binary statics outside the allocator's at main's entry, which main's
+    frame keeps); exit's outcome by `xt.exit_calls`.
 - (e) The whole run: from exec, `_start`'s code to _start_c's contract,
   `program_ok` from its spec; the claim proven.
 

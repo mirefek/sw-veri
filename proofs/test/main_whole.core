@@ -1,0 +1,75 @@
+// The whole run's startup path linked with the program's main (docs/todo.md
+// 1(d)): main's linked code (its callees the program's, as tm.main_top has
+// them) by its contract without a stop, wrapped for the startup's caller;
+// exit by its linked code; from _start_c's entry (lwh.stc).
+
+abbrev tm.ST := app(musl_malloc.prog_statics, empty)
+abbrev tm.MAL(G) := c_src_malloc_lite_malloc_cfg.default_malloc_fun(G)
+abbrev tm.FRE(NF) := c_src_malloc_free_cfg.free_fun(mp.FLF(NF))
+// main's code (its CFG form), its callees linked
+abbrev tm.LOWC(G, NF) := c_tests_test_malloc_cfg.main_fun(tm.SZ, tm.MAL(G), tm.FL, tm.FRE(NF), tm.IN)
+// the whole startup path from _start_c's entry
+abbrev tm.STC(G, NF) := lwh.STC(tr.as_su(tm.LOWC(G, NF)), lwh.EXW)
+
+// (a function's returns with n arguments: so with more)
+theorem tm.io_more: all g m n. g in fn_space(abi.ARGS, powerset(univ(1))) -> m in omega -> n in omega -> int_le(m, n) -> tr.callee_io(g, m) -> tr.callee_io(g, n)
+proof
+  fix g m n
+  assume hg mo no hl hio
+  have k: all args w w2 r. ord_le(n, seq_len(args)) -> runs(g[args], w, ok(w2, r)) -> tr.returns_valid(w, w2) || tr.may_raise(g, args, w) proof
+    fix args w w2 r
+    assume hn hr
+    // (no argument list: g's spec none there)
+    have out: !(args in abi.ARGS) -> false proof
+      assume na
+      have gp: g in powerset(cart(abi.ARGS, powerset(univ(1)))) by simp(expand(hg, fn_space))
+      have e := apply(ui.app_out, {g}, {abi.ARGS}, {powerset(univ(1))}, {args}, gp, na)
+      show by simp(expand(rewrite(e, hr), runs))
+    qed
+    have hA: args in abi.ARGS by taut(out)
+    have lo: seq_len(args) in omega by simp(hA)
+    have hm: ord_le(m, seq_len(args)) by defs(arith(expand(hn, ord_le), hl, mo, no, lo), ord_le)
+    show := mp(all_elim(expand(hio, tr.callee_io), {args}, {w}, {w2}, {r}), hm, hr)
+  qed
+  show by defs(k, tr.callee_io)
+qed
+
+theorem tm.whole_link: ex G NF. tr.impl_d(false, false, 4198565, tm.STC(G, NF), 4198400, text.code, tm.ST) &&
+  tr.implements_at(4202244, tm.MAL(G), 4198400, text.code, tm.ST) && tm.MAL(G) in fn_space(abi.ARGS, powerset(univ(1))) && tr.callee_io(tm.MAL(G), 1) &&
+    tm.mcall(musl.inv, musl.owned, musl_malloc.errno_offset, musl_malloc.prog_base, musl_malloc.prog_code, musl_malloc.prog_statics, tm.MAL(G)) &&
+  tr.implements_at(4201081, tm.FRE(NF), 4198400, text.code, tm.ST) && tm.FRE(NF) in fn_space(abi.ARGS, powerset(univ(1))) && tr.callee_io(tm.FRE(NF), 1) &&
+    tm.fcall(musl.inv, musl.owned, musl_malloc.errno_offset, musl_malloc.prog_base, musl_malloc.prog_code, musl_malloc.prog_statics, tm.FRE(NF))
+proof
+  let eo := musl_malloc.errno_offset
+  let b := musl_malloc.prog_base
+  let cd := musl_malloc.prog_code
+  let st := musl_malloc.prog_statics
+  have he hb hcd := musl.prog
+  have hmc: mp.mi_cfg(musl.cfg) by simp(musl.cfg_ok, unfold(musl.cfg))
+  have hfc: mp.fr_cfg(musl.cfg) by simp(musl.cfg_ok, unfold(musl.cfg))
+  have ei := unfold(musl.inv)
+  have eow := unfold(musl.owned)
+  obtain G, im tm0 om cm0 from mp(all_elim(tm.malloc_k, {musl.cfg}, {tm.ST}, {eo}, {b}, {cd}, {st}), hmc, he, musl.code_img)
+  obtain NF, ifr tfr ofr cfr0 from mp(all_elim(tm.free_k, {musl.cfg}, {tm.ST}, {eo}, {b}, {cd}, {st}), hfc, he, musl.code_img)
+  have cm := rewrite(sym(ei), rewrite(sym(eow), cm0))
+  have cfr := rewrite(sym(ei), rewrite(sym(eow), cfr0))
+  let L := tm.LOWC(G, NF)
+  // main's code: its contract, typed, its returns
+  have mi := mp(all_elim(tmain.implements, {tm.ST}, {tm.SZ}, {tm.MAL(G)}, {tm.FL}, {tm.FRE(NF)}, {tm.IN}),
+    all_elim(tsize.implements, {tm.ST}), tsize.typed, tsize.io, im, tm0, om,
+    all_elim(tm.fill_impl, {tm.ST}), all_elim(tfill.typed, {tm.PT}, {tm.SZ}), mp(all_elim(tfill.io, {tm.PT}, {tm.SZ}), tpat.io, tsize.io),
+    ifr, tfr, ofr,
+    all_elim(tm.intact_impl, {tm.ST}), all_elim(tintact.typed, {tm.PT}, {tm.SZ}), mp(all_elim(tintact.io, {tm.PT}, {tm.SZ}), tpat.io, tsize.io))
+  have mt := all_elim(tmain.typed, {tm.SZ}, {tm.MAL(G)}, {tm.FL}, {tm.FRE(NF)}, {tm.IN})
+  have mo := mp(all_elim(tmain.io, {tm.SZ}, {tm.MAL(G)}, {tm.FL}, {tm.FRE(NF)}, {tm.IN}), tsize.io, om,
+    mp(all_elim(tfill.io, {tm.PT}, {tm.SZ}), tpat.io, tsize.io), ofr, mp(all_elim(tintact.io, {tm.PT}, {tm.SZ}), tpat.io, tsize.io))
+  // ... wrapped for the startup's caller
+  have md := apply(tr.impl_d_su, mt, apply(tr.impl_d_at, mi))
+  have mc: tr.ccs_d(false, 56, 4199122, tr.as_su(L), 4198400, text.code, tm.ST) by defs(taut(md, (int_mod(56, 16) = 8 by simp())), tr.ccs_d)
+  have mio := apply(tr.su_io, apply(tm.io_more, {L}, {0}, {3}, mt, (0 in omega by simp()), (3 in omega by simp()), (int_le(0, 3) by arith()), mo))
+  have mty := all_elim(tr.su_typed, {L})
+  have xt := all_elim(tr.su_typed, {lxp.EX})
+  have xio := apply(tr.su_io, lwh.ex_io)
+  have s := apply(lwh.stc, {tr.as_su(L)}, {lwh.EXW}, {tm.ST}, mc, mio, mty, all_elim(lwh.ex_d, {tm.ST}), xt, xio)
+  show by ex_intro({G}, {NF}, taut(s, im, tm0, om, cm, ifr, tfr, ofr, cfr))
+qed
