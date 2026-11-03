@@ -347,3 +347,57 @@ proof
   qed
   show by taut(cN, cZ)
 qed
+
+// __do_global_dtors_aux at a call: an overflow, or the memory as it was or
+// with the completed byte set
+theorem xt.dt_q: all D regs s o2. s in abi.World -> s in univ(1) -> abi.thread_ok(s.vm, s.fs_base) -> mp.calls(D, musl_asm.deregister_tm_clones_fun()) ->
+  gimple.usable(s.vm, s.objs, musl_asm.completed_0, 1, true) -> gimple.usable(s.vm, s.objs, musl_asm.completed_0, 1, false) ->
+  gimple.usable(s.vm, s.objs, musl_asm.cxa_finalize_got, 8, false) -> gimple.bytes_at(s.vm, musl_asm.cxa_finalize_got, 8) = 0 ->
+  gc.regs_ok(regs, empty) -> runs(musl_asm.__do_global_dtors_aux_fun(D)[regs], s, o2) ->
+  abi.ovf_out(s, o2) || (ex V r. (V in x86_64_linux.Vm && (V = s.vm || V = xt.DONE(s.vm))) && o2 = ok(fn_update(s, "vm", V), r) && r = r)
+proof
+  fix D regs s o2
+  assume hw hu ht hD huw hur hug hg0 hr h
+  have rl rn := apply(gc.regs0, hr)
+  have lo: seq_len(regs) in omega by simp(rl)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, ol, keep(ord_le))
+  rsimp only, musl_asm.__do_global_dtors_aux_fun, app_fn_build, ra in h
+  have pv pf pd pb := apply(ms.world_parts, hw)
+  have ss: fn_update(s, "vm", s.vm) = s := mp(fn_update_same[f := s, k := "vm"], pf, pd)
+  have b := apply(g.runs_elim, h)
+  obtain o3, hs3 hk3 from expand(b, bind_rel)
+  let GO := abi.ovf_out(s, o2) || (ex V r. (V in x86_64_linux.Vm && (V = s.vm || V = xt.DONE(s.vm))) && o2 = ok(fn_update(s, "vm", V), r) && r = r)
+  have ne: ex y. y in bits(64) by ex_intro({0}, simp())
+  // (a return with V: o2 its)
+  have rt: all V. V in x86_64_linux.Vm -> (V = s.vm || V = xt.DONE(s.vm)) -> o3 = ok(fn_update(s, "vm", V), empty) -> GO proof
+    fix V
+    assume hv hvv e
+    have k2: any_rel(x5. x5 in bits(64), x5. any_rel(x6. x6 in bits(64), x6. o2 = ok(fn_update(s, "vm", V), pair(x5, x6)))) by simp(rewrite(e, hk3), keep(any_rel))
+    obtain y1, hy1 k3 from apply(g.any_e, ne, k2)
+    obtain y2, hy2 hoy from apply(g.any_e, ne, k3)
+    have l: ex V2 r. (V2 in x86_64_linux.Vm && (V2 = s.vm || V2 = xt.DONE(s.vm))) && o2 = ok(fn_update(s, "vm", V2), r) && r = r
+      by ex_intro({V}, {pair(y1, y2)}, taut(hv, hvv, hoy, refl({pair(y1, y2)})))
+    show by taut(l)
+  qed
+  have dr := mp(all_elim(xt.dt_run, {D}, {s}, {o3}), hw, hu, ht, hD, huw, hur, hug, hg0, hs3)
+  have c1: abi.ovf_out(s, o3) -> GO proof
+    assume q
+    obtain v ob, hv hob e from q
+    have oe: o2 = exc(fn_update(fn_update(s, "vm", v), "objs", ob), exc_val("stack_overflow", empty)) by simp(rewrite(e, hk3))
+    have l: abi.ovf_out(s, o2) by ex_intro({v}, {ob}, taut(hv, hob, oe))
+    show by taut(l)
+  qed
+  have c2: o3 = ok(s, empty) -> GO proof
+    assume e
+    show := mp(all_elim(rt, {s.vm}), pv, taut(refl({s.vm})), rewrite(sym(ss), e))
+  qed
+  have vf0: fn_update(s.vm, "bytes", s.vm.bytes) in x86_64_linux.Vm := rewrite(sym(mp(fn_update_same[f := s.vm, k := "bytes"], (is_fun(s.vm) by simp(expand(pv, x86_64_linux.Vm))),
+    ("bytes" in dom(s.vm) by simp(expand(pv, x86_64_linux.Vm))))), pv)
+  have dv: xt.DONE(s.vm) in x86_64_linux.Vm := apply(mp.vm_st, {s.vm}, {s.vm.bytes}, {musl_asm.completed_0}, {1}, {1}, vf0)
+  have c3: o3 = ok(fn_update(s, "vm", xt.DONE(s.vm)), empty) -> GO proof
+    assume e
+    show := mp(all_elim(rt, {xt.DONE(s.vm)}), dv, taut(refl({xt.DONE(s.vm)})), e)
+  qed
+  show by taut(dr, c1, c2, c3)
+qed
