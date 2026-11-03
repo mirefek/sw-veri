@@ -678,3 +678,116 @@ proof
   qed
   show by taut(ti, heT, hwT, tfs, kT, arT, bksT)
 qed
+
+// (a store's bytes: elsewhere as before)
+theorem tm.st_at(B, A, n, v, x): x in bits(64) -> A in omega -> n in omega -> int_le(int_add(A, n), 18446744073709551616) -> !(int_le(A, x) && int_lt(x, int_add(A, n))) ->
+  x86_64_linux.store_le(B, A, n, v)[x] = B[x]
+proof
+  assume hx ha hn hl hno
+  have e := mp(app_fn_build[d := bits(64), v := x0. ite(int_lt(bits_sub(64, x0, A), n), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x0, A)))), B[x0]), a := x], hx)
+  have ns: !int_lt(bits_sub(64, x, A), n) by defs(arith(hx, ha, hn, hl, hno), bits_sub, pow2)
+  show by defs(simp(e, ns), x86_64_linux.store_le)
+qed
+
+// main storing p at its array's word i (none of K's): main's invariant
+// kept, the word p
+theorem tm.mi_store(I, O, eo, b, cd, st, S0, H, l0, K, i, p): tm.laws(I, O, eo) -> H in rec_and(abi.World, malloc.Heap.ghost) ->
+  fn_update(H, "vm", fn_update(H.vm, "bytes", x86_64_linux.store_le(H.vm.bytes, int_add(l0, int_mul(8, i)), 8, p))) in rec_and(abi.World, malloc.Heap.ghost) ->
+  H.vm in x86_64_linux.Vm -> l0 in omega -> int_le(int_add(l0, 64), 18446744073709551616) -> i in omega -> int_lt(i, 8) -> p in bits(64) ->
+  tm.mi(I, O, eo, b, cd, st, S0, H, l0, K) -> (all k. k in omega -> k in K -> !(k = i)) ->
+  tm.mi(I, O, eo, b, cd, st, S0, fn_update(H, "vm", fn_update(H.vm, "bytes", x86_64_linux.store_le(H.vm.bytes, int_add(l0, int_mul(8, i)), 8, p))), l0, K) &&
+  tm.cell(fn_update(H.vm, "bytes", x86_64_linux.store_le(H.vm.bytes, int_add(l0, int_mul(8, i)), 8, p)), l0, i) = p
+proof
+  assume hl ht ht2 hvH hl0 hl64 hi0 hil hp hmi hKi
+  let A := int_add(l0, int_mul(8, i))
+  let X := x86_64_linux.store_le(H.vm.bytes, A, 8, p)
+  let VX := fn_update(H.vm, "bytes", X)
+  let T := fn_update(H, "vm", VX)
+  have hfr hop hom hwf hla := hl
+  have hi heo hw hfs hk ha hb := hmi
+  have ao: A in omega by arith(hl0, hi0)
+  have a8: int_le(int_add(A, 8), 18446744073709551616) by arith(hl64, hil, hi0)
+  have out: all x. x in bits(64) -> !(int_le(A, x) && int_lt(x, int_add(A, 8))) -> X[x] = H.vm.bytes[x] proof
+    fix x
+    assume hx hn
+    show := apply(tm.st_at[B := H.vm.bytes, A := A, n := 8, v := p, x := x], hx, ao, simp(), a8, hn)
+  qed
+  // (the word's bytes: the array's -- live, unmapped, none of the allocator's)
+  have hW: all x. x in bits(64) -> X[x] = H.vm.bytes[x] ||
+      ((x in malloc.live_of(H.blocks) || !x86_64_linux.mapped(H.vm, int_div(x, x86_64_linux.PAGE))) && !(x in O[H])) proof
+    fix x
+    assume hx
+    have c1: int_le(A, x) && int_lt(x, int_add(A, 8)) -> !x86_64_linux.mapped(H.vm, int_div(x, x86_64_linux.PAGE)) && !(x in O[H]) proof
+      assume w
+      have w1 w2 := w
+      have l nO := mp(all_elim(ha, {x}), (x in omega by arith(hx)), (int_le(l0, x) by arith(w1, hi0)), (int_lt(x, int_add(l0, 64)) by arith(w2, hil)))
+      show by taut(apply(tm.obj_unm[b := b, cd := cd, st := st, H := H, a := x], hw, (x in omega by arith(hx)), l), nO)
+    qed
+    show by taut(c1, mp(all_elim(out, {x}), hx))
+  qed
+  have {tin = inv, tow = own, eok = eok, wok = wok, kept = kept} := apply(tm.client[I := I, O := O, eo := eo, b := b, cd := cd, st := st, S0 := S0, H := H, X := X],
+    hfr, hop, hom, hwf, hla, ht, ht2, hi, heo, hw, hk, hW)
+  have tob: T.objs = H.objs by simp()
+  have tbl: T.blocks = H.blocks by simp()
+  have arT: tm.arr(O, T, l0) proof
+    fix a
+    assume ao2 h1 h2
+    have l nO := mp(all_elim(ha, {a}), ao2, h1, h2)
+    show by taut(rewrite(sym(tob), l), rewrite(sym(tow), nO))
+  qed
+  // (a byte off the word, below 2^64: as it was)
+  have agr: all a. a in omega -> int_lt(a, 18446744073709551616) -> !(int_le(A, a) && int_lt(a, int_add(A, 8))) -> T.vm.bytes[bits_of_int(64, a)] = H.vm.bytes[bits_of_int(64, a)] proof
+    fix a
+    assume ao2 al hn
+    have be: bits_of_int(64, a) = a by defs(arith(ao2, al), bits_of_int, pow2)
+    have xb: a in bits(64) by arith(ao2, al)
+    show by simp(be, mp(all_elim(out, {a}), xb, hn))
+  qed
+  have bksT: tm.bks(T, l0, K) proof
+    fix k
+    assume hk2 hkl hkK
+    have nki := mp(all_elim(hKi, {k}), hk2, hkK)
+    have ce: tm.cell(T.vm, l0, k) = tm.cell(H.vm, l0, k) proof
+      have ag: all a. a in omega -> int_le(int_add(l0, int_mul(8, k)), a) -> int_lt(a, int_add(int_add(l0, int_mul(8, k)), 8)) ->
+          T.vm.bytes[bits_of_int(64, a)] = H.vm.bytes[bits_of_int(64, a)] proof
+        fix a
+        assume ao2 h1 h2
+        show := mp(all_elim(agr, {a}), ao2, (int_lt(a, 18446744073709551616) by arith(h2, hl64, hkl, hk2)),
+          (!(int_le(A, a) && int_lt(a, int_add(A, 8))) by arith(h1, h2, nki, hk2, hi0)))
+      qed
+      show := apply(tm.cell_eq[V := H.vm, V2 := T.vm, c := int_add(l0, int_mul(8, k))], (int_add(l0, int_mul(8, k)) in omega by arith(hl0, hk2)),
+        (int_le(int_add(int_add(l0, int_mul(8, k)), 8), 18446744073709551616) by arith(hl64, hkl, hk2)), ag)
+    qed
+    let q := tm.cell(H.vm, l0, k)
+    have bH := mp(all_elim(hb, {k}), hk2, hkl, hkK)
+    have hq q0 hn hz hpt := bH
+    // (the block's bytes: mapped, so off the word)
+    have bag: all a. a in omega -> int_le(q, a) -> int_lt(a, int_add(q, test_malloc.size_of(k))) -> T.vm.bytes[bits_of_int(64, a)] = H.vm.bytes[bits_of_int(64, a)] proof
+      fix a
+      assume ao2 h1 h2
+      have {rw = rw} := apply(tm.live_facts[I := I, O := O, H := H, q := q, a := a], hop, hwf, ht, hi, hq, hn, ao2, h1, (int_lt(a, int_add(q, snd(H.blocks[q]))) by arith(h2, hz)))
+      have m _ _ := expand(rw, malloc.rw_mapped)
+      have ml _ := expand(m, x86_64_linux.mapped)
+      have nw: !(int_le(A, a) && int_lt(a, int_add(A, 8))) proof
+        assume w
+        have w1 w2 := w
+        have l _ := mp(all_elim(ha, {a}), ao2, (int_le(l0, a) by arith(w1, hi0)), (int_lt(a, int_add(l0, 64)) by arith(w2, hil)))
+        show by taut(m, apply(tm.obj_unm[b := b, cd := cd, st := st, H := H, a := a], hw, ao2, l))
+      qed
+      show := mp(all_elim(agr, {a}), ao2, (int_lt(a, 18446744073709551616) by defs(arith(ml, ao2), x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)), nw)
+    qed
+    have s16: int_le(16, test_malloc.size_of(k)) by defs(arith(hk2), test_malloc.size_of)
+    have {rwl = rw} := apply(tm.live_facts[I := I, O := O, H := H, q := q, a := int_sub(int_add(q, test_malloc.size_of(k)), 1)], hop, hwf, ht, hi, hq, hn,
+      (int_sub(int_add(q, test_malloc.size_of(k)), 1) in omega by arith(hq, s16)), (int_le(q, int_sub(int_add(q, test_malloc.size_of(k)), 1)) by arith(s16)),
+      (int_lt(int_sub(int_add(q, test_malloc.size_of(k)), 1), int_add(q, snd(H.blocks[q]))) by arith(hz)))
+    have ml2 _ _ := expand(rwl, malloc.rw_mapped)
+    have mt _ := expand(ml2, x86_64_linux.mapped)
+    have hlt: int_lt(int_add(q, test_malloc.size_of(k)), 18446744073709551616) by defs(arith(mt, hq, s16), x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)
+    have vX: VX in x86_64_linux.Vm := mp(all_elim(ms.wr_any, {H.vm}, {A}, {8}, {p}), hvH)
+    have pT := apply(tm.pat_keep[V := H.vm, V2 := T.vm, q := q, k := k], hvH, (T.vm in x86_64_linux.Vm by simp(vX)), hq, hlt, hpt, bag)
+    have bT: tm.bk(T, q, k) by taut(hq, q0, rewrite(sym(tbl), hn), rewrite(sym(tbl), hz), pT)
+    show := rewrite(sym(ce), bT)
+  qed
+  have cv: tm.cell(VX, l0, i) = p by mem(hp, ao, a8)
+  show by taut(tin, eok, wok, (T.fs_base = S0.fs_base by simp(hfs)), kept, arT, bksT, cv)
+qed
