@@ -1,0 +1,600 @@
+// A main-mode callee from a startup-mode caller (docs/todo.md 1(d) 3):
+// startup's world has all bytes the C world's (abi.cball), the main
+// mode's all but the stack protector's word (abi.cbytes0). The callee's
+// spec F wrapped (tr.as_su(F)): the thread and the canary sound at the
+// call, F run on the world with the canary hidden (tr.hide), its return's
+// world back in the startup's view -- the canary's bytes the caller's (the
+// callee keeps them: the main mode's hidden bytes), the C bytes all, the
+// thread pointer the caller's (the main mode keeps it). Its exceptions and
+// divergences F's.
+
+abbrev tr.hide(w) := fn_update(w, "objs", abi.wob(w.objs.live, abi.cbytes0(w.fs_base)))
+abbrev tr.rbytes(w, w2) := fn_build(bits(64), x. ite(x in abi.canary(w.fs_base), w.vm.bytes[x], w2.vm.bytes[x]))
+abbrev tr.rest(w, w2) := fn_update(fn_update(fn_update(w2, "vm", fn_update(w2.vm, "bytes", tr.rbytes(w, w2))), "objs", abi.wob(w2.objs.live, abi.cball)), "fs_base", w.fs_base)
+def tr.omap(w, o1, o) := (ex w2 r. o1 = ok(w2, r) && o = ok(tr.rest(w, w2), r)) || (ex x e. o1 = exc(x, e) && o = exc(x, e)) || (ex t. o1 = diverge(t) && o = diverge(t))
+def tr.tc_ok(w) := abi.thread_ok(w.vm, w.fs_base) && abi.canary_ok(w.vm, w.fs_base)
+abbrev tr.su_r(F, args, x1, x2) := !tr.tc_ok(x1) || (ex x3. runs(F[args], tr.hide(x1), x3) && tr.omap(x1, x3, x2))
+def tr.as_su(F) := fn_build(abi.ARGS, x0. mkprog(x1 x2. tr.su_r(F, x0, x1, x2)))
+
+theorem tr.su_app: all F args. args in abi.ARGS -> tr.as_su(F)[args] = mkprog(x1 x2. tr.su_r(F, args, x1, x2))
+proof
+  fix F args
+  assume hA
+  show by defs(simp(hA), tr.as_su)
+qed
+
+theorem tr.su_runs: all F args w o. args in abi.ARGS -> pair(w, o) in univ(1) -> tr.su_r(F, args, w, o) -> runs(tr.as_su(F)[args], w, o)
+proof
+  fix F args w o
+  assume hA hu hr
+  have r := apply(tr.runs_intro[r := x1 x2. tr.su_r(F, args, x1, x2)], {w}, {o}, hu, hr)
+  show := rewrite(sym(mp(all_elim(tr.su_app, {F}, {args}), hA)), r)
+qed
+
+theorem tr.su_elim: all F args w o. args in abi.ARGS -> runs(tr.as_su(F)[args], w, o) -> tr.su_r(F, args, w, o)
+proof
+  fix F args w o
+  assume hA hr
+  have r := rewrite(mp(all_elim(tr.su_app, {F}, {args}), hA), hr)
+  show := apply(g.runs_elim[r := x1 x2. tr.su_r(F, args, x1, x2)], {w}, {o}, r)
+qed
+
+theorem tr.su_typed: all F. tr.as_su(F) in fn_space(abi.ARGS, powerset(univ(1)))
+proof
+  fix F
+  show by defs(tr.fun_typed[r := x0 x1 x2. tr.su_r(F, x0, x1, x2)], tr.as_su)
+qed
+
+// ----------------------------------------------------------------------
+//  The views: a domain smaller, the pages the same
+
+// (a byte of the domain with fewer C bytes: of the one with more, on
+// memory of the same pages)
+theorem tr.indom_up: all v1 v2 L A B x. v2.pages = v1.pages -> (x in A -> x in B) -> abi.in_domain(v1, abi.wob(L, A), x) -> abi.in_domain(v2, abi.wob(L, B), x)
+proof
+  fix v1 v2 L A B x
+  assume hp hab hd
+  have d2: x in L || ((x86_64_linux.mapped(v1, int_div(x, x86_64_linux.PAGE)) && !(snd(v1.pages[int_div(x, x86_64_linux.PAGE)]).kind = 2)) && x in A) by simp(expand(hd, abi.in_domain))
+  have m: x86_64_linux.mapped(v1, int_div(x, x86_64_linux.PAGE)) -> x86_64_linux.mapped(v2, int_div(x, x86_64_linux.PAGE)) by defs(simp(hp), x86_64_linux.mapped)
+  have nk: !(snd(v1.pages[int_div(x, x86_64_linux.PAGE)]).kind = 2) -> !(snd(v2.pages[int_div(x, x86_64_linux.PAGE)]).kind = 2) by simp(hp)
+  have d3: x in L || ((x86_64_linux.mapped(v2, int_div(x, x86_64_linux.PAGE)) && !(snd(v2.pages[int_div(x, x86_64_linux.PAGE)]).kind = 2)) && x in B) by taut(d2, m, nk, hab)
+  show by defs(simp(d3), abi.in_domain)
+qed
+
+// (the canary's bytes, where the ABI keeps them: on the domain of all bytes)
+theorem tr.canary_dom: all vm L fs x. fs in bits(64) -> abi.canary_ok(vm, fs) -> x in abi.canary(fs) -> abi.in_domain(vm, abi.wob(L, abi.cball), x)
+proof
+  fix vm L fs x
+  assume hf hc hx
+  have xc0: x in omega && int_le(int_add(fs, 40), x) && int_lt(x, int_add(fs, 48))
+    by taut(set_select_def[s := omega, p := x0. int_le(int_add(fs, 40), x0) && int_lt(x0, int_add(fs, 48)), z := x], expand(hx, abi.canary))
+  have xo c1 c2 := xc0
+  let i := int_sub(x, int_add(fs, 40))
+  have fo: fs in omega by simp(hf)
+  have io: i in omega by arith(xo, fo, c1)
+  have il: int_lt(i, 8) by arith(xo, fo, c2)
+  have xe: int_add(int_add(fs, 40), i) = x by arith(xo, fo)
+  have rd cs := expand(hc, abi.canary_ok)
+  have r := rewrite(xe, mp(all_elim(expand(rd, x86_64_linux.readable), {i}), io, il))
+  have n := rewrite(xe, mp(all_elim(cs, {i}), io, il))
+  have ns: !(snd(vm.pages[int_div(x, x86_64_linux.PAGE)]).kind = 2) by taut(expand(n, abi.stack_page), r)
+  have xc: x in abi.wob(L, abi.cball).c_bytes by simp(xo)
+  show by defs(taut(r, ns, xc), abi.in_domain)
+qed
+
+// (a page the world maps: the machine's, not a stack page)
+theorem tr.wp_mapped: all cv wv q. abi.world_pages(cv, wv) -> q in omega -> x86_64_linux.mapped(wv, q) -> cv.pages[q] = wv.pages[q] && !abi.stack_page(cv, q)
+proof
+  fix cv wv q
+  assume e hq hm
+  have mq := expand(hm, x86_64_linux.mapped)
+  have qp: q in gc.PN by simp(hq, mq)
+  have eq := mp(all_elim(expand(e, abi.world_pages), {q}), qp)
+  have c: abi.stack_page(cv, q) -> false proof
+    assume hs
+    have n := rewrite(mp(tr.ite_t[c := abi.stack_page(cv, q), a := none, b := cv.pages[q]], hs), eq)
+    show by taut(n, mq)
+  qed
+  have ns2: !abi.stack_page(cv, q) by taut(c)
+  have e2 := rewrite(mp(tr.ite_f[c := abi.stack_page(cv, q), a := none, b := cv.pages[q]], ns2), eq)
+  show conj(sym(e2), ns2)
+qed
+
+// the startup view: the main mode's too
+theorem tr.vok_su: all s objs mem. tr.vok(false, s, objs, mem) -> tr.vok(true, s, objs, mem)
+proof
+  fix s objs mem
+  assume h
+  have wp wm := expand(h, tr.vok)
+  have cf: tr.cbm(false, s.fs_base) = abi.cball := mp(tr.ite_f[c := false, a := abi.cbytes0(s.fs_base), b := abi.cball], (!false by taut()))
+  have ct: tr.cbm(true, s.fs_base) = abi.cbytes0(s.fs_base) := all_elim(tr.cbm_t, {s.fs_base})
+  have top lim b0 bk by0 _ _ _ pg ns stk rsv := expand(rewrite(cf, wm), tr.wmc)
+  have by1: all x0. x0 in bits(64) -> abi.in_domain(mem, abi.wob(objs, abi.cbytes0(s.fs_base)), x0) -> s.vm.bytes[x0] = mem.bytes[x0] proof
+    fix x0
+    assume xb hd
+    have xa: x0 in abi.cbytes0(s.fs_base) -> x0 in abi.cball by simp()
+    have hd2 := apply(tr.indom_up, {mem}, {mem}, {objs}, {abi.cbytes0(s.fs_base)}, {abi.cball}, {x0}, refl({mem.pages}), xa, hd)
+    show := mp(all_elim(by0, {x0}), xb, hd2)
+  qed
+  have fr1: all x0. x0 in bits(64) -> (int_le(abi.sp(s), x0) && !abi.in_domain(mem, abi.wob(objs, abi.cbytes0(s.fs_base)), x0)) && abi.stack_page(s.vm, x86_64_linux.page_of(x0)) ->
+      s.vm.bytes[x0] = s.vm.bytes[x0] proof
+    fix x0
+    assume _ _
+    show := refl({s.vm.bytes[x0]})
+  qed
+  have hd1: all x0. x0 in bits(64) -> !(x0 in abi.wob(objs, abi.cbytes0(s.fs_base)).c_bytes) ->
+      s.vm.bytes[x0] = s.vm.bytes[x0] && s.vm.pages[x86_64_linux.page_of(x0)] = s.vm.pages[x86_64_linux.page_of(x0)] proof
+    fix x0
+    assume _ _
+    show := conj(refl({s.vm.bytes[x0]}), refl({s.vm.pages[x86_64_linux.page_of(x0)]}))
+  qed
+  have cb1: abi.wob(objs, abi.cbytes0(s.fs_base)).c_bytes = abi.cbytes0(s.fs_base) || abi.wob(objs, abi.cbytes0(s.fs_base)).c_bytes = abi.cball by simp()
+  have w1: tr.wmc(s.vm, s.vm, mem, abi.wob(objs, abi.cbytes0(s.fs_base)), s.fs_base, abi.sp(s)) by defs(taut(top, lim, b0, bk, by1, fr1, hd1, cb1, pg, ns, stk, rsv), tr.wmc)
+  show by defs(taut(wp, rewrite(sym(ct), w1)), tr.vok)
+qed
+
+// the thread and the canary sound in the startup view: so on the machine
+theorem tr.tc_xfer: all s objs mem. s in x86_64_linux.Machine -> tr.vok(false, s, objs, mem) -> abi.thread_ok(mem, s.fs_base) -> abi.canary_ok(mem, s.fs_base) ->
+  abi.thread_ok(s.vm, s.fs_base) && abi.canary_ok(s.vm, s.fs_base)
+proof
+  fix s objs mem
+  assume hM h ht hc
+  have fb: s.fs_base in bits(64) by simp(expand(hM, x86_64_linux.Machine))
+  have fo: s.fs_base in omega by simp(fb)
+  have wp wm := expand(h, tr.vok)
+  have cf: tr.cbm(false, s.fs_base) = abi.cball := mp(tr.ite_f[c := false, a := abi.cbytes0(s.fs_base), b := abi.cball], (!false by taut()))
+  have _ _ _ _ by0 _ _ _ _ _ _ _ := expand(rewrite(cf, wm), tr.wmc)
+  have bt: all a. a in bits(64) -> abi.in_domain(mem, abi.objs_at(objs, s.fs_base), a) -> s.vm.bytes[a] = mem.bytes[a] proof
+    fix a
+    assume ab hd
+    have xa: a in abi.cbytes0(s.fs_base) -> a in abi.cball by simp()
+    have hd2 := apply(tr.indom_up, {mem}, {mem}, {objs}, {abi.cbytes0(s.fs_base)}, {abi.cball}, {a}, refl({mem.pages}), xa, expand(hd, abi.objs_at))
+    show := mp(all_elim(by0, {a}), ab, hd2)
+  qed
+  have t := apply(tr.thread_xfer, {mem}, {s.vm}, {objs}, {s.fs_base}, wp, ht, fb, bt)
+  have rd _ := expand(hc, abi.canary_ok)
+  have pe: all i. i in omega -> int_lt(i, 8) -> s.vm.pages[int_div(int_add(int_add(s.fs_base, 40), i), x86_64_linux.PAGE)] = mem.pages[int_div(int_add(int_add(s.fs_base, 40), i), x86_64_linux.PAGE)] proof
+    fix i
+    assume i1 i2
+    have m _ := mp(all_elim(expand(rd, x86_64_linux.readable), {i}), i1, i2)
+    have qo: int_div(int_add(int_add(s.fs_base, 40), i), x86_64_linux.PAGE) in omega by simp(fo, i1)
+    have e _ := apply(tr.wp_mapped, {s.vm}, {mem}, {int_div(int_add(int_add(s.fs_base, 40), i), x86_64_linux.PAGE)}, wp, qo, m)
+    show := e
+  qed
+  have c := apply(tr.canary_pages, {mem}, {s.vm}, {s.fs_base}, hc, pe)
+  show := conj(t, c)
+qed
+
+// (the startup view, the canary hidden: the main mode's)
+theorem tr.hide_vw: all s objs mem. tr.hide(tr.vw(false, s, objs, mem)) = tr.vw(true, s, objs, mem)
+proof
+  fix s objs mem
+  let R0 := fn_update(fn_update(fn_update(fn_update(empty, "vm", mem), "os", s.os), "fs_base", s.fs_base), "cpu", s.cpu)
+  have t := fn_update_twice[f := R0, k := "objs", a := abi.wob(objs, tr.cbm(false, s.fs_base)), b := abi.wob(objs, abi.cbytes0(s.fs_base))]
+  have e1: tr.hide(tr.vw(false, s, objs, mem)) = fn_update(fn_update(R0, "objs", abi.wob(objs, tr.cbm(false, s.fs_base))), "objs", abi.wob(objs, abi.cbytes0(s.fs_base))) by simp()
+  have ct: abi.wob(objs, abi.cbytes0(s.fs_base)) = abi.wob(objs, tr.cbm(true, s.fs_base)) := sym(subst({y. abi.wob(objs, y) = abi.wob(objs, abi.cbytes0(s.fs_base))}, sym(all_elim(tr.cbm_t, {s.fs_base})), refl({abi.wob(objs, abi.cbytes0(s.fs_base))})))
+  have e2: fn_update(R0, "objs", abi.wob(objs, abi.cbytes0(s.fs_base))) = tr.vw(true, s, objs, mem) := subst({y. fn_update(R0, "objs", abi.wob(objs, abi.cbytes0(s.fs_base))) = fn_update(R0, "objs", y)}, ct, refl({fn_update(R0, "objs", abi.wob(objs, abi.cbytes0(s.fs_base)))}))
+  show := trans(e1, trans(t, e2))
+qed
+
+// (a return's world back in the startup view: a world)
+theorem tr.rest_typed: all w w2. w in abi.World -> w2 in abi.World -> w2 in univ(1) -> tr.rest(w, w2) in abi.World && tr.rest(w, w2) in univ(1)
+proof
+  fix w w2
+  assume hw hw2 hu2
+  have wv: w.vm in x86_64_linux.Vm by simp(hw, keep(x86_64_linux.Vm))
+  have w2v: w2.vm in x86_64_linux.Vm by simp(hw2, keep(x86_64_linux.Vm))
+  have fb: w.fs_base in bits(64) by simp(expand(hw, abi.World))
+  have vt: w.vm.bytes in fn_space(bits(64), bits(8)) by simp(expand(wv, x86_64_linux.Vm))
+  have vt2: w2.vm.bytes in fn_space(bits(64), bits(8)) by simp(expand(w2v, x86_64_linux.Vm))
+  let C(x) := x in abi.canary(w.fs_base)
+  have vq: all x. x in bits(64) -> ite(C(x), w.vm.bytes[x], w2.vm.bytes[x]) in bits(8) proof
+    fix x
+    assume hx
+    have c1: C(x) -> ite(C(x), w.vm.bytes[x], w2.vm.bytes[x]) in bits(8) proof
+      assume hc
+      show by simp(hc, mp(fn_space_app[a := bits(64), b := bits(8), f := w.vm.bytes, x := x], vt, hx))
+    qed
+    have c2: !C(x) -> ite(C(x), w.vm.bytes[x], w2.vm.bytes[x]) in bits(8) proof
+      assume hc
+      show by simp(hc, mp(fn_space_app[a := bits(64), b := bits(8), f := w2.vm.bytes, x := x], vt2, hx))
+    qed
+    show by taut(c1, c2)
+  qed
+  have zt := mp(fn_build_space[d := bits(64), v := x. ite(C(x), w.vm.bytes[x], w2.vm.bytes[x]), b := bits(8)], vq)
+  let NV := fn_update(w2.vm, "bytes", tr.rbytes(w, w2))
+  have bu := apply(fn_space_univ, bits_univ[n := 64], bits_univ[n := 8], zt)
+  have vu: NV in univ(1) by simp(apply(x86.vm_univ, w2v), bu)
+  have vV := apply(tr.vm_bytes, {w2.vm}, {tr.rbytes(w, w2)}, w2v, zt, vu)
+  have s1W s1u := apply(mp.am_world[s := w2, V := NV], hw2, hu2, vV)
+  have ol _ := apply(abi.objs_parts, (w2.objs in abi.Objs by simp(expand(hw2, abi.World))))
+  have cbt cbu := all_elim(tr.cbm_type, {false}, {w.fs_base})
+  have cb0: tr.cbm(false, w.fs_base) = abi.cball := mp(tr.ite_f[c := false, a := abi.cbytes0(w.fs_base), b := abi.cball], (!false by taut()))
+  have ot ou := apply(abi.wob_typed, {w2.objs.live}, {abi.cball}, ol, rewrite(cb0, cbt), rewrite(cb0, cbu))
+  have s2W s2u := apply(sp.world_objs[s := fn_update(w2, "vm", NV), ob := abi.wob(w2.objs.live, abi.cball)], s1W, s1u, ot)
+  have s3 := apply(sp.world_fs[s := fn_update(fn_update(w2, "vm", NV), "objs", abi.wob(w2.objs.live, abi.cball)), f := w.fs_base], s2W, s2u, fb)
+  show := s3
+qed
+
+// a return's memory, back in the startup view: as the machine's
+theorem tr.rest_wmc: all s objs mem m1 w2. s in x86_64_linux.Machine -> abi.canary_ok(mem, s.fs_base) -> tr.vok(false, s, objs, mem) ->
+  tr.wmc(s.vm, m1.vm, w2.vm, abi.wob(objs, abi.cbytes0(s.fs_base)), s.fs_base, abi.sp(s)) ->
+  tr.wmc(s.vm, m1.vm, fn_update(w2.vm, "bytes", fn_build(bits(64), x. ite(x in abi.canary(s.fs_base), mem.bytes[x], w2.vm.bytes[x]))), abi.wob(objs, abi.cball), s.fs_base, abi.sp(s))
+proof
+  fix s objs mem m1 w2
+  assume hM hc hvo hw
+  let NV := fn_update(w2.vm, "bytes", fn_build(bits(64), x. ite(x in abi.canary(s.fs_base), mem.bytes[x], w2.vm.bytes[x])))
+  have fb: s.fs_base in bits(64) by simp(expand(hM, x86_64_linux.Machine))
+  have top lim b0 bk by2 fr2 hd2 _ pg2 ns2 stk2 rsv2 := expand(hw, tr.wmc)
+  have _ wm := expand(hvo, tr.vok)
+  have cf: tr.cbm(false, s.fs_base) = abi.cball := mp(tr.ite_f[c := false, a := abi.cbytes0(s.fs_base), b := abi.cball], (!false by taut()))
+  have _ _ _ _ by0 _ _ _ _ _ _ _ := expand(rewrite(cf, wm), tr.wmc)
+  have np: NV.pages = w2.vm.pages by simp()
+  have top3: m1.vm.stack_top = NV.stack_top by simp(top)
+  have lim3: m1.vm.stack_limit = NV.stack_limit by simp(lim)
+  have b03: m1.vm.brk_start = NV.brk_start by simp(b0)
+  have bk3: m1.vm.brk = NV.brk by simp(bk)
+  have by3: all x0. x0 in bits(64) -> abi.in_domain(NV, abi.wob(objs, abi.cball), x0) -> m1.vm.bytes[x0] = NV.bytes[x0] proof
+    fix x0
+    assume xb hd
+    have c1: x0 in abi.canary(s.fs_base) -> m1.vm.bytes[x0] = NV.bytes[x0] proof
+      assume hx
+      have nb: NV.bytes[x0] = mem.bytes[x0] by simp(xb, hx)
+      have nc: !(x0 in abi.wob(objs, abi.cbytes0(s.fs_base)).c_bytes) by simp(hx)
+      have h1 _ := mp(all_elim(hd2, {x0}), xb, nc)
+      have dm := apply(tr.canary_dom, {mem}, {objs}, {s.fs_base}, {x0}, fb, hc, hx)
+      have h2 := mp(all_elim(by0, {x0}), xb, dm)
+      show := trans(h1, trans(h2, sym(nb)))
+    qed
+    have c2: !(x0 in abi.canary(s.fs_base)) -> m1.vm.bytes[x0] = NV.bytes[x0] proof
+      assume hx
+      have nb: NV.bytes[x0] = w2.vm.bytes[x0] by simp(xb, hx)
+      have xa: x0 in abi.cball -> x0 in abi.cbytes0(s.fs_base) by simp(hx)
+      have dw := apply(tr.indom_up, {NV}, {w2.vm}, {objs}, {abi.cball}, {abi.cbytes0(s.fs_base)}, {x0}, sym(np), xa, hd)
+      have h1 := mp(all_elim(by2, {x0}), xb, dw)
+      show := trans(h1, sym(nb))
+    qed
+    show by taut(c1, c2)
+  qed
+  have fr3: all x0. x0 in bits(64) -> (int_le(abi.sp(s), x0) && !abi.in_domain(NV, abi.wob(objs, abi.cball), x0)) && abi.stack_page(s.vm, x86_64_linux.page_of(x0)) ->
+      m1.vm.bytes[x0] = s.vm.bytes[x0] proof
+    fix x0
+    assume xb hx
+    have xa: x0 in abi.cbytes0(s.fs_base) -> x0 in abi.cball by simp()
+    have up: abi.in_domain(w2.vm, abi.wob(objs, abi.cbytes0(s.fs_base)), x0) -> abi.in_domain(NV, abi.wob(objs, abi.cball), x0) proof
+      assume hd
+      show := apply(tr.indom_up, {w2.vm}, {NV}, {objs}, {abi.cbytes0(s.fs_base)}, {abi.cball}, {x0}, np, xa, hd)
+    qed
+    have h2: (int_le(abi.sp(s), x0) && !abi.in_domain(w2.vm, abi.wob(objs, abi.cbytes0(s.fs_base)), x0)) && abi.stack_page(s.vm, x86_64_linux.page_of(x0)) by taut(hx, up)
+    show := mp(all_elim(fr2, {x0}), xb, h2)
+  qed
+  have hd3: all x0. x0 in bits(64) -> !(x0 in abi.wob(objs, abi.cball).c_bytes) ->
+      m1.vm.bytes[x0] = s.vm.bytes[x0] && m1.vm.pages[x86_64_linux.page_of(x0)] = s.vm.pages[x86_64_linux.page_of(x0)] proof
+    fix x0
+    assume xb hn
+    have xc: x0 in abi.wob(objs, abi.cball).c_bytes by simp(xb)
+    show by taut(hn, xc)
+  qed
+  have cb3: abi.wob(objs, abi.cball).c_bytes = abi.cbytes0(s.fs_base) || abi.wob(objs, abi.cball).c_bytes = abi.cball by simp()
+  have pg3: all x0. x0 in set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))) -> m1.vm.pages[x0] = NV.pages[x0] || (NV.pages[x0] = none && abi.stack_page(m1.vm, x0)) proof
+    fix x0
+    assume hp
+    show by simp(mp(all_elim(pg2, {x0}), hp))
+  qed
+  have ns3: all x0. x0 in set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))) -> !(NV.pages[x0] = none) -> !(snd(NV.pages[x0]).kind = 2) proof
+    fix x0
+    assume hp
+    show by simp(mp(all_elim(ns2, {x0}), hp))
+  qed
+  show by defs(taut(top3, lim3, b03, bk3, by3, fr3, hd3, cb3, pg3, ns3, stk2, rsv2), tr.wmc)
+qed
+
+// ----------------------------------------------------------------------
+//  The contract: a main-mode callee's (no stop) gives the startup mode's
+//  of its spec wrapped
+
+theorem tr.impl_d_su: all u f F cb cc st. F in fn_space(abi.ARGS, powerset(univ(1))) -> tr.impl_d(true, u, f, F, cb, cc, st) -> tr.impl_d(false, u, f, tr.as_su(F), cb, cc, st)
+proof
+  fix u f F cb cc st
+  assume hF hi
+  have g: all args objs mem s o. args in abi.ARGS -> objs in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(s.vm, cb, cc, st) ->
+      s.rip = f -> tr.eok(false, u, s, args) -> tr.objs_ok(s, objs) -> tr.vok(false, s, objs, mem) -> tr.run_d(s, s, o) ->
+      tr.mtv(false, s, abi.wob(objs, tr.cbm(false, s.fs_base)), tr.as_su(F)[args], tr.vw(false, s, objs, mem), o, false) proof
+    fix args objs mem s o
+    assume hA ho hmv hM hsu hl hrip he hob hvo hr
+    let W := tr.vw(false, s, objs, mem)
+    let V := abi.wob(objs, tr.cbm(false, s.fs_base))
+    let P := tr.as_su(F)[args]
+    have hvu := apply(tr.vw_univ, {false}, {s}, {objs}, {mem}, hsu, ho, hmv)
+    have wW := apply(tr.vw_typed, {false}, {s}, {objs}, {mem}, hM, ho, hmv, hvu)
+    // (unsound at the call: undefined)
+    have bad: !tr.tc_ok(W) -> tr.mtv(false, s, V, P, W, o, false) proof
+      assume hn
+      have eu: empty in univ(1) by simp()
+      have pu: pair(W, exc(W, empty)) in univ(1) by simp(hvu)
+      have sr: tr.su_r(F, args, W, exc(W, empty)) by taut(hn)
+      have rr := apply(tr.su_runs, {F}, {args}, {W}, {exc(W, empty)}, hA, pu, sr)
+      have eno := tr.undef_empty
+      have rst: abi.raise_state(W) by defs(apply(tr.world_and, wW), abi.raise_state)
+      have ub: tr.ub(s, V, P, W) by defs(ex_intro({empty}, {W}, taut(eu, eno, rst, rr)), tr.ub)
+      show by defs(taut(ub), tr.mtv)
+    qed
+    have good: tr.tc_ok(W) -> tr.mtv(false, s, V, P, W, o, false) proof
+      assume hc
+      have tw: abi.thread_ok(mem, s.fs_base) && abi.canary_ok(mem, s.fs_base) by simp(expand(hc, tr.tc_ok))
+      have ht hcn := tw
+      have mt mc := apply(tr.tc_xfer, {s}, {objs}, {mem}, hM, hvo, ht, hcn)
+      have he2: tr.eok(true, u, s, args) by defs(taut(expand(he, tr.eok), mt, mc), tr.eok)
+      have hv2 := apply(tr.vok_su, hvo)
+      let W2 := tr.vw(true, s, objs, mem)
+      let V2 := abi.wob(objs, tr.cbm(true, s.fs_base))
+      let G := F[args]
+      have mt2 := mp(all_elim(expand(hi, tr.impl_d), {args}, {objs}, {mem}, {s}, {o}), hA, ho, hmv, hM, hsu, hl, hrip, he2, hob, hv2, hr)
+      have hw := all_elim(tr.hide_vw, {s}, {objs}, {mem})
+      // (the callee's raises and divergences: the wrapped spec's)
+      have rexc: all x e. runs(G, W2, exc(x, e)) -> runs(P, W, exc(x, e)) proof
+        fix x e
+        assume rr
+        have pu0 := apply(tr.spec_univ, {F}, {args}, {W2}, {exc(x, e)}, hF, hA, rr)
+        have pu: pair(W, exc(x, e)) in univ(1) by simp(hvu, pu0)
+        have om0: ex x4 e4. exc(x, e) = exc(x4, e4) && exc(x, e) = exc(x4, e4) by ex_intro({x}, {e}, conj(refl({exc(x, e)}), refl({exc(x, e)})))
+        have om: tr.omap(W, exc(x, e), exc(x, e)) by defs(taut(om0), tr.omap)
+        have rh := rewrite(sym(hw), rr)
+        have ex3: ex x3. runs(F[args], tr.hide(W), x3) && tr.omap(W, x3, exc(x, e)) by ex_intro({exc(x, e)}, taut(rh, om))
+        have sr: tr.su_r(F, args, W, exc(x, e)) by taut(ex3)
+        show := apply(tr.su_runs, {F}, {args}, {W}, {exc(x, e)}, hA, pu, sr)
+      qed
+      have rdiv: all t. runs(G, W2, diverge(t)) -> runs(P, W, diverge(t)) proof
+        fix t
+        assume rr
+        have pu0 := apply(tr.spec_univ, {F}, {args}, {W2}, {diverge(t)}, hF, hA, rr)
+        have pu: pair(W, diverge(t)) in univ(1) by simp(hvu, pu0)
+        have om0: ex t4. diverge(t) = diverge(t4) && diverge(t) = diverge(t4) by ex_intro({t}, conj(refl({diverge(t)}), refl({diverge(t)})))
+        have om: tr.omap(W, diverge(t), diverge(t)) by defs(taut(om0), tr.omap)
+        have rh := rewrite(sym(hw), rr)
+        have ex3: ex x3. runs(F[args], tr.hide(W), x3) && tr.omap(W, x3, diverge(t)) by ex_intro({diverge(t)}, taut(rh, om))
+        have sr: tr.su_r(F, args, W, diverge(t)) by taut(ex3)
+        show := apply(tr.su_runs, {F}, {args}, {W}, {diverge(t)}, hA, pu, sr)
+      qed
+      have m := expand(mt2, tr.mtv)
+      have k1: tr.ub(s, V2, G, W2) -> tr.mtv(false, s, V, P, W, o, false) proof
+        assume u
+        obtain e x, eu eno ena rst rr from expand(u, tr.ub)
+        have pe := mp(all_elim(rexc, {x}, {e}), rr)
+        have ub: tr.ub(s, V, P, W) by defs(ex_intro({e}, {x}, taut(eu, eno, ena, rst, pe)), tr.ub)
+        show by defs(taut(ub), tr.mtv)
+      qed
+      have k2: tr.crash(s, G, W2, o) -> tr.mtv(false, s, V, P, W, o, false) proof
+        assume c
+        obtain m1 a k0, oe m1M ab sev inp io from expand(c, tr.crash)
+        have ov: tr.ovf(G, W2, m1.os) -> tr.ovf(P, W, m1.os) proof
+          assume hv
+          have v1: (ex x. x in rec_and(abi.World, single(empty)) && runs(G, W2, exc(x, exc_val("stack_overflow", empty))) && x.os.events = m1.os.events) ->
+              tr.ovf(P, W, m1.os) proof
+            assume e
+            obtain x, xr xrr xe from e
+            have p2 := mp(all_elim(rexc, {x}, {exc_val("stack_overflow", empty)}), xrr)
+            have e2: ex x5. x5 in rec_and(abi.World, single(empty)) && runs(P, W, exc(x5, exc_val("stack_overflow", empty))) && x5.os.events = m1.os.events
+              by ex_intro({x}, taut(xr, p2, xe))
+            show by defs(taut(e2), tr.ovf)
+          qed
+          have v2: (ex t. runs(G, W2, diverge(t))) -> tr.ovf(P, W, m1.os) proof
+            assume e
+            obtain t, tr2 from e
+            have e2: ex t5. runs(P, W, diverge(t5)) by ex_intro({t}, mp(all_elim(rdiv, {t}), tr2))
+            show by defs(taut(e2), tr.ovf)
+          qed
+          show by taut(expand(hv, tr.ovf), v1, v2)
+        qed
+        have io2: tr.ovf(P, W, m1.os) || s.os.events = m1.os.events by taut(io, ov)
+        have c2: tr.crash(s, P, W, o) by defs(ex_intro({m1}, {a}, {k0}, taut(oe, m1M, ab, sev, inp, io2)), tr.crash)
+        show by defs(taut(c2), tr.mtv)
+      qed
+      have k3: tr.div(G, W2, o) -> tr.mtv(false, s, V, P, W, o, false) proof
+        assume d
+        have d1 d2 := expand(d, tr.div)
+        obtain t2, rd from d2
+        have e2: ex t5. runs(P, W, diverge(t5)) by ex_intro({t2}, mp(all_elim(rdiv, {t2}), rd))
+        have dd: tr.div(P, W, o) by defs(taut(d1, e2), tr.div)
+        show by defs(taut(dd), tr.mtv)
+      qed
+      have k5: tr.xo(G, W2, o) -> tr.mtv(false, s, V, P, W, o, false) proof
+        assume hx
+        obtain m2 sx x, stu xe rst rr from expand(hx, tr.xo)
+        have pe := mp(all_elim(rexc, {x}, {exc_val("exit", sx)}), rr)
+        have x2: tr.xo(P, W, o) by defs(ex_intro({m2}, {sx}, {x}, taut(stu, xe, rst, pe)), tr.xo)
+        show by defs(taut(x2), tr.mtv)
+      qed
+      // (a return: the callee's world back in the startup view)
+      have k4: (ex m1. o = ok(m1, empty) && tr.rtv(true, s, V2, G, W2, m1)) -> tr.mtv(false, s, V, P, W, o, false) proof
+        assume e
+        obtain m1, oe hrt from e
+        have m1M m1u ew mcpu mgs mrip mrsp mcs mdf := expand(hrt, tr.rtv)
+        obtain w2, hg w2W w2u wm2 mos cb2 fs1 _ from ew
+        let r := pair(m1.gpr[0], m1.gpr[2])
+        let w3 := tr.rest(W, w2)
+        have cb3: w2.objs.c_bytes = abi.cbytes0(s.fs_base) by simp(cb2, all_elim(tr.cbm_t, {s.fs_base}))
+        have wm2b: tr.wmc(s.vm, m1.vm, w2.vm, abi.wob(objs, abi.cbytes0(s.fs_base)), s.fs_base, abi.sp(s)) by simp(wm2, cb3, keep(tr.wmc))
+        have wm3 := apply(tr.rest_wmc, {s}, {objs}, {mem}, {m1}, {w2}, hM, hcn, hvo, wm2b)
+        have wm4: tr.wmc(s.vm, m1.vm, w3.vm, abi.wob(V.live, w3.objs.c_bytes), s.fs_base, abi.sp(s)) by simp(wm3, keep(tr.wmc))
+        have w3W w3u := apply(tr.rest_typed, {W}, {w2}, wW, w2W, w2u)
+        have pu0 := apply(tr.spec_univ, {F}, {args}, {W2}, {ok(w2, r)}, hF, hA, hg)
+        have pu: pair(W, ok(w3, r)) in univ(1) by simp(hvu, pu0, w3u)
+        have om0: ex w4 r4. ok(w2, r) = ok(w4, r4) && ok(w3, r) = ok(tr.rest(W, w4), r4) by ex_intro({w2}, {r}, conj(refl({ok(w2, r)}), refl({ok(w3, r)})))
+        have om: tr.omap(W, ok(w2, r), ok(w3, r)) by defs(taut(om0), tr.omap)
+        have rh := rewrite(sym(hw), hg)
+        have ex3: ex x3. runs(F[args], tr.hide(W), x3) && tr.omap(W, x3, ok(w3, r)) by ex_intro({ok(w2, r)}, taut(rh, om))
+        have sr: tr.su_r(F, args, W, ok(w3, r)) by taut(ex3)
+        have rr := apply(tr.su_runs, {F}, {args}, {W}, {ok(w3, r)}, hA, pu, sr)
+        have os3: m1.os = w3.os by simp(mos)
+        have cbw: w3.objs.c_bytes = V.c_bytes by simp(mp(tr.ite_f[c := false, a := abi.cbytes0(s.fs_base), b := abi.cball], (!false by taut())))
+        have fs3: !false -> m1.fs_base = w3.fs_base by simp(mp(fs1, (true by taut())))
+        have fs4: false -> m1.fs_base = s.fs_base by taut()
+        have e3: ex w5. runs(P, W, ok(w5, pair(m1.gpr[0], m1.gpr[2]))) && w5 in abi.World && w5 in univ(1) &&
+            tr.wmc(s.vm, m1.vm, w5.vm, abi.wob(V.live, w5.objs.c_bytes), s.fs_base, abi.sp(s)) && m1.os = w5.os &&
+            w5.objs.c_bytes = V.c_bytes && (false -> m1.fs_base = s.fs_base) && (!false -> m1.fs_base = w5.fs_base)
+          by ex_intro({w3}, taut(rr, w3W, w3u, wm4, os3, cbw, fs4, fs3))
+        have rv: tr.rtv(false, s, V, P, W, m1) by defs(taut(m1M, m1u, e3, mcpu, mgs, mrip, mrsp, mcs, mdf), tr.rtv)
+        have e5: ex m2. o = ok(m2, empty) && tr.rtv(false, s, V, P, W, m2) by ex_intro({m1}, taut(oe, rv))
+        show by defs(taut(e5), tr.mtv)
+      qed
+      show by taut(m, k1, k2, k3, k4, k5)
+    qed
+    show by taut(bad, good)
+  qed
+  show by defs(g, tr.impl_d)
+qed
+
+// ----------------------------------------------------------------------
+//  The wrapped spec's returns
+
+// (a memory of v2's pages, each byte v1's or v2's, both loaded: loaded)
+theorem tr.loaded_rb: all v1 v2 B gb gc st. abi.loaded(v1, gb, gc, st) -> abi.loaded(v2, gb, gc, st) ->
+  (all x. x in bits(64) -> B[x] = v1.bytes[x] || B[x] = v2.bytes[x]) -> abi.loaded(fn_update(v2, "bytes", B), gb, gc, st)
+proof
+  fix v1 v2 B gb gc st
+  assume h1 h2 hb
+  let V := fn_update(v2, "bytes", B)
+  have c1 _ := expand(h1, abi.loaded)
+  have c2 s2 := expand(h2, abi.loaded)
+  have cd: all x0. x0 in omega -> int_lt(x0, seq_len(gc)) -> ((x86_64_linux.fetchable(V, bits_of_int(64, int_add(gb, x0))) && !x86_64_linux.can_access(V, bits_of_int(64, int_add(gb, x0)), 1)) &&
+      !abi.stack_page(V, x86_64_linux.page_of(bits_of_int(64, int_add(gb, x0))))) && V.bytes[bits_of_int(64, int_add(gb, x0))] = gc[x0] proof
+    fix x0
+    assume xo xl
+    let a := bits_of_int(64, int_add(gb, x0))
+    have p1 := mp(all_elim(expand(c1, abi.code_at), {x0}), xo, xl)
+    have p2 := mp(all_elim(expand(c2, abi.code_at), {x0}), xo, xl)
+    have pf: (x86_64_linux.fetchable(V, a) && !x86_64_linux.can_access(V, a, 1)) && !abi.stack_page(V, x86_64_linux.page_of(a))
+      by defs(simp(expand(p2, x86_64_linux.fetchable, x86_64_linux.can_access, abi.stack_page, x86_64_linux.mapped)), x86_64_linux.fetchable, x86_64_linux.can_access, abi.stack_page, x86_64_linux.mapped)
+    have ab: a in bits(64) by simp()
+    have q1: B[a] = v1.bytes[a] -> V.bytes[a] = gc[x0] by simp(p1)
+    have q2: B[a] = v2.bytes[a] -> V.bytes[a] = gc[x0] by simp(p2)
+    have q := mp(all_elim(hb, {a}), ab)
+    have qb: V.bytes[a] = gc[x0] by taut(q, q1, q2)
+    show := conj(pf, qb)
+  qed
+  have sd: all x0. x0 in omega -> x0 in st -> x86_64_linux.off_stack_space(V, int_div(x0, x86_64_linux.PAGE), 1) proof
+    fix x0
+    assume xo xs
+    have o2 := mp(all_elim(s2, {x0}), xo, xs)
+    show by defs(simp(expand(o2, x86_64_linux.off_stack_space, x86_64_linux.stack_floor)), x86_64_linux.off_stack_space, x86_64_linux.stack_floor)
+  qed
+  have ca: abi.code_at(V, gb, gc) by defs(cd, abi.code_at)
+  show by defs(taut(ca, sd), abi.loaded)
+qed
+
+theorem tr.su_io: all F n. tr.callee_io(F, n) -> tr.callee_io(tr.as_su(F), n)
+proof
+  fix F n
+  assume hio
+  have g: all args w w3 r. ord_le(n, seq_len(args)) -> runs(tr.as_su(F)[args], w, ok(w3, r)) -> tr.returns_valid(w, w3) || tr.may_raise(tr.as_su(F), args, w) proof
+    fix args w w3 r
+    assume hn hr
+    have out: !(args in abi.ARGS) -> false proof
+      assume na
+      have e := mp(app_fn_build_out[d := abi.ARGS, v := x0. mkprog(x1 x2. tr.su_r(F, x0, x1, x2)), a := args], na)
+      have r2 := rewrite(e, expand(hr, tr.as_su))
+      show by simp(expand(r2, runs))
+    qed
+    have hA: args in abi.ARGS by taut(out)
+    have wu0 := apply(g.runs_univ[r := x1 x2. tr.su_r(F, args, x1, x2)], {w}, {ok(w3, r)}, rewrite(mp(all_elim(tr.su_app, {F}, {args}), hA), hr))
+    have wu: w in univ(1) by simp(wu0)
+    // (the wrapped spec undefined where F is, on the world hidden)
+    have mr: tr.may_raise(F, args, tr.hide(w)) -> tr.may_raise(tr.as_su(F), args, w) proof
+      assume hm
+      have ux ud := expand(expand(hm, tr.may_raise), tr.undef)
+      have ex: all x e. x in univ(1) -> e in univ(1) -> runs(tr.as_su(F)[args], w, exc(x, e)) proof
+        fix x e
+        assume xu eu
+        have rf := mp(all_elim(ux, {x}, {e}), xu, eu)
+        have om0: ex x4 e4. exc(x, e) = exc(x4, e4) && exc(x, e) = exc(x4, e4) by ex_intro({x}, {e}, conj(refl({exc(x, e)}), refl({exc(x, e)})))
+        have om: tr.omap(w, exc(x, e), exc(x, e)) by defs(taut(om0), tr.omap)
+        have ex3: ex x3. runs(F[args], tr.hide(w), x3) && tr.omap(w, x3, exc(x, e)) by ex_intro({exc(x, e)}, taut(rf, om))
+        have sr: tr.su_r(F, args, w, exc(x, e)) by taut(ex3)
+        have pu: pair(w, exc(x, e)) in univ(1) by simp(wu, xu, eu)
+        show := apply(tr.su_runs, {F}, {args}, {w}, {exc(x, e)}, hA, pu, sr)
+      qed
+      have dv: all t. t in univ(1) -> runs(tr.as_su(F)[args], w, diverge(t)) proof
+        fix t
+        assume tu
+        have rf := mp(all_elim(ud, {t}), tu)
+        have om0: ex t4. diverge(t) = diverge(t4) && diverge(t) = diverge(t4) by ex_intro({t}, conj(refl({diverge(t)}), refl({diverge(t)})))
+        have om: tr.omap(w, diverge(t), diverge(t)) by defs(taut(om0), tr.omap)
+        have ex3: ex x3. runs(F[args], tr.hide(w), x3) && tr.omap(w, x3, diverge(t)) by ex_intro({diverge(t)}, taut(rf, om))
+        have sr: tr.su_r(F, args, w, diverge(t)) by taut(ex3)
+        have pu: pair(w, diverge(t)) in univ(1) by simp(wu, tu)
+        show := apply(tr.su_runs, {F}, {args}, {w}, {diverge(t)}, hA, pu, sr)
+      qed
+      show by defs(defs(taut(ex, dv), tr.undef), tr.may_raise)
+    qed
+    have sr := apply(tr.su_elim, {F}, {args}, {w}, {ok(w3, r)}, hA, hr)
+    // (unsound at the call: undefined)
+    have c1: !tr.tc_ok(w) -> tr.returns_valid(w, w3) || tr.may_raise(tr.as_su(F), args, w) proof
+      assume hn2
+      have ex: all x e. x in univ(1) -> e in univ(1) -> runs(tr.as_su(F)[args], w, exc(x, e)) proof
+        fix x e
+        assume xu eu
+        have pu: pair(w, exc(x, e)) in univ(1) by simp(wu, xu, eu)
+        show := apply(tr.su_runs, {F}, {args}, {w}, {exc(x, e)}, hA, pu, (tr.su_r(F, args, w, exc(x, e)) by taut(hn2)))
+      qed
+      have dv: all t. t in univ(1) -> runs(tr.as_su(F)[args], w, diverge(t)) proof
+        fix t
+        assume tu
+        have pu: pair(w, diverge(t)) in univ(1) by simp(wu, tu)
+        show := apply(tr.su_runs, {F}, {args}, {w}, {diverge(t)}, hA, pu, (tr.su_r(F, args, w, diverge(t)) by taut(hn2)))
+      qed
+      have m: tr.may_raise(tr.as_su(F), args, w) by defs(defs(taut(ex, dv), tr.undef), tr.may_raise)
+      show by taut(m)
+    qed
+    // (F's return: its world back)
+    have c2: (ex x3. runs(F[args], tr.hide(w), x3) && tr.omap(w, x3, ok(w3, r))) -> tr.returns_valid(w, w3) || tr.may_raise(tr.as_su(F), args, w) proof
+      assume e
+      obtain x3, rf om from e
+      have o1: (ex w2 r2. x3 = ok(w2, r2) && ok(w3, r) = ok(tr.rest(w, w2), r2)) -> tr.returns_valid(w, w3) || tr.may_raise(tr.as_su(F), args, w) proof
+        assume e2
+        obtain w2 r2, xe oe from e2
+        have w3e: w3 = tr.rest(w, w2) by simp(oe)
+        have rf2 := rewrite(xe, rf)
+        have fi := mp(all_elim(expand(hio, tr.callee_io), {args}, {tr.hide(w)}, {w2}, {r2}), hn, rf2)
+        have rv: tr.returns_valid(tr.hide(w), w2) -> tr.returns_valid(w, w3) proof
+          assume h
+          have i1 e1 l1 cp bs := expand(h, tr.returns_valid)
+          have ld: all gb gc st. gb in omega -> abi.loaded(w.vm, gb, gc, st) -> abi.loaded(w3.vm, gb, gc, st) proof
+            fix gb gc st
+            assume go hl
+            have l2 := mp(all_elim(l1, {gb}, {gc}, {st}), go, (abi.loaded(tr.hide(w).vm, gb, gc, st) by simp(hl, keep(abi.loaded))))
+            have hb: all x. x in bits(64) -> tr.rbytes(w, w2)[x] = w.vm.bytes[x] || tr.rbytes(w, w2)[x] = w2.vm.bytes[x] proof
+              fix x
+              assume xb
+              have t1: x in abi.canary(w.fs_base) -> tr.rbytes(w, w2)[x] = w.vm.bytes[x] by simp(xb)
+              have t2: !(x in abi.canary(w.fs_base)) -> tr.rbytes(w, w2)[x] = w2.vm.bytes[x] by simp(xb)
+              show by taut(t1, t2)
+            qed
+            have lr := apply(tr.loaded_rb, {w.vm}, {w2.vm}, {tr.rbytes(w, w2)}, {gb}, {gc}, {st}, hl, l2, hb)
+            show by simp(lr, w3e, keep(abi.loaded))
+          qed
+          have i3: w3.os.input = w.os.input by simp(i1, w3e)
+          have e3: subset(w.os.events, w3.os.events) by simp(e1, w3e, keep(subset))
+          have cp3: w3.cpu = w.cpu by simp(cp, w3e)
+          have bs3: w3.vm.brk_start = w.vm.brk_start by simp(bs, w3e)
+          show by defs(taut(i3, e3, ld, cp3, bs3), tr.returns_valid)
+        qed
+        show by taut(fi, rv, mr)
+      qed
+      have o2: (ex x e. x3 = exc(x, e) && ok(w3, r) = exc(x, e)) -> false proof
+        assume e2
+        obtain x e, _ oe from e2
+        show by simp(oe)
+      qed
+      have o3: (ex t. x3 = diverge(t) && ok(w3, r) = diverge(t)) -> false proof
+        assume e2
+        obtain t, _ oe from e2
+        show by simp(oe)
+      qed
+      show by taut(expand(om, tr.omap), o1, o2, o3)
+    qed
+    show by taut(sr, c1, c2)
+  qed
+  show by defs(g, tr.callee_io)
+qed
+
