@@ -50,7 +50,7 @@ qed
 // was
 theorem xt.dm_q: all regs s o2. s in abi.World -> s in univ(1) -> gc.regs_ok(regs, empty) ->
   runs(c_src_exit_exit.dummy_fun()[regs], s, o2) ->
-  abi.ovf_out(s, o2) || (ex r. o2 = ok(fn_update(s, "vm", s.vm), r))
+  abi.ovf_out(s, o2) || (ex r. o2 = ok(fn_update(s, "vm", s.vm), r) && r = r)
 proof
   fix regs s o2
   assume hw hu hr h
@@ -68,7 +68,8 @@ proof
   have ne: ex y. y in bits(64) by ex_intro({0}, simp())
   obtain y1, hy1 k3 from apply(g.any_e, ne, k2)
   obtain y2, hy2 hoy from apply(g.any_e, ne, k3)
-  have l: ex r. o2 = ok(fn_update(s, "vm", s.vm), r) by ex_intro({pair(y1, y2)}, simp(hoy, ss))
+  have oy: o2 = ok(fn_update(s, "vm", s.vm), pair(y1, y2)) by simp(hoy, ss)
+  have l: ex r. o2 = ok(fn_update(s, "vm", s.vm), r) && r = r by ex_intro({pair(y1, y2)}, taut(oy, refl({pair(y1, y2)})))
   show by taut(l)
 qed
 
@@ -260,4 +261,89 @@ proof
   have q2: Q2(o2) := rewrite(sym(hx1), hq1)
   have xe: ex s2 e2. o2 = exc(s2, e2) by ex_intro({s1}, {e}, hx1)
   show by taut(q2, xe)
+qed
+
+// ----------------------------------------------------------------------
+//  The fini_array's entry: __do_global_dtors_aux, its
+//  deregister_tm_clones (the clone table empty: nothing)
+
+theorem xt.dtm_q: all regs s o2. s in abi.World -> s in univ(1) -> gc.regs_ok(regs, empty) ->
+  runs(musl_asm.deregister_tm_clones_fun()[regs], s, o2) ->
+  abi.ovf_out(s, o2) || (ex r. o2 = ok(fn_update(s, "vm", s.vm), r) && r = r)
+proof
+  fix regs s o2
+  assume hw hu hr h
+  have rl rn := apply(gc.regs0, hr)
+  have lo: seq_len(regs) in omega by simp(rl)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, ol, keep(ord_le))
+  rsimp only, musl_asm.deregister_tm_clones_fun, app_fn_build, ra in h
+  have pv pf pd pb := apply(ms.world_parts, hw)
+  have ss: fn_update(s, "vm", s.vm) = s := mp(fn_update_same[f := s, k := "vm"], pf, pd)
+  have b := apply(g.runs_elim, h)
+  obtain o3, hs3 hk3 from expand(b, bind_rel)
+  step x2 x4, e3 from hs3
+  have e4: o3 = ok(s, empty) by simp(e3)
+  have k2: any_rel(x5. x5 in bits(64), x5. any_rel(x6. x6 in bits(64), x6. o2 = ok(s, pair(x5, x6)))) by simp(rewrite(e4, hk3), keep(any_rel))
+  have ne: ex y. y in bits(64) by ex_intro({0}, simp())
+  obtain y1, hy1 k3 from apply(g.any_e, ne, k2)
+  obtain y2, hy2 hoy from apply(g.any_e, ne, k3)
+  have oy: o2 = ok(fn_update(s, "vm", s.vm), pair(y1, y2)) by simp(hoy, ss)
+  have l: ex r. o2 = ok(fn_update(s, "vm", s.vm), r) && r = r by ex_intro({pair(y1, y2)}, taut(oy, refl({pair(y1, y2)})))
+  show by taut(l)
+qed
+
+// (the completed byte set: the memory after)
+abbrev xt.DONE(vm) := fn_update(vm, "bytes", x86_64_linux.store_le(vm.bytes, musl_asm.completed_0, 1, 1))
+
+// __do_global_dtors_aux's run, deregister_tm_clones called as such, the
+// __cxa_finalize GOT word 0: an overflow, or nothing done (completed
+// already), or the completed byte set
+theorem xt.dt_run: all D s o. s in abi.World -> s in univ(1) -> abi.thread_ok(s.vm, s.fs_base) -> mp.calls(D, musl_asm.deregister_tm_clones_fun()) ->
+  gimple.usable(s.vm, s.objs, musl_asm.completed_0, 1, true) -> gimple.usable(s.vm, s.objs, musl_asm.completed_0, 1, false) ->
+  gimple.usable(s.vm, s.objs, musl_asm.cxa_finalize_got, 8, false) -> gimple.bytes_at(s.vm, musl_asm.cxa_finalize_got, 8) = 0 ->
+  runs(musl_asm.__do_global_dtors_aux(D), s, o) ->
+  abi.ovf_out(s, o) || o = ok(s, empty) || o = ok(fn_update(s, "vm", xt.DONE(s.vm)), empty)
+proof
+  fix D s o
+  assume hw hu ht hD huw hur hug hg0 hr
+  let C0 := musl_asm.completed_0
+  let GT := musl_asm.cxa_finalize_got
+  have cv: C0 = 4227104 by defs(refl({4227104}), musl_asm.completed_0)
+  have gv: GT = 4227040 by defs(refl({4227040}), musl_asm.cxa_finalize_got)
+  have pv pf pd pb := apply(ms.world_parts, hw)
+  have ss: fn_update(s, "vm", s.vm) = s := mp(fn_update_same[f := s, k := "vm"], pf, pd)
+  have c0b: C0 in bits(64) by simp(cv)
+  have g0b: GT in bits(64) by simp(gv)
+  have mdc: g.mem_defined(s, C0, 0, 1, false) by simp(cv, rewrite(cv, hur))
+  have ldc := mp(all_elim(g.ld8_det, {s}, {C0}, {0}), hu, c0b, simp(), mdc)
+  step x2 x4 x9, hif hk from hr with ldc
+  let CB := bits_of_int(8, gimple.bytes_at(s.vm, int_add(C0, 0), 1))
+  let GO := abi.ovf_out(s, o) || o = ok(s, empty) || o = ok(fn_update(s, "vm", xt.DONE(s.vm)), empty)
+  // (completed already: nothing)
+  have cN: !(CB = 0) -> GO proof
+    assume ne
+    have e9: x9 = exc(pair(s, pair(CB, x4)), pair("ret", empty)) by taut(hif, ne)
+    have oe: o = ok(s, empty) by simp(rewrite(e9, hk))
+    show by taut(oe)
+  qed
+  // (not yet: the GOT word 0, deregister_tm_clones, the byte set)
+  have cZ: CB = 0 -> GO proof
+    assume z
+    have e9: x9 = ok(pair(s, pair(CB, x4)), empty) by taut(hif, z)
+    have k1 := rewrite(e9, hk)
+    have mdg: g.mem_defined(s, GT, 0, 8, false) by simp(gv, rewrite(gv, hug))
+    have ldg := mp(all_elim(g.ld64_det, {s}, {GT}, {0}), hu, g0b, simp(), mdg)
+    have g0e: bits_of_int(64, gimple.bytes_at(s.vm, int_add(GT, 0), 8)) = 0 by simp(hg0)
+    have mds: g.mem_defined(fn_update(s, "vm", s.vm), C0, 0, 1, true) by simp(cv, ss, rewrite(cv, huw))
+    have su: fn_update(s, "vm", s.vm) in univ(1) := rewrite(sym(ss), hu)
+    have sv: fn_update(s, "vm", s.vm).vm in x86_64_linux.Vm := rewrite(sym(ss), pv)
+    have sf: is_fun(fn_update(s, "vm", s.vm)) := rewrite(sym(ss), pf)
+    have sd: "vm" in dom(fn_update(s, "vm", s.vm)) := rewrite(sym(ss), pd)
+    step r1, e5 from k1 with ldg, g0e, xt.dtm_q, g.st8_det using hD, hw, hu, ht, mds, su, sv, sf, sd, c0b
+    have z0: int_add(C0, 0) = C0 by simp(cv)
+    have e6 _ := rewrite(z0, e5)
+    show by taut(e6)
+  qed
+  show by taut(cN, cZ)
 qed
