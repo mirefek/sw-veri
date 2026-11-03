@@ -1,0 +1,134 @@
+// Compares of a static's memory with an immediate (cmp byte / qword
+// [rip + d], imm8): the flags against the spec's load of the static (the
+// same address, its bytes the world's) -- gcc's crtstuff (the fini
+// array's __do_global_dtors_aux: its `completed` byte, __cxa_finalize's
+// GOT word). Their flags steps read memory: so the flags kept to the jump
+// with the memory's coupling (tr.flags_set_m).
+
+// cmp byte [rip + d], imm8 (80 /7 ib)
+theorem x86i.cmpf8_rip_imm8: all m o d k len. m in x86_64_linux.Machine -> m in univ(1) -> d in bits(64) -> k in bits(8) ->
+  x86i.acc(m, x86i.rip_ea(m, len, d), 1, 0) ->
+  runs(x86_64_linux.exec_body(len, tag(24, pair(7, pair(x86i.rip_mem(d), pair(x86i.rip_mem(d), k))))), m, o) ->
+  ex f. x86i.flags_ok(m, f) && x86i.subf(8, x86_64_linux.le(m.vm.bytes, x86i.rip_ea(m, len, d), 1), k, f) && o = ok(fn_update(fn_update(m, "rip", bits_add(64, m.rip, len)), "flags", f), empty)
+proof
+  fix m o d k len
+  assume hM hu hd hk a0 h
+  have pt := apply(x86i.parts, hM)
+  have k0: all j. j in omega -> int_lt(j, 1) -> x86_64_linux.canonical(bits_add(64, x86i.rip_ea(m, len, d), bits_of_int(64, j))) proof
+    fix j
+    assume j1 j2
+    show by mp(all_elim(all_elim(all_elim(x86.access_canonical, {m.vm}), {bits_add(64, x86i.rip_ea(m, len, d), bits_of_int(64, j))}), {0}), mp(mp(all_elim(a0, {j}), j1), j2))
+  qed
+  show by defs(simp(h, hu, pt, hd, hk, a0, k0, x86.touch_range_access, x86i.bool_univ, keep(x86_64_linux.touch_range, x86_64_linux.can_access)), x86i.flags_ok, x86i.subf)
+qed
+
+// cmp qword [rip + d], imm8 (REX.W 83 /7 ib)
+theorem x86i.cmpf64_rip_imm8: all m o d k len. m in x86_64_linux.Machine -> m in univ(1) -> d in bits(64) -> k in bits(8) ->
+  x86i.acc(m, x86i.rip_ea(m, len, d), 8, 0) ->
+  runs(x86_64_linux.exec_body(len, tag(60, pair(8, pair(7, pair(x86i.rip_mem(d), pair(x86i.rip_mem(d), k)))))), m, o) ->
+  ex f. x86i.flags_ok(m, f) && x86i.subf(64, x86_64_linux.le(m.vm.bytes, x86i.rip_ea(m, len, d), 8), bits_sext(8, 64, k), f) &&
+    o = ok(fn_update(fn_update(m, "rip", bits_add(64, m.rip, len)), "flags", f), empty)
+proof
+  fix m o d k len
+  assume hM hu hd hk a0 h
+  have pt := apply(x86i.parts, hM)
+  have k0: all j. j in omega -> int_lt(j, 8) -> x86_64_linux.canonical(bits_add(64, x86i.rip_ea(m, len, d), bits_of_int(64, j))) proof
+    fix j
+    assume j1 j2
+    show by mp(all_elim(all_elim(all_elim(x86.access_canonical, {m.vm}), {bits_add(64, x86i.rip_ea(m, len, d), bits_of_int(64, j))}), {0}), mp(mp(all_elim(a0, {j}), j1), j2))
+  qed
+  show by defs(simp(h, hu, pt, hd, hk, a0, k0, x86.touch_range_access, x86i.bool_univ, keep(x86_64_linux.touch_range, x86_64_linux.can_access)), x86i.flags_ok, x86i.subf)
+qed
+
+// cmp byte [rip + d], imm8: the spec's byte u of the static at pp + off
+// (the same address) against k
+theorem tr.fs8_ri8_rip: all s v base code fr a a2 len d k pp off u hs rs w.
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(m.vm, base, code) -> m.rip = a ->
+    runs(x86_64_linux.exec_body(len, tag(24, pair(7, pair(x86i.rip_mem(d), pair(x86i.rip_mem(d), k))))), m, o)) ->
+  a2 = bits_add(64, a, len) -> d in bits(64) -> k in bits(8) -> pp in bits(64) -> off in bits(32) ->
+  bits_add(64, int_add(a2, d), 0) = bits_add(64, pp, off) -> g.mem_defined(w, pp, off, 1, false) ->
+  u = bits_of_int(8, gimple.bytes_at(w.vm, bits_add(64, pp, off), 1)) ->
+  all m o. tr.inv(s, base, code, fr, m, w) -> m.rip = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> tr.mem(s, m, w, v) -> runs(x86_64_linux.step(), m, o) ->
+    (ex f. x86i.flags_ok(m, f) && x86i.subf(8, u, k, f) && o = ok(fn_update(fn_update(m, "rip", a2), "flags", f), empty))
+proof
+  fix s v base code fr a a2 len d k pp off u hs rs w
+  assume hat ha2 hd hk hp ho hA hdef hu
+  fix m o
+  assume hi hr hh hrs hmm ho2
+  have ipM ipU ipC .. := apply(tr.inv_parts, hi)
+  have ea: x86i.rip_ea(m, len, d) = bits_add(64, pp, off) by simp(hr, ha2, hA)
+  have rd := apply(tr.reads, {s}, {m}, {w}, {v}, {pp}, {off}, {1}, hp, ho, hdef, hmm, simp())
+  have ac := rewrite(sym(ea), rd.1)
+  have hx := mp(all_elim(hat, {m}, {o}), ho2, ipC, hr)
+  obtain f, hf from apply(x86i.cmpf8_rip_imm8, {m}, {o}, {d}, {k}, {len}, ipM, ipU, hd, hk, ac, hx)
+  have lw := all_elim(tr.le_bytes, {w.vm}, {bits_add(64, pp, off)}, {1})
+  show by ex_intro({f}, simp(hf, ea, rd.2, lw, hu, hr, ha2, keep(x86i.flags_ok, x86i.subf, x86i.logf, gimple.bytes_at, x86_64_linux.le)))
+qed
+
+// cmp qword [rip + d], imm8: the spec's word u of the static at pp + off
+// against kk (the immediate sign-extended)
+theorem tr.fs64_ri8_rip: all s v base code fr a a2 len d k kk pp off u hs rs w.
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(m.vm, base, code) -> m.rip = a ->
+    runs(x86_64_linux.exec_body(len, tag(60, pair(8, pair(7, pair(x86i.rip_mem(d), pair(x86i.rip_mem(d), k)))))), m, o)) ->
+  a2 = bits_add(64, a, len) -> d in bits(64) -> k in bits(8) -> kk = bits_sext(8, 64, k) -> pp in bits(64) -> off in bits(32) ->
+  bits_add(64, int_add(a2, d), 0) = bits_add(64, pp, off) -> g.mem_defined(w, pp, off, 8, false) ->
+  u = bits_of_int(64, gimple.bytes_at(w.vm, bits_add(64, pp, off), 8)) ->
+  all m o. tr.inv(s, base, code, fr, m, w) -> m.rip = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> tr.mem(s, m, w, v) -> runs(x86_64_linux.step(), m, o) ->
+    (ex f. x86i.flags_ok(m, f) && x86i.subf(64, u, kk, f) && o = ok(fn_update(fn_update(m, "rip", a2), "flags", f), empty))
+proof
+  fix s v base code fr a a2 len d k kk pp off u hs rs w
+  assume hat ha2 hd hk hkk hp ho hA hdef hu
+  fix m o
+  assume hi hr hh hrs hmm ho2
+  have ipM ipU ipC .. := apply(tr.inv_parts, hi)
+  have ea: x86i.rip_ea(m, len, d) = bits_add(64, pp, off) by simp(hr, ha2, hA)
+  have rd := apply(tr.reads, {s}, {m}, {w}, {v}, {pp}, {off}, {8}, hp, ho, hdef, hmm, simp())
+  have ac := rewrite(sym(ea), rd.1)
+  have hx := mp(all_elim(hat, {m}, {o}), ho2, ipC, hr)
+  obtain f, hf from apply(x86i.cmpf64_rip_imm8, {m}, {o}, {d}, {k}, {len}, ipM, ipU, hd, hk, ac, hx)
+  have lw := all_elim(tr.le_bytes, {w.vm}, {bits_add(64, pp, off)}, {8})
+  show by ex_intro({f}, simp(hf, ea, rd.2, lw, hu, hkk, hr, ha2, keep(x86i.flags_ok, x86i.subf, x86i.logf, gimple.bytes_at, x86_64_linux.le)))
+qed
+
+// (as tr.flags_set, the flags step reading memory: its coupling at m)
+theorem tr.flags_set_m(f. ff, zb. bkp, zb pb wb. bka): all s v base code fr a a2 hs ds rs p w.
+  (all m o. tr.inv(s, base, code, fr, m, w) -> m.rip = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> tr.mem(s, m, w, v) -> runs(x86_64_linux.step(), m, o) ->
+    (ex f. x86i.flags_ok(m, f) && ff(f) && o = ok(fn_update(fn_update(m, "rip", a2), "flags", f), empty))) ->
+  a2 in bits(64) ->
+  tr.ptf(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a2, hs, ds, rs, p, w, f. ff(f)) ->
+  tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, ds, rs, p, w)
+proof
+  fix s v base code fr a a2 hs ds rs p w
+  assume h1 ha2 hpt
+  have g: all m. tr.inv(s, base, code, fr, m, w) -> m.rip = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> tr.mem(s, m, w, v) -> tr.frame(s, m, ds) -> tr.sim(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, p, w, m) proof
+    fix m
+    assume hi hr hh hrs hmm hfr
+    have nr := apply(tr.inv_nr, hi)
+    let Q1(m2) := ex f. x86i.flags_ok(m, f) && ff(f) && m2 = fn_update(fn_update(m, "rip", a2), "flags", f)
+    have st1: all o. runs(x86_64_linux.step(), m, o) -> (ex m2. o = ok(m2, empty) && Q1(m2)) proof
+      fix o
+      assume ho
+      obtain f, hf from mp(all_elim(h1, {m}, {o}), hi, hr, hh, hrs, hmm, ho)
+      have q1: Q1(fn_update(fn_update(m, "rip", a2), "flags", f)) by ex_intro({f}, simp(hf, keep(x86i.flags_ok)))
+      show by ex_intro({fn_update(fn_update(m, "rip", a2), "flags", f)}, taut(q1, hf))
+    qed
+    have post1: all m2. Q1(m2) -> tr.cl(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, p, w, m2) proof
+      fix m2
+      assume hq
+      obtain f, hf from hq
+      have fo: x86i.flags_ok(m, f) by taut(hf)
+      have fff: ff(f) by taut(hf)
+      have e: m2 = fn_update(fn_update(m, "rip", a2), "flags", f) by taut(hf)
+      let M2 := fn_update(fn_update(m, "rip", a2), "flags", f)
+      have i2 := mp(tr.inv_flags, {s}, {base}, {code}, {fr}, {m}, {w}, {a2}, {f}, hi, ha2, fo)
+      have rs2: tr.regs(M2, rs) by defs(simp(expand(hrs, tr.regs)), tr.regs)
+      have r2: M2.rip = a2 by simp()
+      have fl: M2.flags = f by simp()
+      have f2: ff(M2.flags) := rewrite(sym(fl), fff)
+      have c := apply(tr.ptf_regs[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb), ff := f. ff(f)], hpt, i2, r2, rs2, hh, hmm, hfr, simp(), simp(), f2)
+      show := rewrite(sym(e), c)
+    qed
+    show := mp(mp(mp(tr.step[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb), s := s, v := v, p := p, w := w, m := m, q := x. Q1(x)], st1), nr), post1)
+  qed
+  show by defs(g, tr.lv)
+qed
