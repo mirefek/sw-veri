@@ -15,7 +15,7 @@ refines ex_fini_ref c_src_exit_exit_cfg.libc_exit_fini_fun c_src_exit_exit.libc_
 
 // __get_tp (exit.c's copy) at a call, the thread sound: the thread
 // pointer returned, the memory as it was
-theorem ex.gtp_q: all regs s o2. s in abi.World -> s in univ(1) -> gc.regs_ok(regs, empty) -> abi.thread_ok(s.vm, s.fs_base) ->
+theorem xt.gtp_q: all regs s o2. s in abi.World -> s in univ(1) -> gc.regs_ok(regs, empty) -> abi.thread_ok(s.vm, s.fs_base) ->
   runs(c_src_exit_exit.__get_tp_fun()[regs], s, o2) ->
   abi.ovf_out(s, o2) ||
   (ex r. o2 = ok(fn_update(s, "vm", s.vm), r) && fst(r) = s.fs_base)
@@ -48,7 +48,7 @@ qed
 
 // the dummy (__funcs_on_exit, __stdio_exit) at a call: the memory as it
 // was
-theorem ex.dm_q: all regs s o2. s in abi.World -> s in univ(1) -> gc.regs_ok(regs, empty) ->
+theorem xt.dm_q: all regs s o2. s in abi.World -> s in univ(1) -> gc.regs_ok(regs, empty) ->
   runs(c_src_exit_exit.dummy_fun()[regs], s, o2) ->
   abi.ovf_out(s, o2) || (ex r. o2 = ok(fn_update(s, "vm", s.vm), r))
 proof
@@ -70,4 +70,194 @@ proof
   obtain y2, hy2 hoy from apply(g.any_e, ne, k3)
   have l: ex r. o2 = ok(fn_update(s, "vm", s.vm), r) by ex_intro({pair(y1, y2)}, simp(hoy, ss))
   show by taut(l)
+qed
+
+// ----------------------------------------------------------------------
+//  The exit raise: exit_group / exit, through __syscall1 and _Exit
+
+// (a program that only raises, bound: its raise handler, at a raise Q
+// holds of)
+theorem xt.bind_raise(p, s1 v. k, s1 e. x, t. d, o. Q): all s. (all o. runs(p, s, o) -> (ex s1 e. o = exc(s1, e)) && Q(o)) ->
+  bind_rel(p, s, s1 v. k(s1, v), s1 e. x(s1, e), t. d(t)) -> ex s1 e. Q(exc(s1, e)) && x(s1, e)
+proof
+  fix s
+  assume hq hb
+  obtain o, hr hd from apply(g.bind_open, hb)
+  have ex1 hQ := mp(all_elim(hq, {o}), hr)
+  obtain s1 e, eo from ex1
+  have c1: (ex s2 v. o = ok(s2, v) && k(s2, v)) -> false proof
+    assume q
+    obtain s2 v, e2 _ from q
+    show by defs(simp(trans(sym(eo), e2)), exc, ok, tag)
+  qed
+  have c3: (ex t. o = diverge(t) && d(t)) -> false proof
+    assume q
+    obtain t, e2 _ from q
+    show by defs(simp(trans(sym(eo), e2)), exc, diverge, tag)
+  qed
+  have c2: (ex s2 e2. o = exc(s2, e2) && x(s2, e2)) -> ex s1 e. Q(exc(s1, e)) && x(s1, e) proof
+    assume q
+    obtain s2 e2, e3 hx from q
+    have q2: Q(exc(s2, e2)) := rewrite(e3, hQ)
+    show by ex_intro({s2}, {e2}, taut(q2, hx))
+  qed
+  show by taut(hd, c1, c2, c3)
+qed
+
+abbrev xt.EXIT(st0) := exc_val("exit", bits_slice(st0, 7, 0))
+
+// exit / exit_group: the process's exit, a1's low byte its status
+theorem xt.sys1x_inv: all n a1 w o. (n = 60 || n = 231) -> runs(gimple.sys_call1(n, a1), w, o) -> (ex s1 e. o = exc(s1, e)) && o = exc(w, xt.EXIT(a1))
+proof
+  fix n a1 w o
+  assume hx h
+  have b := apply(g.runs_elim, expand(h, gimple.sys_call1))
+  have e: o = exc(w, xt.EXIT(a1)) by simp(b, hx)
+  have e2: ex s1 e. o = exc(s1, e) by ex_intro({w}, {xt.EXIT(a1)}, e)
+  show by taut(e, e2)
+qed
+
+// (the overflow raised from t: abi.ovf_out's)
+theorem xt.ovf_self: all t. t in abi.World -> abi.ovf_out(t, exc(t, exc_val("stack_overflow", empty)))
+proof
+  fix t
+  assume hw
+  have pv pf pd pb := apply(ms.world_parts, hw)
+  have od: "objs" in dom(t) && t.objs in abi.Objs by simp(expand(hw, abi.World))
+  have s1: fn_update(t, "vm", t.vm) = t := mp(fn_update_same[f := t, k := "vm"], pf, pd)
+  have s2: fn_update(t, "objs", t.objs) = t := mp(fn_update_same[f := t, k := "objs"], pf, taut(od))
+  have e: exc(t, exc_val("stack_overflow", empty)) = exc(fn_update(fn_update(t, "vm", t.vm), "objs", t.objs), exc_val("stack_overflow", empty)) by simp(s1, s2, pf, pd, od)
+  show by ex_intro({t.vm}, {t.objs}, taut(pv, od, e))
+qed
+
+// __syscall1(231, a) (exit_group) at a call: the process's exit
+theorem xt.s1x_q: all regs t a o2. a in bits(64) ->
+  gc.regs_ok(regs, seq_concat(seq_one(gimple.arg(64, bits_of_int(64, 231))), seq_one(gimple.arg(64, a)))) -> runs(c_src_exit__Exit.__syscall1_fun()[regs], t, o2) ->
+  (ex s1 e. o2 = exc(s1, e)) && o2 = exc(t, xt.EXIT(a))
+proof
+  fix regs t a o2
+  assume ha hro h
+  let ARGS := seq_concat(seq_one(gimple.arg(64, bits_of_int(64, 231))), seq_one(gimple.arg(64, a)))
+  have rl rln _ := hro
+  have an: seq_len(ARGS) = 2 by simp()
+  have rn: seq_len(regs) = 2 := trans(rln, an)
+  have lo: seq_len(regs) in omega by simp(rn)
+  have q0 := apply(gc.reg_at[regs := regs, args := ARGS, i := 0, w := 64, x := bits_of_int(64, 231)], hro, simp(), simp(an), at({ARGS[0]}), simp(), simp())
+  have q1 := apply(gc.reg_at[regs := regs, args := ARGS, i := 1, w := 64, x := a], hro, simp(), simp(an), at({ARGS[1]}), simp(), ha)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, ol, keep(ord_le))
+  rsimp only, c_src_exit__Exit.__syscall1_fun, app_fn_build, ra in h
+  have o2l: ord_le(2, seq_len(regs)) by defs(simp(rn), ord_le)
+  have b := rewrite(q1, rewrite(q0, apply(g.runs_elim, h)))
+  let N := bits_of_int(64, 231)
+  have b2: bind_rel(c_src_exit__Exit.__syscall1(N, a), t, x3 x4. letin(x4, x5. bind_rel(gimple.result(64, x5), x3, x6 x7. any_rel(x8. x8 in bits(64), x8. o2 = ok(x6, pair(x7, x8))),
+      x6 x7. o2 = exc(x6, x7), x6. o2 = diverge(x6))), x3 x4. o2 = exc(x3, x4), x3. o2 = diverge(x3)) by taut(b, o2l)
+  have nx: N = 60 || N = 231 by simp()
+  have ne: ex y. y in bits(64) by ex_intro({0}, simp())
+  have inner: all o3. runs(c_src_exit__Exit.__syscall1(N, a), t, o3) -> (ex s1 e. o3 = exc(s1, e)) && o3 = exc(t, xt.EXIT(a)) proof
+    fix o3
+    assume r3
+    have c := apply(g.runs_elim, expand(r3, c_src_exit__Exit.__syscall1))
+    obtain y1, _ c2 from apply(g.any_e, ne, c)
+    have c3 := apply(g.letin_e, c2)
+    obtain y2, _ c4 from apply(g.any_e, ne, c3)
+    have c5 := apply(g.letin_e, c4)
+    have hq: all o. runs(gimple.sys_call1(N, a), t, o) -> (ex s1 e. o = exc(s1, e)) && o = exc(t, xt.EXIT(a)) proof
+      fix o
+      assume r
+      show := mp(all_elim(xt.sys1x_inv, {N}, {a}, {t}, {o}), nx, r)
+    qed
+    obtain s1 e, hq1 hx1 from apply(xt.bind_raise[Q := o. o = exc(t, xt.EXIT(a))], hq, c5)
+    have o3e: o3 = exc(t, xt.EXIT(a)) := trans(hx1, hq1)
+    have xe: ex s2 e2. o3 = exc(s2, e2) by ex_intro({s1}, {e}, hx1)
+    show by taut(o3e, xe)
+  qed
+  obtain s1 e, hq1 hx1 from apply(xt.bind_raise[Q := o. o = exc(t, xt.EXIT(a))], inner, b2)
+  have o2e: o2 = exc(t, xt.EXIT(a)) := trans(hx1, hq1)
+  have xe: ex s2 e2. o2 = exc(s2, e2) by ex_intro({s1}, {e}, hx1)
+  show by taut(o2e, xe)
+qed
+
+// _Exit(c) at a call, its __syscall1 called as such: an overflow, or the
+// process's exit with c's low byte -- from the world it was called at
+theorem xt.xe_q: all S1 regs t c o2. t in abi.World -> gc.sound(t) -> c in bits(32) ->
+  mp.calls(S1, c_src_exit__Exit.__syscall1_fun()) -> gc.regs_ok(regs, seq_one(gimple.arg(32, c))) ->
+  runs(c_src_exit__Exit._Exit_fun(S1)[regs], t, o2) ->
+  (ex s1 e. o2 = exc(s1, e)) && (o2 = exc(t, exc_val("stack_overflow", empty)) || o2 = exc(t, xt.EXIT(bits_sext(32, 64, c))))
+proof
+  fix S1 regs t c o2
+  assume hw ths hc hS hro h
+  let OVF := exc_val("stack_overflow", empty)
+  let A := bits_sext(32, 64, c)
+  let XT := exc(t, xt.EXIT(A))
+  let Q2(o) := o = exc(t, OVF) || o = XT
+  let ARG1 := seq_one(gimple.arg(32, c))
+  have rl rln _ := hro
+  have an: seq_len(ARG1) = 1 by simp()
+  have rn: seq_len(regs) = 1 := trans(rln, an)
+  have lo: seq_len(regs) in omega by simp(rn)
+  have q0 := apply(gc.reg_at[regs := regs, args := ARG1, i := 0, w := 32, x := c], hro, simp(), simp(an), at({ARG1[0]}), simp(), hc)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, ol, keep(ord_le))
+  rsimp only, c_src_exit__Exit._Exit_fun, app_fn_build, ra in h
+  have o1l: ord_le(1, seq_len(regs)) by defs(simp(rn), ord_le)
+  have b := rewrite(q0, apply(g.runs_elim, h))
+  have b2: bind_rel(c_src_exit__Exit._Exit(c, S1), t, x3 x4. any_rel(x5. x5 in bits(64), x5. any_rel(x6. x6 in bits(64), x6. o2 = ok(x3, pair(x5, x6)))),
+      x3 x4. o2 = exc(x3, x4), x3. o2 = diverge(x3)) by taut(b, o1l)
+  have ab: A in bits(64) by simp(hc)
+  let ARGS := seq_concat(seq_one(gimple.arg(64, bits_of_int(64, 231))), seq_one(gimple.arg(64, A)))
+  have rex := apply(gc.regs2_ex, (bits_of_int(64, 231) in bits(64) by simp()), ab)
+  have hq: all regs2 o4. gc.regs_ok(regs2, ARGS) -> runs(S1[regs2], t, o4) -> o4 = XT proof
+    fix regs2 o4
+    assume hr2 h4
+    have rl2 rn2 _ := hr2
+    have len2: int_le(seq_len(regs2), 6) by simp(rn2)
+    have h5 := mp(all_elim(hS, {regs2}, {t}, {o4}), rl2, len2, hw, h4)
+    have _ e := mp(all_elim(xt.s1x_q, {regs2}, {t}, {A}, {o4}), ab, hr2, h5)
+    show e
+  qed
+  have hc3: all o. runs(gimple.call(S1, ARGS), t, o) -> (ex s1 e. o = exc(s1, e)) && Q2(o) proof
+    fix o
+    assume r
+    have ci := apply(gc.call_inv[Q := o4. o4 = XT], ths, rex, hq, r)
+    have k1: o = exc(t, OVF) -> (ex s1 e. o = exc(s1, e)) && Q2(o) proof
+      assume e
+      have xe: ex s2 e2. o = exc(s2, e2) by ex_intro({t}, {OVF}, e)
+      show by taut(e, xe)
+    qed
+    have k2: (ex w4 r. ok(w4, r) = XT && (o = ok(gc.back(w4, t), pair(fst(r), snd(r))) || o = exc(gc.back(w4, t), OVF))) -> (ex s1 e. o = exc(s1, e)) && Q2(o) proof
+      assume q
+      obtain w4 r, e _ from q
+      have f: false by defs(simp(e), exc, ok, tag)
+      show by taut(f)
+    qed
+    have k3: (ex x e. exc(x, e) = XT && o = exc(x, e)) -> (ex s1 e. o = exc(s1, e)) && Q2(o) proof
+      assume q
+      obtain x e, e1 e2 from q
+      have oe: o = XT := trans(e2, e1)
+      have xe: ex s2 e3. o = exc(s2, e3) by ex_intro({x}, {e}, e2)
+      show by taut(oe, xe)
+    qed
+    have k4: (ex t2. diverge(t2) = XT && o = diverge(t2)) -> (ex s1 e. o = exc(s1, e)) && Q2(o) proof
+      assume q
+      obtain t2, e _ from q
+      have f: false by defs(simp(e), exc, diverge, tag)
+      show by taut(f)
+    qed
+    show by taut(ci, k1, k2, k3, k4)
+  qed
+  have inner: all o3. runs(c_src_exit__Exit._Exit(c, S1), t, o3) -> (ex s1 e. o3 = exc(s1, e)) && Q2(o3) proof
+    fix o3
+    assume r3
+    have c1 := apply(g.runs_elim, expand(r3, c_src_exit__Exit._Exit))
+    have c2 := apply(g.letin_e, c1)
+    obtain s1 e, hq1 hx1 from apply(xt.bind_raise[Q := o. Q2(o)], hc3, c2)
+    have q3: Q2(o3) := rewrite(sym(hx1), hq1)
+    have xe: ex s2 e2. o3 = exc(s2, e2) by ex_intro({s1}, {e}, hx1)
+    show by taut(q3, xe)
+  qed
+  obtain s1 e, hq1 hx1 from apply(xt.bind_raise[Q := o. Q2(o)], inner, b2)
+  have q2: Q2(o2) := rewrite(sym(hx1), hq1)
+  have xe: ex s2 e2. o2 = exc(s2, e2) by ex_intro({s1}, {e}, hx1)
+  show by taut(q2, xe)
 qed

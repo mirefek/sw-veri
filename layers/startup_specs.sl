@@ -323,10 +323,13 @@ pred exit_pre(vm: Vm, objs: Objs, p: ExitProgram, fs: Addr) =
   usable(vm, objs, uint(p.cxa_got), 8, false) && bytes_at(vm, p.cxa_got, 8) = 0
 
 // exit(code): a stack overflow, or the process ends with the status
-// code's low byte
+// code's low byte (its memory as it ends: anything -- nothing reads it)
 proc[World] exit_spec(p: ExitProgram, code: bits[32]) {
   require exit_pre(vm, objs, p, fs_base)
-  either { overflow() } or { raise exit(code[7:0]) }
+  either { overflow() } or {
+    havoc vm
+    raise exit(code[7:0])
+  }
 }
 
 fn exit_spec_fun(p: ExitProgram) -> CFun2[World] = (args: Args) => {
