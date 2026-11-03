@@ -1233,3 +1233,252 @@ proof
   qed
   show by taut(w2, mf)
 qed
+
+// ----------------------------------------------------------------------
+//  main's exit when malloc fails: the world, the memory kept
+
+// the world as any call needs it, the memory outside the allocator's at S0
+// (but errno) as at S0, the array live
+abbrev tm.wk(O, eo, b, cd, st, S0, H, l0) := ((malloc.world_ok(b, cd, st, H) && H.fs_base = S0.fs_base) &&
+  (all a. a in omega -> !(a in O[S0]) -> !(a in malloc.errno_bytes(eo, S0)) -> x86_64_linux.mapped(S0.vm, int_div(a, x86_64_linux.PAGE)) ->
+     H.vm.bytes[bits_of_int(64, a)] = S0.vm.bytes[bits_of_int(64, a)] && H.vm.pages[int_div(a, x86_64_linux.PAGE)] = S0.vm.pages[int_div(a, x86_64_linux.PAGE)])) &&
+  (all a. a in omega -> int_le(l0, a) -> int_lt(a, int_add(l0, 64)) -> a in H.objs.live)
+
+theorem tm.wk_of_mi(I, O, eo, b, cd, st, S0, H, l0, K): tm.mi(I, O, eo, b, cd, st, S0, H, l0, K) -> tm.wk(O, eo, b, cd, st, S0, H, l0)
+proof
+  assume hmi
+  have _ _ hw hfs hk ha _ := hmi
+  have g: all a. a in omega -> !(a in O[S0]) -> !(a in malloc.errno_bytes(eo, S0)) -> x86_64_linux.mapped(S0.vm, int_div(a, x86_64_linux.PAGE)) ->
+      H.vm.bytes[bits_of_int(64, a)] = S0.vm.bytes[bits_of_int(64, a)] && H.vm.pages[int_div(a, x86_64_linux.PAGE)] = S0.vm.pages[int_div(a, x86_64_linux.PAGE)] proof
+    fix a
+    assume ao no ne m0
+    have _ _ b1 p1 := mp(all_elim(hk, {a}), ao, no, ne, m0)
+    show by taut(b1, p1)
+  qed
+  have l: all a. a in omega -> int_le(l0, a) -> int_lt(a, int_add(l0, 64)) -> a in H.objs.live proof
+    fix a
+    assume ao h1 h2
+    have l1 _ := mp(all_elim(ha, {a}), ao, h1, h2)
+    show l1
+  qed
+  show by taut(hw, hfs, g, l)
+qed
+
+// main storing at its array's word i, where wk holds: wk kept
+theorem tm.wk_store(O, eo, b, cd, st, S0, H, l0, i, p): tm.wk(O, eo, b, cd, st, S0, H, l0) -> l0 in omega -> int_le(int_add(l0, 64), 18446744073709551616) ->
+  i in omega -> int_lt(i, 8) ->
+  tm.wk(O, eo, b, cd, st, S0, fn_update(H, "vm", fn_update(H.vm, "bytes", x86_64_linux.store_le(H.vm.bytes, int_add(l0, int_mul(8, i)), 8, p))), l0)
+proof
+  assume hwk hl0 hl64 hi0 hil
+  let A := int_add(l0, int_mul(8, i))
+  let X := x86_64_linux.store_le(H.vm.bytes, A, 8, p)
+  let T := fn_update(H, "vm", fn_update(H.vm, "bytes", X))
+  have hw hfs hk ha := hwk
+  have ao: A in omega by arith(hl0, hi0)
+  have a8: int_le(int_add(A, 8), 18446744073709551616) by arith(hl64, hil, hi0)
+  have out: all x. x in bits(64) -> !(int_le(A, x) && int_lt(x, int_add(A, 8))) -> X[x] = H.vm.bytes[x] proof
+    fix x
+    assume hx hn
+    show := apply(tm.st_at[B := H.vm.bytes, A := A, n := 8, v := p, x := x], hx, ao, simp(), a8, hn)
+  qed
+  // (the word's bytes: on no mapped page -- not the thread's word, not the code)
+  have _ _ th _ _ ld _ _ _ := expand(hw, malloc.world_ok)
+  have fsb: H.fs_base in bits(64) by simp(expand(hw, malloc.world_ok, abi.thread_ok))
+  have nmA: all x. x in omega -> int_le(A, x) -> int_lt(x, int_add(A, 8)) -> !x86_64_linux.mapped(H.vm, int_div(x, x86_64_linux.PAGE)) proof
+    fix x
+    assume xo h1 h2
+    show := apply(tm.obj_unm[b := b, cd := cd, st := st, H := H, a := x], hw, xo, mp(all_elim(ha, {x}), xo, (int_le(l0, x) by arith(h1, hi0)), (int_lt(x, int_add(l0, 64)) by arith(h2, hil))))
+  qed
+  have same: all x. x in bits(64) -> x86_64_linux.mapped(H.vm, int_div(x, x86_64_linux.PAGE)) -> X[x] = H.vm.bytes[x] proof
+    fix x
+    assume hx m
+    have nw: !(int_le(A, x) && int_lt(x, int_add(A, 8))) proof
+      assume w
+      have w1 w2 := w
+      show by taut(m, mp(all_elim(nmA, {x}), (x in omega by arith(hx)), w1, w2))
+    qed
+    show := mp(all_elim(out, {x}), hx, nw)
+  qed
+  have {fsl = fsl} := apply(mp.top_fsl, fsb, th)
+  have r0 _ _ _ := expand(th, abi.thread_ok)
+  have lsame: all k. k in omega -> int_lt(k, 8) -> X[bits_add(64, H.fs_base, bits_of_int(64, k))] = H.vm.bytes[bits_add(64, H.fs_base, bits_of_int(64, k))] proof
+    fix k
+    assume hk2 hkl
+    have m0 _ := mp(all_elim(expand(r0, x86_64_linux.readable), {k}), hk2, hkl)
+    have ae: bits_add(64, H.fs_base, bits_of_int(64, k)) = int_add(H.fs_base, k) by defs(arith(fsb, hk2, hkl, fsl), bits_add, bits_of_int, pow2)
+    show := rewrite(sym(ae), mp(all_elim(same, {int_add(H.fs_base, k)}), (int_add(H.fs_base, k) in bits(64) by arith(fsb, hk2, hkl, fsl)), m0))
+  qed
+  have hle := mp(all_elim(tr.le_same, {X}, {H.vm.bytes}, {H.fs_base}, {8}), (8 in omega by simp()), lsame)
+  have ca _ := expand(ld, abi.loaded)
+  have csame: all i2. i2 in omega -> int_lt(i2, seq_len(cd[empty])) -> X[bits_of_int(64, int_add(b[empty], i2))] = H.vm.bytes[bits_of_int(64, int_add(b[empty], i2))] proof
+    fix i2
+    assume hi2 hil2
+    have q1 _ _ _ := mp(all_elim(expand(ca, abi.code_at), {i2}), hi2, hil2)
+    have mx: x86_64_linux.mapped(H.vm, int_div(bits_of_int(64, int_add(b[empty], i2)), x86_64_linux.PAGE)) by taut(expand(q1, x86_64_linux.fetchable, x86_64_linux.page_of))
+    show := mp(all_elim(same, {bits_of_int(64, int_add(b[empty], i2))}), (bits_of_int(64, int_add(b[empty], i2)) in bits(64) by defs(simp(), bits_of_int, pow2)), mx)
+  qed
+  have wT := apply(tm.wok_bytes[b := b, cd := cd, st := st, H := H, X := X], hw, hle, csame)
+  have kT: all a. a in omega -> !(a in O[S0]) -> !(a in malloc.errno_bytes(eo, S0)) -> x86_64_linux.mapped(S0.vm, int_div(a, x86_64_linux.PAGE)) ->
+      T.vm.bytes[bits_of_int(64, a)] = S0.vm.bytes[bits_of_int(64, a)] && T.vm.pages[int_div(a, x86_64_linux.PAGE)] = S0.vm.pages[int_div(a, x86_64_linux.PAGE)] proof
+    fix a
+    assume ao2 no ne m0
+    have b1 p1 := mp(all_elim(hk, {a}), ao2, no, ne, m0)
+    have mh := apply(tm.mapped_eq[V := H.vm, V0 := S0.vm, q := int_div(a, x86_64_linux.PAGE)], p1, m0)
+    have ml _ := expand(mh, x86_64_linux.mapped)
+    have be: bits_of_int(64, a) = a by defs(arith(ao2, ml), bits_of_int, pow2, x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)
+    have s := rewrite(sym(be), mp(all_elim(same, {a}), (a in bits(64) by defs(arith(ao2, ml), x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)), mh))
+    show by simp(s, b1, p1)
+  qed
+  have lT: all a. a in omega -> int_le(l0, a) -> int_lt(a, int_add(l0, 64)) -> a in T.objs.live proof
+    fix a
+    assume ao2 h1 h2
+    show by simp(mp(all_elim(ha, {a}), ao2, h1, h2))
+  qed
+  show by taut(wT, (T.fs_base = S0.fs_base by simp(hfs)), kT, lT)
+qed
+
+// main's exit: the objects as at S0 again -- the world as any call needs
+// it, the memory outside the allocator's at S0 kept
+theorem tm.wk_final(O, eo, b, cd, st, S0, H, l0): tm.wk(O, eo, b, cd, st, S0, H, l0) -> (all a. a in omega -> a in S0.objs.live -> a in H.objs.live) ->
+  malloc.world_ok(b, cd, st, fn_update(H, "objs", fn_update(H.objs, "live", S0.objs.live))) &&
+  test_malloc.main_frame(O, eo, S0, fn_update(H, "objs", fn_update(H.objs, "live", S0.objs.live)))
+proof
+  assume hwk hsub
+  have hw _ hk _ := hwk
+  have _ _ _ _ _ _ lv _ _ := expand(hw, malloc.world_ok)
+  have sp: all a. a in omega -> a in S0.objs.live -> int_le(x86_64_linux.stack_floor(H.vm), a) && int_lt(a, H.vm.stack_top) proof
+    fix a
+    assume ao w
+    have r1 r2 _ := mp(all_elim(lv, {a}), ao, mp(all_elim(hsub, {a}), ao, w))
+    show by taut(r1, r2)
+  qed
+  have w2 := apply(tm.wok_live[b := b, cd := cd, st := st, H := H, L := S0.objs.live], hw, sp)
+  have mf: test_malloc.main_frame(O, eo, S0, fn_update(H, "objs", fn_update(H.objs, "live", S0.objs.live))) proof
+    have g: all a. a in omega -> (!(a in O[S0]) && !(a in malloc.errno_bytes(eo, S0))) && x86_64_linux.mapped(S0.vm, int_div(a, x86_64_linux.PAGE)) ->
+        fn_update(H, "objs", fn_update(H.objs, "live", S0.objs.live)).vm.bytes[bits_of_int(64, a)] = S0.vm.bytes[bits_of_int(64, a)] &&
+        fn_update(H, "objs", fn_update(H.objs, "live", S0.objs.live)).vm.pages[int_div(a, x86_64_linux.PAGE)] = S0.vm.pages[int_div(a, x86_64_linux.PAGE)] proof
+      fix a
+      assume ao h
+      have no ne m0 := h
+      have bh ph := mp(all_elim(hk, {a}), ao, no, ne, m0)
+      show by simp(bh, ph)
+    qed
+    show by defs(g, test_malloc.main_frame)
+  qed
+  show by taut(w2, mf)
+qed
+
+// malloc's 0 at S (an allocator step to U, then errno written: t): wk at t
+theorem tm.wk_zero(I, O, eo, b, cd, st, S0, S, t, V, l0, K): app(eo, empty) = 52 -> S in rec_and(abi.World, malloc.Heap.ghost) ->
+  tm.mi(I, O, eo, b, cd, st, S0, S, l0, K) -> V in x86_64_linux.Vm -> t.vm in x86_64_linux.Vm ->
+  malloc.step_ok(I, O, S, fn_update(S, "vm", V), malloc.errno_bytes(eo, S)) -> malloc.world_ok(b, cd, st, fn_update(S, "vm", V)) ->
+  malloc.errno_ok(eo, fn_update(S, "vm", V)) -> t = fn_update(S, "vm", t.vm) -> fn_update(t.vm, "bytes", V.bytes) = V ->
+  (all a. a in bits(64) -> (all j. j in omega -> int_lt(j, 4) -> !(a = bits_add(64, bits_add(64, S.fs_base, bits_of_int(64, eo[empty])), bits_of_int(64, j)))) ->
+     t.vm.bytes[a] = V.bytes[a]) ->
+  tm.wk(O, eo, b, cd, st, S0, t, l0)
+proof
+  assume he ht hmi hv htv hst hwU heU hte htb hout
+  let U := fn_update(S, "vm", V)
+  let X := t.vm.bytes
+  have _ _ _ hfs hk ha _ := hmi
+  // (U: the step's; its memory kept outside the allocator's but errno)
+  have xe: all a. a in malloc.errno_bytes(eo, S) -> a in malloc.errno_bytes(eo, S) || a in malloc.live_of(S.blocks) proof
+    fix a
+    assume w
+    show by taut(w)
+  qed
+  have lU: all a. a in malloc.live_of(U.blocks) -> (a in malloc.live_of(S.blocks) || a in O[S]) || !x86_64_linux.mapped(S.vm, int_div(a, x86_64_linux.PAGE)) proof
+    fix a
+    assume w
+    show by taut((a in malloc.live_of(S.blocks) by simp(w)))
+  qed
+  have kU := apply(tm.kept_step[I := I, O := O, eo := eo, S0 := S0, H := S, T := U, X := malloc.errno_bytes(eo, S)], hk, hst, hfs, xe, lU)
+  // (t: U with the bytes X)
+  have tf td := (is_fun(t.vm) && "bytes" in dom(t.vm) by simp(expand(htv, x86_64_linux.Vm)))
+  have q1 := fn_update_twice[f := t.vm, k := "bytes", a := V.bytes, b := X]
+  have q2 := mp(fn_update_same[f := t.vm, k := "bytes"], tf, td)
+  have tvq: fn_update(V, "bytes", X) = t.vm := trans(rewrite(htb, q1), q2)
+  have teq: fn_update(U, "vm", fn_update(U.vm, "bytes", X)) = t := trans((fn_update(U, "vm", fn_update(U.vm, "bytes", X)) = fn_update(S, "vm", fn_update(V, "bytes", X)) by simp()),
+    trans(rewrite(tvq, refl({fn_update(S, "vm", fn_update(V, "bytes", X))}), {2}), sym(hte)))
+  have fsU: U.fs_base = S.fs_base by simp()
+  have _ _ thU _ _ ldU _ _ _ := expand(hwU, malloc.world_ok)
+  have fsb: U.fs_base in bits(64) by simp(expand(hwU, malloc.world_ok, abi.thread_ok))
+  have {fsl = fsl} := apply(mp.top_fsl, fsb, thU)
+  // (errno's bytes: fs + 52 + j)
+  have eaddr: all j. j in omega -> int_lt(j, 4) -> bits_add(64, bits_add(64, S.fs_base, bits_of_int(64, eo[empty])), bits_of_int(64, j)) = int_add(int_add(U.fs_base, 52), j) proof
+    fix j
+    assume hj hjl
+    show by defs(arith(rewrite(fsU, fsb), rewrite(fsU, fsl), hj, hjl, he, fsU), bits_add, bits_of_int, pow2)
+  qed
+  have xsame: all x. x in bits(64) -> (all j. j in omega -> int_lt(j, 4) -> !(x = int_add(int_add(U.fs_base, 52), j))) -> X[x] = U.vm.bytes[x] proof
+    fix x
+    assume hx hn
+    have hn2: all j. j in omega -> int_lt(j, 4) -> !(x = bits_add(64, bits_add(64, S.fs_base, bits_of_int(64, eo[empty])), bits_of_int(64, j))) proof
+      fix j
+      assume hj hjl
+      show := rewrite(sym(mp(all_elim(eaddr, {j}), hj, hjl)), mp(all_elim(hn, {j}), hj, hjl))
+    qed
+    show by simp(mp(all_elim(hout, {x}), hx, hn2))
+  qed
+  // the world: the thread's word and the code no errno byte
+  have r0 _ _ _ := expand(thU, abi.thread_ok)
+  have lsame: all k. k in omega -> int_lt(k, 8) -> X[bits_add(64, U.fs_base, bits_of_int(64, k))] = U.vm.bytes[bits_add(64, U.fs_base, bits_of_int(64, k))] proof
+    fix k
+    assume hk2 hkl
+    have ae: bits_add(64, U.fs_base, bits_of_int(64, k)) = int_add(U.fs_base, k) by defs(arith(fsb, hk2, hkl, fsl), bits_add, bits_of_int, pow2)
+    have nj: all j. j in omega -> int_lt(j, 4) -> !(int_add(U.fs_base, k) = int_add(int_add(U.fs_base, 52), j)) proof
+      fix j
+      assume hj hjl
+      show by arith(hkl, hj)
+    qed
+    show := rewrite(sym(ae), mp(all_elim(xsame, {int_add(U.fs_base, k)}), (int_add(U.fs_base, k) in bits(64) by arith(fsb, hk2, hkl, fsl)), nj))
+  qed
+  have hle := mp(all_elim(tr.le_same, {X}, {U.vm.bytes}, {U.fs_base}, {8}), (8 in omega by simp()), lsame)
+  have ca _ := expand(ldU, abi.loaded)
+  have csame: all i2. i2 in omega -> int_lt(i2, seq_len(cd[empty])) -> X[bits_of_int(64, int_add(b[empty], i2))] = U.vm.bytes[bits_of_int(64, int_add(b[empty], i2))] proof
+    fix i2
+    assume hi2 hil2
+    let x := bits_of_int(64, int_add(b[empty], i2))
+    have _ q2 _ _ := mp(all_elim(expand(ca, abi.code_at), {i2}), hi2, hil2)
+    have nj: all j. j in omega -> int_lt(j, 4) -> !(x = int_add(int_add(U.fs_base, 52), j)) proof
+      fix j
+      assume hj hjl
+      assume e
+      have eb := apply(mp.top_ebyte[eo := eo, S := U, i := j], fsb, fsl, he, hj, hjl)
+      have rw := mp(all_elim(expand(heU, malloc.errno_ok), {int_add(int_add(U.fs_base, 52), j)}), (int_add(int_add(U.fs_base, 52), j) in omega by arith(fsb, hj)), eb)
+      show by taut(q2, rewrite(sym(e), (x86_64_linux.can_access(U.vm, int_add(int_add(U.fs_base, 52), j), 1) by defs(simp(expand(rw, malloc.rw_mapped)),
+        x86_64_linux.can_access, x86_64_linux.hw_allows, x86_64_linux.page_of))))
+    qed
+    show := mp(all_elim(xsame, {x}), (x in bits(64) by defs(simp(), bits_of_int, pow2)), nj)
+  qed
+  have wT := rewrite(teq, apply(tm.wok_bytes[b := b, cd := cd, st := st, H := U, X := X], hwU, hle, csame))
+  // the memory outside the allocator's at S0 (but errno's): U's
+  have kT: all a. a in omega -> !(a in O[S0]) -> !(a in malloc.errno_bytes(eo, S0)) -> x86_64_linux.mapped(S0.vm, int_div(a, x86_64_linux.PAGE)) ->
+      t.vm.bytes[bits_of_int(64, a)] = S0.vm.bytes[bits_of_int(64, a)] && t.vm.pages[int_div(a, x86_64_linux.PAGE)] = S0.vm.pages[int_div(a, x86_64_linux.PAGE)] proof
+    fix a
+    assume ao no ne m0
+    have _ _ b1 p1 := mp(all_elim(kU, {a}), ao, no, ne, m0)
+    have ml _ := expand(m0, x86_64_linux.mapped)
+    have be: bits_of_int(64, a) = a by defs(arith(ao, ml), bits_of_int, pow2, x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)
+    have nj: all j. j in omega -> int_lt(j, 4) -> !(a = int_add(int_add(U.fs_base, 52), j)) proof
+      fix j
+      assume hj hjl
+      assume e
+      have f0: S0.fs_base = U.fs_base by simp(hfs)
+      have eb := apply(mp.top_ebyte[eo := eo, S := S0, i := j], rewrite(sym(f0), fsb), rewrite(sym(f0), fsl), he, hj, hjl)
+      show by taut(ne, rewrite(sym(e), rewrite(f0, eb)))
+    qed
+    have s := rewrite(sym(be), mp(all_elim(xsame, {a}), (a in bits(64) by defs(arith(ao, ml), x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)), nj))
+    have tvb: t.vm.bytes = X by simp()
+    have tvp: t.vm.pages = V.pages := rewrite(tvq, (fn_update(V, "bytes", X).pages = V.pages by simp()))
+    show by simp(s, b1, p1, tvp, (U.vm = V by simp()))
+  qed
+  have lT: all a. a in omega -> int_le(l0, a) -> int_lt(a, int_add(l0, 64)) -> a in t.objs.live proof
+    fix a
+    assume ao h1 h2
+    have l1 _ := mp(all_elim(ha, {a}), ao, h1, h2)
+    show by simp(rewrite(sym(hte), (fn_update(S, "vm", t.vm).objs = S.objs by simp())), l1)
+  qed
+  have tfs: t.fs_base = S0.fs_base := rewrite(sym(hte), (fn_update(S, "vm", t.vm).fs_base = S0.fs_base by simp(hfs)))
+  show by taut(wT, tfs, kT, lT)
+qed
