@@ -300,3 +300,37 @@ fn start_c_spec_fun(g: StartGlobals, p: StartProgram) -> CFun2[World] = (args: A
   start_c_spec(g, p, bits[64](args[0]))
   return (any bits[64], any bits[64])
 }
+
+///////////////////////////////////////////////////////////////////////
+//  After main: exit(code)
+
+// the program's addresses exit uses: musl's exit lock, the fini_array's
+// one entry (crtbegin's __do_global_dtors_aux: its `completed` byte, the
+// weak __cxa_finalize's GOT word -- 0, not linked)
+record ExitProgram { lock: Addr, fini_array: Addr, dtors: Addr, completed: Addr, cxa_got: Addr }
+
+// exit's precondition: a sound thread with its id set (not 0) -- its
+// word apart from what exit writes --, the lock free, the fini_array's
+// entry the dtors', its words readable (the lock and completed byte
+// writable)
+pred exit_pre(vm: Vm, objs: Objs, p: ExitProgram, fs: Addr) =
+  thread_ok(vm, fs) && usable(vm, objs, uint(fs) + 48, 4, false) && bytes_at(vm, fs + 48, 4) != 0 &&
+  (uint(fs) + 8 <= uint(p.lock) || uint(p.lock) + 4 <= uint(fs)) &&
+  (uint(fs) + 8 <= uint(p.completed) || uint(p.completed) + 1 <= uint(fs)) &&
+  usable(vm, objs, uint(p.lock), 4, true) && bytes_at(vm, p.lock, 4) = 0 &&
+  usable(vm, objs, uint(p.fini_array), 8, false) && bytes_at(vm, p.fini_array, 8) = uint(p.dtors) &&
+  usable(vm, objs, uint(p.completed), 1, true) &&
+  usable(vm, objs, uint(p.cxa_got), 8, false) && bytes_at(vm, p.cxa_got, 8) = 0
+
+// exit(code): a stack overflow, or the process ends with the status
+// code's low byte
+proc[World] exit_spec(p: ExitProgram, code: bits[32]) {
+  require exit_pre(vm, objs, p, fs_base)
+  either { overflow() } or { raise exit(code[7:0]) }
+}
+
+fn exit_spec_fun(p: ExitProgram) -> CFun2[World] = (args: Args) => {
+  require len(args) >= 1
+  exit_spec(p, bits[32](args[0]))
+  return (any bits[64], any bits[64])
+}

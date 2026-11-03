@@ -1390,6 +1390,11 @@ impl<'e> Gen<'e> {
         // T the loop's state's locals; every local free: a head's claims
         // for every state there)
         if let Some(tup) = self.loop_tuple(&t) {
+            // (no locals: the loop's state's `empty`, the program as it is)
+            if self.app(&tup, "empty", 0).is_some() {
+                let tmpl = self.abs(&t, &[Self::var_id(&yv)]);
+                return Ok(GPoint { label, shape: vec![Sh::Free; m], tmpl });
+            }
             let tc = self.locals_of(&tup);
             let mut tc2 = Vec::new();
             let same = |g: &Self, a: &Term, b: &Term| {
@@ -1690,7 +1695,7 @@ impl<'e> Gen<'e> {
             let rest = self.post(&lo2, pp, l1)?;
             return self.run(&mp(R::Inst("g.post_low".into(), vec![("l", lo.clone()), ("l2", lo2), ("p", pp.clone())]), vec![s(&imp), s(&rest)]), &[]);
         }
-        let (a, k) = block(self, lo).ok_or_else(|| format!("the CFG side alone: no step at {}", self.lambda(1, lo)))?;
+        let (a, k) = block(self, lo).ok_or_else(|| format!("the CFG side alone: no step at {} (for {})", self.lambda(1, lo), self.lambda(1, pp)))?;
         let lctx = ["o", "x8"];
         let kl = self.lam(&k, &lctx, &["x8", "o"]).ok_or("the lower block's rest")?;
         if let Some(x) = self.app(&a, "bind_rel", 5).map(|x| x.to_vec()) {
@@ -1732,7 +1737,7 @@ impl<'e> Gen<'e> {
                 return self.run(&mp(rr, vec![s(&pfs[0]), s(&pfs[1])]), &[]);
             }
         }
-        Err(format!("the CFG side alone: no step at {}", self.lambda(1, lo)))
+        Err(format!("the CFG side alone: no step at {} (for {})", self.lambda(1, lo), self.lambda(1, pp)))
     }
 
     /// g.post_op_r's premise `all s1 v. runs(op, s, ok(s1, v)) -> g.post(..)`:
