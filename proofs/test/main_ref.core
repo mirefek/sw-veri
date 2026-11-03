@@ -1,0 +1,288 @@
+// main's contract: main's code (over any callees as tm.main_run has them)
+// refines main's spec (layers/test_malloc.sl) with the heap's ghost part,
+// but for stack overflows (`mp.ref_s`)
+
+// ----------------------------------------------------------------------
+//  main's spec: its runs
+
+abbrev tm.PRE(I, eo, b, cd, st, S) := ((S in I && malloc.errno_ok(eo, S)) && malloc.world_ok(b, cd, st, S)) && (all p. p in bits(64) -> S.blocks[p] = none)
+
+// undefined: anything
+theorem tm.ms_any(I, O, eo, b, cd, st, S, o): pair(S, o) in univ(1) -> !tm.PRE(I, eo, b, cd, st, S) -> runs(test_malloc.main_spec(I, O, eo, b, cd, st), S, o)
+proof
+  assume pu hn
+  show by spec_ret(hn, pu)
+qed
+
+// a return: the blocks B, the memory V, 0 or 1
+theorem tm.ms_ret(I, O, eo, b, cd, st, S, B, V, r): tm.PRE(I, eo, b, cd, st, S) -> B in fn_space(bits(64), option(omega)) -> V in x86_64_linux.Vm ->
+  malloc.world_ok(b, cd, st, fn_update(fn_update(S, "blocks", B), "vm", V)) -> test_malloc.main_frame(O, eo, S, fn_update(fn_update(S, "blocks", B), "vm", V)) ->
+  r in bits(32) -> (r = 0 || r = 1) -> pair(S, ok(fn_update(fn_update(S, "blocks", B), "vm", V), r)) in univ(1) ->
+  runs(test_malloc.main_spec(I, O, eo, b, cd, st), S, ok(fn_update(fn_update(S, "blocks", B), "vm", V), r))
+proof
+  assume hp hb hv hw hf hr h01 pu
+  show by spec_ret({exc(pair(fn_update(fn_update(S, "blocks", B), "vm", V), empty), pair("ret", r))}, {B}, {V}, {r}, hp, hb, hv, hw, hf, hr, h01, pu)
+qed
+
+// ----------------------------------------------------------------------
+//  ... as a C function value: its result a register word, any second word
+
+abbrev tm.MSF(I, O, eo, b, cd, st, x1, x2) := bind_rel(test_malloc.main_spec(I, O, eo, b, cd, st), x1, x3 x4. letin(x4, x5. bind_rel(gimple.result(32, x5), x3,
+  x6 x7. letin(x7, x8. any_rel(x9. x9 in bits(64), x9. x2 = ok(x6, pair(x8, x9)))), x6 x7. x2 = exc(x6, x7), x6. x2 = diverge(x6))), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))
+
+theorem tm.msf(I, O, eo, b, cd, st, regs, S, o2): regs in abi.ARGS -> pair(S, o2) in univ(1) -> tm.MSF(I, O, eo, b, cd, st, S, o2) ->
+  runs(test_malloc.main_spec_fun(I, O, eo, b, cd, st)[regs], S, o2)
+proof
+  assume hr pu hw
+  have r := mp(all_elim(tr.runs_intro[r := x1 x2. tm.MSF(I, O, eo, b, cd, st, x1, x2)], {S}, {o2}), pu, hw)
+  show by defs(rewrite(sym(mp(app_fn_build[d := abi.ARGS, v := x0. mkprog(x1 x2. tm.MSF(I, O, eo, b, cd, st, x1, x2)), a := regs], hr)), r), test_malloc.main_spec_fun)
+qed
+
+theorem tm.msf_ok(I, O, eo, b, cd, st, S, x, r, a, y): runs(test_malloc.main_spec(I, O, eo, b, cd, st), S, ok(x, r)) -> runs(gimple.result(32, r), x, ok(x, a)) ->
+  y in bits(64) -> tm.MSF(I, O, eo, b, cd, st, S, ok(x, pair(a, y)))
+proof
+  assume hm hres hy
+  let Z := ok(x, pair(a, y))
+  have k: any_rel(x9. x9 in bits(64), x9. Z = ok(x, pair(a, x9))) by spec_ret({y}, hy)
+  have b1 := mp(all_elim(gc.bind_ok[p := gimple.result(32, r), k := x6 x7. letin(x7, x8. any_rel(x9. x9 in bits(64), x9. Z = ok(x6, pair(x8, x9)))),
+    x := x6 x7. Z = exc(x6, x7), d := x6. Z = diverge(x6)], {x}, {x}, {a}), hres, (letin(a, x8. any_rel(x9. x9 in bits(64), x9. Z = ok(x, pair(x8, x9)))) by defs(k, letin)))
+  let K(x3, x4) := letin(x4, x5. bind_rel(gimple.result(32, x5), x3,
+    x6 x7. letin(x7, x8. any_rel(x9. x9 in bits(64), x9. Z = ok(x6, pair(x8, x9)))), x6 x7. Z = exc(x6, x7), x6. Z = diverge(x6)))
+  have kr: K(x, r) by defs(b1, letin)
+  show := mp(all_elim(gc.bind_ok[p := test_malloc.main_spec(I, O, eo, b, cd, st), k := x3 x4. K(x3, x4), x := x3 x4. Z = exc(x3, x4), d := x3. Z = diverge(x3)],
+    {S}, {x}, {r}), hm, kr)
+qed
+
+theorem tm.msf_exc(I, O, eo, b, cd, st, S, x, e): runs(test_malloc.main_spec(I, O, eo, b, cd, st), S, exc(x, e)) -> tm.MSF(I, O, eo, b, cd, st, S, exc(x, e))
+proof
+  assume hm
+  let Z := exc(x, e)
+  let K(x3, x4) := letin(x4, x5. bind_rel(gimple.result(32, x5), x3,
+    x6 x7. letin(x7, x8. any_rel(x9. x9 in bits(64), x9. Z = ok(x6, pair(x8, x9)))), x6 x7. Z = exc(x6, x7), x6. Z = diverge(x6)))
+  show := mp(all_elim(gc.bind_exc[p := test_malloc.main_spec(I, O, eo, b, cd, st), k := x3 x4. K(x3, x4), x := x3 x4. Z = exc(x3, x4), d := x3. Z = diverge(x3)],
+    {S}, {x}, {e}), hm, refl({Z}))
+qed
+
+theorem tm.msf_div(I, O, eo, b, cd, st, S, t): runs(test_malloc.main_spec(I, O, eo, b, cd, st), S, diverge(t)) -> tm.MSF(I, O, eo, b, cd, st, S, diverge(t))
+proof
+  assume hm
+  let Z := diverge(t)
+  let K(x3, x4) := letin(x4, x5. bind_rel(gimple.result(32, x5), x3,
+    x6 x7. letin(x7, x8. any_rel(x9. x9 in bits(64), x9. Z = ok(x6, pair(x8, x9)))), x6 x7. Z = exc(x6, x7), x6. Z = diverge(x6)))
+  show := mp(all_elim(gc.bind_div[p := test_malloc.main_spec(I, O, eo, b, cd, st), k := x3 x4. K(x3, x4), x := x3 x4. Z = exc(x3, x4), d := x3. Z = diverge(x3)],
+    {S}, {t}), hm, refl({Z}))
+qed
+
+// (a register word a: the result of its low half)
+theorem tm.res_low(x, a): x in univ(1) -> a in bits(64) -> runs(gimple.result(32, bits_of_int(32, a)), x, ok(x, a))
+proof
+  assume hx ha
+  show by defs(simp(hx, ha), gimple.result, gimple.in_reg)
+qed
+
+// ... anything where undefined
+theorem tm.msf_any(I, O, eo, b, cd, st, S, o2): pair(S, o2) in univ(1) -> abi.outcome(o2) -> (all x v. o2 = ok(x, v) -> v in cart(bits(64), bits(64))) ->
+  !tm.PRE(I, eo, b, cd, st, S) -> tm.MSF(I, O, eo, b, cd, st, S, o2)
+proof
+  assume pu hsh hv hn
+  have k1: (ex x v. o2 = ok(x, v)) -> tm.MSF(I, O, eo, b, cd, st, S, o2) proof
+    assume w
+    obtain x v, eo1 from w
+    obtain a y, ha hy er from apply(cart_elim, mp(all_elim(hv, {x}, {v}), eo1))
+    have oe: o2 = ok(x, pair(a, y)) := rewrite(er, eo1)
+    have pu2 := rewrite(oe, pu)
+    have xu: x in univ(1) by simp(pu2)
+    have pu3: pair(S, ok(x, bits_of_int(32, a))) in univ(1) by simp(pu2)
+    have m := apply(tm.ms_any[I := I, O := O, eo := eo, b := b, cd := cd, st := st, S := S, o := ok(x, bits_of_int(32, a))], pu3, hn)
+    have r := apply(tm.msf_ok, m, apply(tm.res_low, xu, ha), hy)
+    show := rewrite(sym(oe), r)
+  qed
+  have k2: (ex x e. o2 = exc(x, e)) -> tm.MSF(I, O, eo, b, cd, st, S, o2) proof
+    assume w
+    obtain x e, eo1 from w
+    have m := apply(tm.ms_any[I := I, O := O, eo := eo, b := b, cd := cd, st := st, S := S, o := exc(x, e)], rewrite(eo1, pu), hn)
+    show := rewrite(sym(eo1), apply(tm.msf_exc, m))
+  qed
+  have k3: (ex t. o2 = diverge(t)) -> tm.MSF(I, O, eo, b, cd, st, S, o2) proof
+    assume w
+    obtain t, eo1 from w
+    have m := apply(tm.ms_any[I := I, O := O, eo := eo, b := b, cd := cd, st := st, S := S, o := diverge(t)], rewrite(eo1, pu), hn)
+    show := rewrite(sym(eo1), apply(tm.msf_div, m))
+  qed
+  show by taut(hsh, k1, k2, k3)
+qed
+
+// ----------------------------------------------------------------------
+//  states
+
+// (a ghost part: h's with its blocks)
+theorem tm.gh_eq(h, g): h in malloc.Heap.ghost -> g in malloc.Heap.ghost -> g = fn_update(h, "blocks", g.blocks)
+proof
+  assume hh hg
+  have gf gd := (is_fun(g) && dom(g) = insert("blocks", empty) by simp(expand(hg, malloc.Heap.ghost)))
+  have hf hd := (is_fun(h) && dom(h) = insert("blocks", empty) by simp(expand(hh, malloc.Heap.ghost)))
+  let F := fn_update(h, "blocks", g.blocks)
+  have ff fd := apply(fn_update_fd[f := h, k := "blocks", v := g.blocks, d := insert("blocks", empty)], hf, hd, (("blocks" in insert("blocks", empty)) by simp()))
+  have ek: all k. k in dom(g) -> g[k] = F[k] proof
+    fix k
+    assume hk
+    have kb: k = "blocks" by simp(rewrite(gd, hk))
+    show by simp(kb)
+  qed
+  show := apply(rec_ext, gf, ff, trans(gd, sym(fd)), ek)
+qed
+
+// (the objects' live set restored: the world with the memory V only)
+theorem tm.restore_w(w, V, L): w in abi.World ->
+  fn_update(fn_update(fn_update(w, "vm", V), "objs", fn_update(w.objs, "live", L)), "objs", fn_update(fn_update(w.objs, "live", L), "live", w.objs.live)) = fn_update(w, "vm", V)
+proof
+  assume hw
+  have of od := (is_fun(w.objs) && "live" in dom(w.objs) by simp(expand(hw, abi.World), keep(abi.Objs)))
+  have o1 := trans(fn_update_twice[f := w.objs, k := "live", a := L, b := w.objs.live], mp(fn_update_same[f := w.objs, k := "live"], of, od))
+  let X := fn_update(fn_update(w.objs, "live", L), "live", w.objs.live)
+  let Wv := fn_update(fn_update(w, "vm", V), "objs", fn_update(w.objs, "live", L))
+  have e1 := rewrite(o1, refl({fn_update(Wv, "objs", X)}), {2})
+  have t2 := fn_update_twice[f := fn_update(w, "vm", V), k := "objs", a := fn_update(w.objs, "live", L), b := w.objs]
+  show := trans(e1, trans(t2, apply(gc.vm_objs, {w}, {V}, hw)))
+qed
+
+// ----------------------------------------------------------------------
+//  main's contract
+
+theorem tm.main_ref_s(I, O, eo, b, cd, st, gsz, gm, gf, gfr, gin, regs): tm.laws(I, O, eo) -> app(eo, empty) = 52 -> malloc.free_step(I, O, eo, b, cd, st) ->
+  tm.mcall(I, O, eo, b, cd, st, gm) -> tm.fcall(I, O, eo, b, cd, st, gfr) -> tp.calls(gsz, test_malloc.size_spec_fun()) ->
+  tp.calls(gf, test_malloc.fill_spec_fun()) -> tp.calls(gin, test_malloc.intact_spec_fun()) -> regs in abi.ARGS ->
+  all w h. w in abi.World -> h in malloc.Heap.ghost ->
+    mp.ref_s(c_tests_test_malloc.main_fun(gsz, gm, gf, gfr, gin)[regs], test_malloc.main_spec_fun(I, O, eo, b, cd, st)[regs], malloc.Heap.ghost, w, h)
+proof
+  assume hl he hfs hmc hfc hgs hgf hgi hra
+  fix w h
+  assume hw hh
+  fix o
+  assume hr0 hsh hv
+  let S := union2(w, h)
+  let GOAL := (ex h2. h2 in malloc.Heap.ghost && runs(test_malloc.main_spec_fun(I, O, eo, b, cd, st)[regs], S, with_ghost(o, h2))) || abi.ovf_out(w, o)
+  have hr := expand(hr0, c_tests_test_malloc.main_fun)
+  rsimp only, app_fn_build, hra in hr
+  have pu := apply(g.runs_univ, hr)
+  have hu _ _ := mp(all_elim(mp.hg_ok, {h}), hh)
+  have bb := apply(g.runs_elim, hr)
+  have pu0 ou0 := apply(abi.wg_univ, pu, hu, hsh)
+  have wt: all x v. with_ghost(o, h) = ok(x, v) -> v in cart(bits(64), bits(64)) proof
+    fix x v
+    assume e
+    have k1: (ex m1 e1. o = ok(m1, e1)) -> v in cart(bits(64), bits(64)) proof
+      assume w1
+      obtain m1 e1, eo1 from w1
+      have e2: ok(union2(m1, h), e1) = ok(x, v) := trans(sym(all_elim(abi.wg_ok, {m1}, {e1}, {h})), rewrite(eo1, e))
+      have ve: e1 = v by simp(e2)
+      show := rewrite(ve, mp(all_elim(hv, {m1}, {e1}), eo1))
+    qed
+    have k2: (ex m1 e1. o = exc(m1, e1)) -> v in cart(bits(64), bits(64)) proof
+      assume w1
+      obtain m1 e1, eo1 from w1
+      have e2: exc(union2(m1, h), e1) = ok(x, v) := trans(sym(all_elim(abi.wg_exc, {m1}, {e1}, {h})), rewrite(eo1, e))
+      show by simp(e2)
+    qed
+    have k3: (ex t. o = diverge(t)) -> v in cart(bits(64), bits(64)) proof
+      assume w1
+      obtain t, eo1 from w1
+      have e2: diverge(t) = ok(x, v) := trans(sym(all_elim(abi.wg_div, {t}, {h})), rewrite(eo1, e))
+      show by simp(e2)
+    qed
+    show by taut(hsh, k1, k2, k3)
+  qed
+  // undefined: anything
+  have cu: !tm.PRE(I, eo, b, cd, st, S) -> GOAL proof
+    assume hn
+    have m := apply(tm.msf_any[I := I, O := O, eo := eo, b := b, cd := cd, st := st, S := S, o2 := with_ghost(o, h)], pu0, ou0, wt, hn)
+    show by disj({1}, ex_intro({h}, taut(hh, apply(tm.msf, hra, pu0, m))))
+  qed
+  // defined: main's run
+  have cdf: tm.PRE(I, eo, b, cd, st, S) -> GOAL proof
+    assume hpre
+    have hp1 hp2 hp3 hp4 := hpre
+    have b2: bind_rel(c_tests_test_malloc.main(gsz, gm, gf, gfr, gin), w, x1 x2. bind_rel(gimple.result(32, x2), fn_update(x1, "objs", fn_update(x1.objs, "live", w.objs.live)),
+        x5 x6. any_rel(x7. x7 in bits(64), x7. o = ok(x5, pair(x6, x7))), x5 x6. o = exc(x5, x6), x5. o = diverge(x5)), x1 x2. o = exc(x1, x2), x1. o = diverge(x1))
+      by simp(expand(bb, letin), keep(bind_rel, gimple.result, c_tests_test_malloc.main))
+    obtain o3, hs3 hk3 from expand(b2, bind_rel)
+    have md := mp(all_elim(tm.main_run, {I}, {O}, {eo}, {b}, {cd}, {st}, {gsz}, {gm}, {gf}, {gfr}, {gin}, {w}, {h}, {o3}), hl, he, hfs, hmc, hfc, hgs, hgf, hgi, hw, hh,
+      hp1, hp2, hp3, hp4, hs3)
+    // an overflow: the ABI's
+    have k1: abi.ovf_out(w, o3) -> GOAL proof
+      assume w1
+      obtain v ob, hv1 hob he1 from w1
+      have oe: o = exc(fn_update(fn_update(w, "vm", v), "objs", ob), exc_val("stack_overflow", empty)) by simp(rewrite(he1, hk3))
+      show by disj({2}, ex_intro({v}, {ob}, taut(hv1, hob, oe)))
+    qed
+    // a return: 0 or 1, the objects restored; the spec's return with the
+    // ghost part g
+    have k2: (ex V g r L. ((((V in x86_64_linux.Vm && g in malloc.Heap.ghost) && (r = 0 || r = 1)) && malloc.world_ok(b, cd, st, union2(fn_update(w, "vm", V), g))) &&
+        test_malloc.main_frame(O, eo, union2(w, h), union2(fn_update(w, "vm", V), g))) && o3 = ok(fn_update(fn_update(w, "vm", V), "objs", fn_update(w.objs, "live", L)), r)) -> GOAL proof
+      assume w1
+      obtain V g r L, hV hg h01 hwk hmf ho3 from w1
+      let Wv := fn_update(w, "vm", V)
+      let Xr := fn_update(fn_update(fn_update(w, "vm", V), "objs", fn_update(w.objs, "live", L)), "objs", fn_update(fn_update(w.objs, "live", L), "live", w.objs.live))
+      let X3 := fn_update(fn_update(w, "vm", V), "objs", fn_update(w.objs, "live", L))
+      let Q(x0, x1) := ex x2. runs(gimple.result(32, x1), fn_update(x0, "objs", fn_update(x0.objs, "live", w.objs.live)), x2) &&
+        (((ex x3 x4. x2 = ok(x3, x4) && any_rel(x5. x5 in bits(64), x5. o = ok(x3, pair(x4, x5)))) || (ex x3 x4. x2 = exc(x3, x4) && o = exc(x3, x4))) ||
+         (ex x3. x2 = diverge(x3) && o = diverge(x3)))
+      have hk := rewrite(ho3, hk3)
+      have q1: (ex x0 x1. ok(X3, r) = ok(x0, x1) && Q(x0, x1)) -> Q(X3, r) proof
+        assume w2
+        obtain x0 x1, e q from w2
+        have e0: x0 = X3 by simp(e)
+        have e1: x1 = r by simp(e)
+        show := rewrite(e0, rewrite(e1, q))
+      qed
+      have q2: (ex x0 x1. ok(X3, r) = exc(x0, x1) && o = exc(x0, x1)) -> Q(X3, r) proof
+        assume w2
+        obtain x0 x1, e _ from w2
+        show by simp(e)
+      qed
+      have q3: (ex x0. ok(X3, r) = diverge(x0) && o = diverge(x0)) -> Q(X3, r) proof
+        assume w2
+        obtain x0, e _ from w2
+        show by simp(e)
+      qed
+      have k4: Q(X3, r) by taut(hk, q1, q2, q3)
+      have xo: X3.objs = fn_update(w.objs, "live", L) := app_update_same[f := fn_update(w, "vm", V), k := "objs", v := fn_update(w.objs, "live", L)]
+      have k4w := rewrite(apply(tm.restore_w[w := w, V := V, L := L], hw), rewrite(xo, k4))
+      obtain o4, hr4 hk4 from k4w
+      have c0: r = 0 -> r in bits(32) proof
+        assume e
+        show by simp(e)
+      qed
+      have c1: r = 1 -> r in bits(32) proof
+        assume e
+        show by simp(e)
+      qed
+      have hr32: r in bits(32) by taut(h01, c0, c1)
+      obtain u, hu64 hlow ho4 from mp(all_elim(g.result32_inv, {Wv}, {r}, {o4}), hr32, hr4)
+      have k5: any_rel(x5. x5 in bits(64), x5. o = ok(Wv, pair(u, x5))) by simp(rewrite(ho4, hk4), keep(any_rel))
+      obtain y, hy hoy from apply(g.any_e, (ex y. y in bits(64) by ex_intro({0}, simp())), k5)
+      // the spec's state: S with g's blocks and the memory V
+      have ghe := apply(tm.gh_eq, hh, hg)
+      have wu: w in univ(1) by simp(pu)
+      have {eT = eq, uT = uv} := apply(mp.top_rec[s := w, h := h, h2 := g, V := V], hw, wu, hh, hg, hV,
+        (g = h || (ex B2. g = fn_update(h, "blocks", B2)) by disj({2}, ex_intro({g.blocks}, ghe))))
+      let T := union2(Wv, g)
+      have gb: g.blocks in fn_space(bits(64), option(omega)) by simp(expand(hg, malloc.Heap.ghost))
+      have hgu _ _ := mp(all_elim(mp.hg_ok, {g}), hg)
+      have su: S in univ(1) by simp(pu0)
+      have pr: pair(S, ok(T, r)) in univ(1) by simp(su, uT, hr32)
+      have ms := apply(tm.ms_ret[I := I, O := O, eo := eo, b := b, cd := cd, st := st, S := S, B := g.blocks, V := V, r := r], hpre, gb, hV,
+        rewrite(eT, hwk), rewrite(eT, hmf), hr32, h01, rewrite(eT, pr))
+      have ms2 := rewrite(sym(eT), ms)
+      have rg := apply(g.result_ghost[w := 32, v := r, s := Wv, h := g, o := ok(Wv, u)], hgu, rewrite(ho4, hr4))
+      have rg2 := rewrite(all_elim(abi.wg_ok, {Wv}, {u}, {g}), rg)
+      have mf := apply(tm.msf_ok, ms2, rg2, hy)
+      have wo: with_ghost(o, g) = ok(T, pair(u, y)) := rewrite(sym(hoy), all_elim(abi.wg_ok, {Wv}, {pair(u, y)}, {g}))
+      have pu4: pair(S, ok(T, pair(u, y))) in univ(1) by simp(su, uT, hu64, hy)
+      have run := apply(tm.msf, hra, pu4, mf)
+      show by disj({1}, ex_intro({g}, taut(hg, rewrite(sym(wo), run))))
+    qed
+    show by taut(md, k1, k2)
+  qed
+  show by taut(cu, cdf)
+qed
