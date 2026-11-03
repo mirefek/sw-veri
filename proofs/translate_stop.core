@@ -105,7 +105,8 @@ proof
     obtain t, q from expand(e, tr.div).1
     show by simp(q)
   qed
-  have r: abi.raises_at(spec, args, objs, mem, s) by taut(expand(ma, tr.matches_t), n2, n3, n4)
+  have n5 := all_elim(tr.xo_ok, {spec[args]}, {abi.view(s, objs, mem)}, {x}, {exc_val("stop", empty)})
+  have r: abi.raises_at(spec, args, objs, mem, s) by taut(expand(ma, tr.matches_t), n2, n3, n4, n5)
   show by defs(taut(r), tr.matches_t)
 qed
 
@@ -556,7 +557,7 @@ def tr.stv(b, P, W, o) := ex m w v2 mem2. o = ok(m, exc_val("stop", empty)) && a
 // the outcomes matching: undefined, a crash, a divergence, a return, the
 // stop if allowed (k)
 def tr.mtv(b, s, V, P, W, o, k) := tr.ub(s, V, P, W) || tr.crash(s, P, W, o) || tr.div(P, W, o) ||
-  (ex m1. o = ok(m1, empty) && tr.rtv(b, s, V, P, W, m1)) || (k && tr.stv(b, P, W, o))
+  (ex m1. o = ok(m1, empty) && tr.rtv(b, s, V, P, W, m1)) || (k && tr.stv(b, P, W, o)) || tr.xo(P, W, o)
 // the contract (u: for an entry of any alignment)
 def tr.impl_m(b, u, f, spec, t, k, base, code, statics) :=
   all args objs mem s o. args in abi.ARGS -> objs in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(s.vm, base, code, statics) ->
@@ -645,7 +646,14 @@ proof
       have e5: ex m2. o = ok(m2, empty) && tr.rtv(b, s, V, P, W, m2) by ex_intro({m1}, taut(oe, rv))
       show by defs(taut(e5), tr.mtv)
     qed
-    show by taut(g, k1, k2, k3, k4)
+    have k5: tr.xo(P, W, o1) -> tr.mtv(b, s, V, P, W, o, k) proof
+      assume hx
+      obtain m1 st x, _ xe _ _ from expand(hx, tr.xo)
+      have nd: !(fst(o1) = 2) by simp(xe)
+      have oe2: o1 = o by taut(eo, nd)
+      show by defs(taut(rewrite(oe2, hx)), tr.mtv)
+    qed
+    show by taut(g, k1, k2, k3, k4, k5)
   qed
   // the claim's run stopping where the stop run leaves with disc: undefined
   have c2: (ex x. o = exc(x, exc_val("disc", empty)) && tr.run_k(s, zb. zb.rip = t, s, ok(x, empty)) && !tr.at_ret(s, x) && tr.out(s, x)) ->
@@ -669,7 +677,7 @@ proof
       have at: tr.at_ret(s, x) by taut(rx)
       show by taut(at, nat)
     qed
-    show by taut(g, k1, k2, k3, k4)
+    show by taut(g, k1, k2, k3, k4, all_elim(tr.xo_ok, {P}, {W}, {x}, {empty}))
   qed
   // the stop: the claim's run stops at t, the program raising at main there
   have c3: (ex x. o = ok(x, exc_val("stop", empty)) && tr.run_k(s, zb. zb.rip = t, s, ok(x, empty)) && x.rip = t && !tr.at_ret(s, x)) ->
@@ -722,7 +730,7 @@ proof
       qed
       show by taut(expand(hat, tr.at_tm), a1, a2)
     qed
-    show by taut(g, k1, k2, k3, k4)
+    show by taut(g, k1, k2, k3, k4, all_elim(tr.xo_ok, {P}, {W}, {x}, {empty}))
   qed
   show by taut(rdk, c1, c2, c3)
 qed
@@ -830,7 +838,13 @@ proof
     have sv: tr.stv(true, P, W, o) by defs(ex_intro({m2}, {w3}, {v3}, {mem3}, taut(oe, rs, ru2, we4, vo2)), tr.stv)
     show by defs(taut(sv, kk), tr.mtv)
   qed
-  show by taut(m, k1, k2, k3, k4, k5)
+  // an exit
+  have k6: tr.xo(spec[args], abi.view(s, objs, mem), o) -> tr.mtv(true, s, V, P, W, o, k) proof
+    assume x
+    have x2: tr.xo(P, W, o) := rewrite(sym(we), x)
+    show by defs(taut(x2), tr.mtv)
+  qed
+  show by taut(m, k1, k2, k3, k4, k5, k6)
 qed
 
 // (... and back: the generic match in the main mode, the main mode's)
@@ -886,7 +900,11 @@ proof
     have sv: tr.stop_t(spec, args, objs, mem, s, o) by defs(ex_intro({m2}, {w3}, {v3}, {mem3}, taut(oe, rs, ru, we4, vo2)), tr.stop_t)
     show by defs(taut(sv, kk), tr.matches_tk)
   qed
-  show by taut(m, k1, k2, k3, k4, k5)
+  have k6: tr.xo(P, W, o) -> tr.matches_tk(spec, args, objs, mem, s, o, k) proof
+    assume x
+    show by defs(taut(x), tr.matches_tk, tr.matches_t)
+  qed
+  show by taut(m, k1, k2, k3, k4, k5, k6)
 qed
 
 // (the main mode's contract: the generic one's)
@@ -913,7 +931,7 @@ theorem tr.mtv_mono: all b s V P Q W o k. (all x. runs(P, W, x) -> runs(Q, W, x)
 proof
   fix b s V P Q W o k
   assume hr mt
-  show by defs(simp(hr, expand(mt, tr.mtv, tr.ub, tr.crash, tr.ovf, tr.div, tr.rtv, tr.stv)), tr.mtv, tr.ub, tr.crash, tr.ovf, tr.div, tr.rtv, tr.stv)
+  show by defs(simp(hr, expand(mt, tr.mtv, tr.ub, tr.crash, tr.ovf, tr.div, tr.rtv, tr.stv, tr.xo)), tr.mtv, tr.ub, tr.crash, tr.ovf, tr.div, tr.rtv, tr.stv, tr.xo)
 qed
 
 // Composition in either mode (as tr.implements_refine): the machine code
@@ -1430,7 +1448,7 @@ proof
   assume h1 h2 hm
   obtain t1, e1 from h1
   have hm1 := rewrite(e1, expand(hm, tr.mtv, tr.crash, tr.div, tr.stv))
-  have u: tr.ub(s, V, P, W) || (ex t2. runs(P, W, diverge(t2))) by simp(hm1, keep(tr.ub, tr.rtv))
+  have u: tr.ub(s, V, P, W) || (ex t2. runs(P, W, diverge(t2))) by simp(hm1, all_elim(tr.xo_div, {P}, {W}, {t1}), keep(tr.ub, tr.rtv))
   have d: tr.ub(s, V, P, W) -> tr.mtv(b, s, V, P, W, o2, k) proof
     assume h
     show by defs(taut(h), tr.mtv)
@@ -1614,7 +1632,8 @@ proof
       assume ex
       obtain x, r from ex
       have mk := mp(all_elim(mt, {ok(x, exc_val("stop", empty))}), r)
-      have ra: abi.raises_at(spec, args, objs, mem, s) by simp(expand(mk, tr.matches_tk, tr.matches_t, tr.crashes_t, tr.div), tr.stop_ne, keep(abi.raises_at))
+      have ra: abi.raises_at(spec, args, objs, mem, s) by simp(expand(mk, tr.matches_tk, tr.matches_t, tr.crashes_t, tr.div), tr.stop_ne,
+        all_elim(tr.xo_ok, {spec[args]}, {abi.view(s, objs, mem)}, {x}, {exc_val("stop", empty)}), keep(abi.raises_at))
       show by defs(taut(ra), tr.matches_t)
     qed
     show by taut(c, c1, c2)

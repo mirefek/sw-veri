@@ -228,6 +228,55 @@ def tr.crash(s, p, w, o) :=
 // docs/todo.md)
 def tr.div(p, w, o) := (ex t. o = diverge(t)) && (ex t2. runs(p, w, diverge(t2)))
 
+// the process exiting, matched by the spec's raise of the same exit (the
+// machine's `exit(status)`, GIMPLE's sys_call1 of exit / exit_group)
+def tr.xo(p, w, o) := ex m1 st x. st in univ(1) && o = exc(m1, exc_val("exit", st)) && abi.raise_state(x) && runs(p, w, exc(x, exc_val("exit", st)))
+
+// (an exit: no divergence, no normal outcome)
+theorem tr.xo_div: all p w t. !tr.xo(p, w, diverge(t))
+proof
+  fix p w t
+  have g: tr.xo(p, w, diverge(t)) -> false proof
+    assume h
+    obtain m1 st x, _ e _ _ from expand(h, tr.xo)
+    show by simp(e)
+  qed
+  show by taut(g)
+qed
+
+theorem tr.xo_ok: all p w x e. !tr.xo(p, w, ok(x, e))
+proof
+  fix p w x0 e0
+  have g: tr.xo(p, w, ok(x0, e0)) -> false proof
+    assume h
+    obtain m1 st x, _ e _ _ from expand(h, tr.xo)
+    show by simp(e)
+  qed
+  show by taut(g)
+qed
+
+// (... and no leaving of the discipline)
+theorem tr.xo_disc: all p w x. !tr.xo(p, w, exc(x, exc_val("disc", empty)))
+proof
+  fix p w x0
+  have g: tr.xo(p, w, exc(x0, exc_val("disc", empty))) -> false proof
+    assume h
+    obtain m1 st x, _ e _ _ from expand(h, tr.xo)
+    show by simp(expand(e, exc_val))
+  qed
+  show by taut(g)
+qed
+
+// (... the spec's: of any program running as it)
+theorem tr.xo_mono: all p q w o. (all x. runs(p, w, x) -> runs(q, w, x)) -> tr.xo(p, w, o) -> tr.xo(q, w, o)
+proof
+  fix p q w o
+  assume hm h
+  obtain m1 st x, su e rs r from expand(h, tr.xo)
+  have r2 := mp(all_elim(hm, {exc(x, exc_val("exit", st))}), r)
+  show by defs(ex_intro({m1}, {st}, {x}, taut(su, e, rs, r2)), tr.xo)
+qed
+
 
 // a crash as the ABI's (abi.crashes_at), its I/O by tr.ovf (a divergence's
 // trace not compared)
@@ -280,6 +329,25 @@ proof
   show by defs(expand(h, tr.ub), abi.raises_at)
 qed
 
+// (the bridge's raise, an exit: the ABI's raise)
+theorem tr.raises_ab_of: all spec args v mem s. abi.raises_at(spec, args, v, mem, s) -> abi.raises_ab(spec, args, v, mem, s)
+proof
+  fix spec args v mem s
+  assume h
+  obtain e x, eu eo en rs r from expand(h, abi.raises_at)
+  show by defs(ex_intro({e}, {x}, taut(eu, eo, apply(tr.nstop_main, en), rs, r)), abi.raises_ab)
+qed
+
+theorem tr.xo_ab: all spec args v mem s o. tr.xo(spec[args], abi.view(s, v, mem), o) -> abi.raises_ab(spec, args, v, mem, s)
+proof
+  fix spec args v mem s o
+  assume h
+  obtain m1 st x, su _ rs r from expand(h, tr.xo)
+  have eu: exc_val("exit", st) in univ(1) by defs(simp(su), exc_val)
+  have n: !(exc_val("exit", st) = exc_val("stack_overflow", empty)) && !(exc_val("exit", st) = exc_val("at_main", empty)) by defs(simp(), exc_val)
+  show by defs(ex_intro({exc_val("exit", st)}, {x}, taut(eu, n, rs, r)), abi.raises_ab)
+qed
+
 // (a crash is no divergence, no return)
 theorem tr.crash_not_div: all s p w t. !tr.crash(s, p, w, diverge(t))
 proof
@@ -323,7 +391,7 @@ def tr.retok(s, v, p, w, m1) := m1 in x86_64_linux.Machine && m1 in univ(1) &&
 def tr.arr(s, zb. bkp, zb pb wb. bka, v, m, p, w) := (tr.out(s, m) -> tr.retok(s, v, p, w, m)) &&
   (!tr.out(s, m) -> bkp(m) -> (ex p2 w2. tr.red(p, w, p2, w2) && bka(m, p2, w2)))
 def tr.gk(s, zb. bkp, zb pb wb. bka, v, p, w, o) := tr.ub(s, v, p, w) || tr.crash(s, p, w, o) || tr.div(p, w, o) ||
-  (ex m1. o = ok(m1, empty) && tr.arr(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, m1, p, w))
+  (ex m1. o = ok(m1, empty) && tr.arr(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, m1, p, w)) || tr.xo(p, w, o)
 def tr.sim(s, zb. bkp, zb pb wb. bka, v, p, w, m) := all o. tr.run_k(s, zb. bkp(zb), m, o) -> tr.gk(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, p, w, o)
 def tr.cl(s, zb. bkp, zb pb wb. bka, v, p, w, m) := (tr.stopk(s, zb. bkp(zb), m) -> tr.arr(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, m, p, w)) &&
   (!tr.stopk(s, zb. bkp(zb), m) -> tr.sim(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, p, w, m))
@@ -418,7 +486,7 @@ proof
     obtain m1, oe _ from e
     show by simp(oe)
   qed
-  show by defs(taut(expand(h, tr.gk), nc, d, k), tr.gk)
+  show by defs(taut(expand(h, tr.gk), nc, d, k, all_elim(tr.xo_div, {p}, {w}, {t})), tr.gk)
 qed
 
 // the spec reduced: the arrival condition, the outcome condition, the claims
@@ -493,7 +561,13 @@ proof
     have a := apply(tr.arr_red[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], {s}, {v}, {p}, {w}, {p2}, {w2}, {m1}, hr, ha)
     show by ex_intro({m1}, taut(oe, a))
   qed
-  show by defs(taut(expand(h, tr.gk), u, cr, dv, k), tr.gk)
+  have xo: tr.xo(p2, w2, o) -> tr.xo(p, w, o) proof
+    assume hx
+    obtain m1 st x, su e rs r2 from expand(hx, tr.xo)
+    have r1 := mp(all_elim(r, {exc(x, exc_val("exit", st))}), r2)
+    show by defs(ex_intro({m1}, {st}, {x}, taut(su, e, rs, r1)), tr.xo)
+  qed
+  show by defs(taut(expand(h, tr.gk), u, cr, dv, k, xo), tr.gk)
 qed
 
 theorem tr.sim_red(zb. bkp, zb pb wb. bka): all s v p w p2 w2 m. tr.red(p, w, p2, w2) -> tr.sim(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, p2, w2, m) ->
@@ -986,7 +1060,7 @@ def tr.matches_t(spec, args, objs, mem, s, o) :=
     abi.world_matches(s.vm, m1.vm, w2.vm, abi.wob(objs, w2.objs.c_bytes), s.fs_base, abi.sp(s)) && m1.os = w2.os && m1.fs_base = s.fs_base &&
     m1.cpu = s.cpu && m1.gs_base = s.gs_base && m1.rip = abi.ret(s) && m1.gpr[4] = abi.sp(s) &&
     abi.callee_saved(m1, s) && !m1.flags.df) ||
-  tr.crashes_t(spec, args, objs, mem, s, o) || tr.div(spec[args], abi.view(s, objs, mem), o)
+  tr.crashes_t(spec, args, objs, mem, s, o) || tr.div(spec[args], abi.view(s, objs, mem), o) || tr.xo(spec[args], abi.view(s, objs, mem), o)
 
 // a spec diverges only where it raises (undefined): so for a contract,
 // whose effect has no loop -- the ABI's claim then has no divergence to
@@ -1077,10 +1151,12 @@ proof
     show by taut(expand(d, tr.div).2)
   qed
   have mt2: abi.raises_at(spec, args, objs, mem, s) || tr.ok(s, objs, spec[args], abi.view(s, objs, mem), o) || tr.crashes_t(spec, args, objs, mem, s, o) ||
-      tr.div(spec[args], abi.view(s, objs, mem), o)
+      tr.div(spec[args], abi.view(s, objs, mem), o) || tr.xo(spec[args], abi.view(s, objs, mem), o)
     by defs(taut(expand(mt, tr.matches_t)), tr.ok)
   have oa := all_elim(tr.ok_abi, {s}, {objs}, {spec[args]}, {abi.view(s, objs, mem)}, {o})
-  show by defs(taut(mt2, oa, dr, ca), abi.matches)
+  have ra := all_elim(tr.raises_ab_of, {spec}, {args}, {objs}, {mem}, {s})
+  have xa := all_elim(tr.xo_ab, {spec}, {args}, {objs}, {mem}, {s}, {o})
+  show by defs(taut(mt2, oa, dr, ca, ra, xa), abi.matches)
 qed
 
 theorem tr.matches_t_abi: all spec args objs mem s o. tr.div_raises(spec) -> args in abi.ARGS -> abi.view(s, objs, mem) in abi.World -> abi.view(s, objs, mem) in univ(1) ->
@@ -1090,7 +1166,8 @@ proof
   assume hd hA hvW hvu mt
   have m := apply(tr.matches_t_abi_d, {spec}, {args}, {objs}, {mem}, {s}, {o}, mt)
   have d := apply(tr.div_raise_at, {spec}, {args}, {objs}, {mem}, {s}, hd, hA, hvW, hvu)
-  show by defs(taut(expand(m, abi.matches), d), abi.matches)
+  have ra := all_elim(tr.raises_ab_of, {spec}, {args}, {objs}, {mem}, {s})
+  show by defs(taut(expand(m, abi.matches), d, ra), abi.matches)
 qed
 
 theorem tr.ok_not_div: all s v p w t. !tr.ok(s, v, p, w, diverge(t))
@@ -1453,7 +1530,14 @@ proof
       have oe: o = ok(m1, empty) := trans(sym(oe0), oe1)
       show := mp(all_elim(rt, {m1}), oe, hr)
     qed
-    show by taut(g, k1, k2, k3, k4)
+    have k5: tr.xo(P, W, o1) -> tr.matches_t(spec, args, v, mem, s, o) proof
+      assume hx
+      obtain m1 st x, _ xe _ _ from expand(hx, tr.xo)
+      have nd: !(fst(o1) = 2) by simp(xe)
+      have oe: o1 = o by taut(eo, nd)
+      show by defs(taut(rewrite(oe, hx)), tr.matches_t)
+    qed
+    show by taut(g, k1, k2, k3, k4, k5)
   qed
   // the claim's run stopping where the contract's leaves with disc: undefined
   have c2: (ex x. o = exc(x, exc_val("disc", empty)) && tr.run_k(s, zb. false, s, ok(x, empty)) && !tr.at_ret(s, x)) -> tr.matches_t(spec, args, v, mem, s, o) proof
@@ -1481,7 +1565,7 @@ proof
       have at: tr.at_ret(s, x) by taut(rx)
       show by taut(at, nat)
     qed
-    show by taut(g, k1, k2, k3, k4)
+    show by taut(g, k1, k2, k3, k4, all_elim(tr.xo_ok, {P}, {W}, {x}, {empty}))
   qed
   show by taut(rdk, c1, c2)
 qed
@@ -1878,7 +1962,7 @@ proof
     obtain m1 a c0, {oe} from expand(e, abi.crashes_at)
     show by simp(expand(oe, exc_val))
   qed
-  have r: abi.raises_at(spec, args, objs, mem, s) by taut(expand(ma, abi.matches), n2, n3, n4)
+  have r: abi.raises_ab(spec, args, objs, mem, s) by taut(expand(ma, abi.matches), n2, n3, n4)
   show by defs(taut(r), abi.matches)
 qed
 
