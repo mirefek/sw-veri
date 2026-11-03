@@ -1,0 +1,277 @@
+// The whole run's callers of main linked (the startup mode without a
+// stop, tr.impl_d; docs/todo.md 1(d)): stage2 with __libc_start_init by
+// its purpose, main's code map (main at its address by its contract, any
+// M) and exit by its contract; __libc_start_main with __init_libc and
+// stage2's map; _start_c.
+
+// (a_crash's contract at any address, no stop: its spec undefined)
+theorem lwh.acr_d: all u f statics. tr.impl_d(false, u, f, lnk.A, 4198400, text.code, statics)
+proof
+  fix u f statics
+  show := apply(tr.impl_d_of, all_elim(acr.impl_m, {false}, {u}, {f}, {4199122}, {false}, {statics}))
+qed
+
+// ----------------------------------------------------------------------
+//  A code map: one function at its address, a_crash's elsewhere
+
+abbrev lwh.FP(a, M) := fn_build(bits(64), T. ite(T = a, M, lnk.A))
+
+theorem lwh.code_ok: all a M n fr statics. tr.ccs_d(false, fr, a, M, 4198400, text.code, statics) -> tr.callee_io(M, n) ->
+  tr.code_okd(false, lwh.FP(a, M), n, fr, 4198400, text.code, statics)
+proof
+  fix a M n fr statics
+  assume hc hio
+  have g: all T. T in bits(64) -> tr.ccs_d(false, fr, T, lwh.FP(a, M)[T], 4198400, text.code, statics) && tr.callee_io(lwh.FP(a, M)[T], n) proof
+    fix T
+    assume hT
+    have e := mp(app_fn_build[d := bits(64), v := x. ite(x = a, M, lnk.A), a := T], hT)
+    have k1: T = a -> tr.ccs_d(false, fr, T, lwh.FP(a, M)[T], 4198400, text.code, statics) && tr.callee_io(lwh.FP(a, M)[T], n) proof
+      assume ea
+      have i1: ite(T = a, M, lnk.A) = M by simp(ea)
+      have m := trans(e, i1)
+      have c := rewrite(sym(m), rewrite(sym(ea), hc))
+      have i := rewrite(sym(m), hio)
+      show by taut(c, i)
+    qed
+    have k2: !(T = a) -> tr.ccs_d(false, fr, T, lwh.FP(a, M)[T], 4198400, text.code, statics) && tr.callee_io(lwh.FP(a, M)[T], n) proof
+      assume na
+      have m: lwh.FP(a, M)[T] = lnk.A by simp(e, na)
+      have c0: tr.ccs_d(false, fr, T, lnk.A, 4198400, text.code, statics) by defs(taut(all_elim(lwh.acr_d, {true}, {T}, {statics})), tr.ccs_d)
+      have c := rewrite(sym(m), c0)
+      have i := rewrite(sym(m), mp.undef_io[n := n])
+      show by taut(c, i)
+    qed
+    show by taut(k1, k2)
+  qed
+  show by defs(g, tr.code_okd)
+qed
+
+theorem lwh.fp_typed: all a M. M in fn_space(abi.ARGS, powerset(univ(1))) -> lwh.FP(a, M) in fn_space(bits(64), fn_space(abi.ARGS, powerset(univ(1))))
+proof
+  fix a M
+  assume hg
+  have v: all x. x in bits(64) -> ite(x = a, M, lnk.A) in fn_space(abi.ARGS, powerset(univ(1))) proof
+    fix x
+    assume _
+    show by simp(hg, acr.typed)
+  qed
+  show := mp(fn_build_space[d := bits(64), v := x. ite(x = a, M, lnk.A), b := fn_space(abi.ARGS, powerset(univ(1)))], v)
+qed
+
+// ----------------------------------------------------------------------
+//  __libc_start_init by its purpose (startup_specs.start_init_spec): it
+//  raises at main only where undefined -- its contract without the stop
+
+abbrev lwh.SI := startup_specs.start_init_spec_fun(ui.P)
+
+theorem lwh.si_typed: lwh.SI in fn_space(abi.ARGS, powerset(univ(1)))
+proof
+  show by defs(tr.fun_typed[r := x0 x1 x2. bind_rel(startup_specs.start_init_spec(ui.P), x1, x3 x4. any_rel(x5. x5 in bits(64), x5. any_rel(x6. x6 in bits(64), x6. x2 = ok(x3, pair(x5, x6)))),
+    x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))], startup_specs.start_init_spec_fun)
+qed
+
+// (undefined where the constructors' table is not sound: an exception
+// of any kind)
+abbrev lwh.SIR(x1, x2) := bind_rel(startup_specs.start_init_spec(ui.P), x1, x3 x4. any_rel(x5. x5 in bits(64), x5. any_rel(x6. x6 in bits(64), x6. x2 = ok(x3, pair(x5, x6)))),
+  x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))
+
+// (the wrapper's run from its body's)
+theorem lwh.si_wrap: all args w o. args in abi.ARGS -> pair(w, o) in univ(1) -> lwh.SIR(w, o) -> runs(lwh.SI[args], w, o)
+proof
+  fix args w o
+  assume hA pu b
+  have r := apply(tr.runs_intro[r := x1 x2. lwh.SIR(x1, x2)], {w}, {o}, pu, b)
+  have ap := mp(app_fn_build[d := abi.ARGS, v := x0. mkprog(x1 x2. lwh.SIR(x1, x2)), a := args], hA)
+  show by defs(rewrite(sym(ap), r), startup_specs.start_init_spec_fun)
+qed
+
+theorem lwh.si_undef: all args w o. args in abi.ARGS -> w in univ(1) -> !startup_specs.ctors_ok(w.vm, w.objs, ui.P, set_select(omega, x2. false)) ->
+  o in univ(1) -> (ex x e. o = exc(x, e)) || (ex t. o = diverge(t)) -> runs(lwh.SI[args], w, o)
+proof
+  fix args w o
+  assume hA wu hn ou eo
+  have pu: pair(w, o) in univ(1) by simp(wu, ou)
+  have ri: runs(startup_specs.start_init_spec(ui.P), w, o) by spec_ret(hn, pu)
+  let K(x3, x4) := any_rel(x5. x5 in bits(64), x5. any_rel(x6. x6 in bits(64), x6. o = ok(x3, pair(x5, x6))))
+  have c1: (ex x e. o = exc(x, e)) -> lwh.SIR(w, o) proof
+    assume e1
+    obtain x e, oe from e1
+    show := rewrite(sym(oe), mp(all_elim(gc.bind_exc[p := startup_specs.start_init_spec(ui.P), k := x3 x4. any_rel(x5. x5 in bits(64), x5. any_rel(x6. x6 in bits(64), x6. exc(x, e) = ok(x3, pair(x5, x6)))),
+      x := x3 x4. exc(x, e) = exc(x3, x4), d := x3. exc(x, e) = diverge(x3)], {w}, {x}, {e}), rewrite(oe, ri), refl({exc(x, e)})))
+  qed
+  have c2: (ex t. o = diverge(t)) -> lwh.SIR(w, o) proof
+    assume e1
+    obtain t, oe from e1
+    show := rewrite(sym(oe), mp(all_elim(gc.bind_div[p := startup_specs.start_init_spec(ui.P), k := x3 x4. any_rel(x5. x5 in bits(64), x5. any_rel(x6. x6 in bits(64), x6. diverge(t) = ok(x3, pair(x5, x6)))),
+      x := x3 x4. diverge(t) = exc(x3, x4), d := x3. diverge(t) = diverge(x3)], {w}, {t}), rewrite(oe, ri), refl({diverge(t)})))
+  qed
+  have b: lwh.SIR(w, o) by taut(eo, c1, c2)
+  show := apply(lwh.si_wrap, {args}, {w}, {o}, hA, pu, b)
+qed
+
+// (a memory: some -- every page none, every byte 0)
+theorem lwh.vm_ne: ex v. v in x86_64_linux.Vm
+proof
+  let PN := set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)))
+  let PG := fn_build(PN, p. none)
+  let BY := fn_build(bits(64), x. 0)
+  have no: none in option(x86_64_linux.Page) by defs(simp(), option)
+  have pv: all p. p in PN -> none in option(x86_64_linux.Page) proof
+    fix p
+    assume _
+    show := no
+  qed
+  have pt := mp(fn_build_space[d := PN, v := p. none, b := option(x86_64_linux.Page)], pv)
+  have pv1: all p. p in PN -> none in single(none) by simp()
+  have pt1 := mp(fn_build_space[d := PN, v := p. none, b := single(none)], pv1)
+  have pss: subset(PN, omega) by defs(simp(), subset)
+  have pnu: PN in univ(1) := mp(univ_subset[u := 1, a := PN, b := omega], omega_univ, pss)
+  have snu: single(none) in univ(1) by simp()
+  have pu := apply(fn_space_univ, pnu, snu, pt1)
+  have bv: all x. x in bits(64) -> 0 in bits(8) by simp()
+  have bt := mp(fn_build_space[d := bits(64), v := x. 0, b := bits(8)], bv)
+  have bu := apply(fn_space_univ, bits_univ[n := 64], bits_univ[n := 8], bt)
+  let V0 := fn_update(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "pages", PG), "bytes", BY), "stack_top", 0), "stack_limit", 0), "brk_start", 0), "brk", 0)
+  have vt: V0 in x86_64_linux.Vm by defs(simp(pt, bt, pu, bu), x86_64_linux.Vm)
+  show by ex_intro({V0}, vt)
+qed
+
+// (an overflow_start of the body: an exception)
+theorem lwh.ovs_exc: all w x2. sp.BR(startup_specs.overflow_start, w, x2) -> ex y e. x2 = exc(y, pair("raise", e))
+proof
+  fix w x2
+  assume e1
+  rsimp only, startup_specs.overflow_start, abi.overflow in e1
+  have vv := lwh.vm_ne
+  have fv: ex x. x in bits(64) by ex_intro({0}, simp())
+  have l: ex f v ob. ((f in bits(64) && v in x86_64_linux.Vm) && ob in abi.Objs) &&
+    x2 = exc(pair(fn_update(fn_update(fn_update(w, "fs_base", f), "vm", v), "objs", ob), empty), pair("raise", exc_val("stack_overflow", empty))) by simp(e1, vv, fv, ct.objs_ne)
+  obtain f v ob, _ _ _ hx from l
+  show by ex_intro({pair(fn_update(fn_update(fn_update(w, "fs_base", f), "vm", v), "objs", ob), empty)}, {exc_val("stack_overflow", empty)}, hx)
+qed
+
+// __libc_start_init's spec returning: the world as it was, or undefined
+theorem lwh.si_io: tr.callee_io(lwh.SI, 0)
+proof
+  have g: all args w w2 r. ord_le(0, seq_len(args)) -> runs(lwh.SI[args], w, ok(w2, r)) -> tr.returns_valid(w, w2) || tr.may_raise(lwh.SI, args, w) proof
+    fix args w w2 r
+    assume hn hr
+    have out: !(args in abi.ARGS) -> false proof
+      assume na
+      have e := mp(app_fn_build_out[d := abi.ARGS, v := x0. mkprog(x1 x2. lwh.SIR(x1, x2)), a := args], na)
+      have r2 := rewrite(e, expand(hr, startup_specs.start_init_spec_fun))
+      show by simp(expand(r2, runs))
+    qed
+    have hA: args in abi.ARGS by taut(out)
+    have pu := apply(tr.spec_univ, {lwh.SI}, {args}, {w}, {ok(w2, r)}, lwh.si_typed, hA, hr)
+    have wu: w in univ(1) by simp(pu)
+    have ar: args in sp.REGS by simp(hA)
+    have b := apply(sp.fun_out0[Q := a. startup_specs.start_init_spec(ui.P)], {args}, {w}, {ok(w2, r)}, ar, expand(hr, startup_specs.start_init_spec_fun))
+    have c1: startup_specs.ctors_ok(w.vm, w.objs, ui.P, set_select(omega, x2. false)) -> tr.returns_valid(w, w2) proof
+      assume hc
+      obtain o4, r4 k4 from expand(b, bind_rel)
+      have bb := apply(or_resolve, apply(g.runs_elim, expand(r4, startup_specs.start_init_spec)), hc)
+      obtain x2, hbr hd from bb
+      have kc := apply(sp.k_cases, k4)
+      have d1: sp.BR(startup_specs.overflow_start, w, x2) -> tr.returns_valid(w, w2) proof
+        assume e
+        obtain y e2, xe from apply(lwh.ovs_exc, e)
+        have nk: !is_ok(o4) by simp(rewrite(xe, hd), keep(is_ok))
+        have q: (!is_ok(o4) && ok(w2, r) = o4) -> false proof
+          assume q2
+          have _ e3 := q2
+          show by simp(rewrite(sym(e3), nk))
+        qed
+        show by taut(kc, nk, q)
+      qed
+      have d2: x2 = ok(pair(w, empty), empty) -> tr.returns_valid(w, w2) proof
+        assume e
+        have oe: o4 = ok(w, empty) by simp(rewrite(e, hd))
+        have a: sp.anyv(w, ok(w2, r)) by simp(rewrite(oe, k4), keep(any_rel))
+        obtain v, ov from apply(sp.anyv_ok, a)
+        have we: w2 = w by simp(ov)
+        have s0: all x0. x0 in w.os.events -> x0 in w.os.events proof
+          fix x0
+          assume h0
+          show := h0
+        qed
+        have sb: subset(w.os.events, w.os.events) by defs(s0, subset)
+        have ld: all gb gc st. gb in omega -> abi.loaded(w.vm, gb, gc, st) -> abi.loaded(w.vm, gb, gc, st) proof
+          fix gb gc st
+          assume _ h0
+          show := h0
+        qed
+        have rv: tr.returns_valid(w, w) by defs(taut(refl({w.os.input}), sb, ld, refl({w.cpu}), refl({w.vm.brk_start})), tr.returns_valid)
+        show := rewrite(sym(we), rv)
+      qed
+      show by taut(hbr, d1, d2)
+    qed
+    have c2: !startup_specs.ctors_ok(w.vm, w.objs, ui.P, set_select(omega, x2. false)) -> tr.may_raise(lwh.SI, args, w) proof
+      assume hn2
+      have ex: all x e. x in univ(1) -> e in univ(1) -> runs(lwh.SI[args], w, exc(x, e)) proof
+        fix x e
+        assume xu eu
+        have e3: ex x3 e3. exc(x, e) = exc(x3, e3) by ex_intro({x}, {e}, refl({exc(x, e)}))
+        show := apply(lwh.si_undef, {args}, {w}, {exc(x, e)}, hA, wu, hn2, (exc(x, e) in univ(1) by simp(xu, eu)),
+          ((ex x3 e3. exc(x, e) = exc(x3, e3)) || (ex t3. exc(x, e) = diverge(t3)) by taut(e3)))
+      qed
+      have dv: all t. t in univ(1) -> runs(lwh.SI[args], w, diverge(t)) proof
+        fix t
+        assume tu
+        have e3: ex t3. diverge(t) = diverge(t3) by ex_intro({t}, refl({diverge(t)}))
+        show := apply(lwh.si_undef, {args}, {w}, {diverge(t)}, hA, wu, hn2, (diverge(t) in univ(1) by simp(tu)),
+          ((ex x3 e4. diverge(t) = exc(x3, e4)) || (ex t3. diverge(t) = diverge(t3)) by taut(e3)))
+      qed
+      show by defs(defs(taut(ex, dv), tr.undef), tr.may_raise)
+    qed
+    show by taut(c1, c2)
+  qed
+  show by defs(g, tr.callee_io)
+qed
+
+theorem lwh.si_noam: all args w x. args in abi.ARGS -> w in abi.World -> runs(lwh.SI[args], w, exc(x, exc_val("at_main", empty))) ->
+  ex e x2. e in univ(1) && !(e = exc_val("stack_overflow", empty)) && abi.nstop(e) && abi.raise_state(x2) && runs(lwh.SI[args], w, exc(x2, e))
+proof
+  fix args w x
+  assume hA hw hr
+  have ar: args in sp.REGS by simp(hA)
+  have b := apply(sp.fun_out0[Q := a. startup_specs.start_init_spec(ui.P)], {args}, {w}, {exc(x, exc_val("at_main", empty))}, ar, expand(hr, startup_specs.start_init_spec_fun))
+  have pu := apply(tr.spec_univ, {lwh.SI}, {args}, {w}, {exc(x, exc_val("at_main", empty))}, lwh.si_typed, hA, hr)
+  have wu: w in univ(1) by simp(pu)
+  have c1: startup_specs.ctors_ok(w.vm, w.objs, ui.P, set_select(omega, x2. false)) -> false proof
+    assume hc
+    have q := apply(sp.si_call[P := ui.P, s := w, o2 := exc(x, exc_val("at_main", empty))], hw, hc, b)
+    have n1: sp.ovf_any(w, exc(x, exc_val("at_main", empty))) -> false proof
+      assume ov
+      obtain f v ob, _ _ _ oe from expand(ov, sp.ovf_any)
+      show by simp(expand(oe, exc_val))
+    qed
+    have n2: (ex v. exc(x, exc_val("at_main", empty)) = ok(w, v)) -> false proof
+      assume e2
+      obtain v, oe from e2
+      show by simp(oe)
+    qed
+    show by taut(q, n1, n2)
+  qed
+  have hn: !startup_specs.ctors_ok(w.vm, w.objs, ui.P, set_select(omega, x2. false)) by taut(c1)
+  have wW: abi.raise_state(w) by defs(apply(tr.world_and, hw), abi.raise_state)
+  have eu: empty in univ(1) by simp()
+  have ou: exc(w, empty) in univ(1) by simp(wu)
+  have e3: ex x3 e3. exc(w, empty) = exc(x3, e3) by ex_intro({w}, {empty}, refl({exc(w, empty)}))
+  have r := apply(lwh.si_undef, {args}, {w}, {exc(w, empty)}, hA, wu, hn, ou,
+    ((ex x3 e4. exc(w, empty) = exc(x3, e4)) || (ex t3. exc(w, empty) = diverge(t3)) by taut(e3)))
+  have eno := tr.undef_empty
+  show by ex_intro({empty}, {w}, taut(eu, eno, wW, r))
+qed
+
+// ... its contract without the stop: the linked code's, refined to its
+// purpose (lk.si_calls)
+theorem lwh.si_d: all statics. tr.impl_d(false, false, 4200476, lwh.SI, 4198400, text.code, statics)
+proof
+  fix statics
+  have pk: lk.pok(ui.P) by taut(ui.gp_ok)
+  have hc := apply(lk.si_calls, pk)
+  have r := apply(tr.impl_m_refine, all_elim(lsil.linked, {statics}), hc)
+  have k := apply(tr.impl_m_koff, r, lwh.si_noam)
+  show := apply(tr.impl_d_of, k)
+qed
