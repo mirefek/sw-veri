@@ -1526,3 +1526,14 @@ item is a short summary of finished work; details are in the files named.
   outcomes carry errno's pages kept (`mp.am_epg` through alloc_group,
   alloc_slot and malloc's exits); free's by errno none of the allocator's
   bytes nor the block's (`mp.eok_free`); `mp.eok_T` at the top.
+- **The test's main implements its spec** (proofs/test/: main_inv.core,
+  main_run.core, main_ref.core, main_top.core). `main_spec` (layers/
+  test_malloc.sl): 0 or 1, the memory outside the allocator's and errno
+  kept. The run (`tm.main_run`): five loops by invariants (the array's
+  cells, each live block's pattern, `world_ok` kept through every call),
+  an overflow or 0 or 1, never 42. Layer change: `world_ok` has the stack
+  top below TASK_SIZE (a fresh stack object in the user space). The
+  contract (`tm.main_ref_s`, the objects' live set restored, the ghost
+  blocks), divergence only where undefined, `tm.main_impl` by main's C1;
+  `tm.main_top` with the callees the program's code (size, fill, intact
+  by their C1 and specs; malloc, free by `mp.top_call`, `mp.tf_call`).

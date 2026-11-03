@@ -15,19 +15,8 @@ or dies of a stack overflow as abi.sl's `abi_function` raises it; no
 other crash, never exit 42. Runs that never end are allowed (§2).
 - (c0) `world_ok` at main's first call: its page clauses and the stack
   in the user space from the bridge (abi.sl's `stack_reserve`, the world
-  without the stack's pages), in (c).
-- (c) `main` (its spec: layers/test_malloc.sl's `main_spec`, 0 or 1, the
-  memory outside the allocator's and errno kept). Its run is proven
-  (`tm.main_run`, proofs/test/main_run.core: an overflow, or 0 or 1 with
-  the world as any call needs it and the memory kept; the invariant and its
-  steps in proofs/test/main_inv.core). Left:
-  - main_fun against `main_spec_fun` widened with the ghost blocks (as
-    `mp.top_ref_s`: the objects' live set restored, the spec's run built;
-    undefined where main_spec's precondition fails);
-  - `abi.implements(Heap.ghost, main_at, main_spec)` by `tr.implements_abi_l`
-    with main's C1, the callees instantiated: musl's malloc and free
-    (`tm.mcall` / `tm.fcall` by `mp.top_call`, `mp.free_low_all`), size,
-    fill, intact by their contracts.
+  without the stack's pages); main's spec (`tm.main_top`) is undefined
+  where it fails.
 - (d) After main: stage2's `exit(main(..))` -- musl's `exit`,
   `__funcs_on_exit`, `__libc_exit_fini` (.fini_array, `_fini`),
   `__stdio_exit`, `_Exit` (exit_group): C1, specs, C2, as the startup's.
