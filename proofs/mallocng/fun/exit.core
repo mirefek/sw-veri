@@ -15,13 +15,13 @@ refines ex_fini_ref c_src_exit_exit_cfg.libc_exit_fini_fun c_src_exit_exit.libc_
 
 // __get_tp (exit.c's copy) at a call, the thread sound: the thread
 // pointer returned, the memory as it was
-theorem xt.gtp_q: all regs s o2. s in abi.World -> s in univ(1) -> gc.regs_ok(regs, empty) -> abi.thread_ok(s.vm, s.fs_base) ->
+theorem xt.gtp_q: all regs s o2. s in abi.World -> s in univ(1) -> abi.thread_ok(s.vm, s.fs_base) -> gc.regs_ok(regs, empty) ->
   runs(c_src_exit_exit.__get_tp_fun()[regs], s, o2) ->
   abi.ovf_out(s, o2) ||
   (ex r. o2 = ok(fn_update(s, "vm", s.vm), r) && fst(r) = s.fs_base)
 proof
   fix regs s o2
-  assume hw hu hr ht h
+  assume hw hu ht hr h
   let FS := s.fs_base
   have rl rn := apply(gc.regs0, hr)
   have lo: seq_len(regs) in omega by simp(rl)
@@ -716,10 +716,13 @@ theorem xt.exit_run: all G1 G2 G3 G4 G5 G6 G7 G8 DR FI S1 c s o. s in abi.World 
   mp.calls(DR, musl_asm.deregister_tm_clones_fun()) -> mp.calls(FI, musl_asm._init_fun()) ->
   mp.calls(G6, c_src_exit_exit.libc_exit_fini_fun(lxp.FP(4198784, xt.DT(DR)), FI)) ->
   mp.calls(S1, c_src_exit__Exit.__syscall1_fun()) -> mp.calls(G8, c_src_exit__Exit._Exit_fun(S1)) ->
+  abi.thread_ok(s.vm, s.fs_base) -> int_lt(int_add(s.fs_base, 52), 9223372036854775808) ->
+  gimple.usable(s.vm, s.objs, int_add(s.fs_base, 48), 4, false) -> !(gimple.bytes_at(s.vm, int_add(s.fs_base, 48), 4) = 0) ->
+  mallocng_specs.a_cas_pre(s.vm, s.objs, c_src_exit_exit_cfg.exit_lock) -> gimple.bytes_at(s.vm, c_src_exit_exit_cfg.exit_lock, 4) = 0 ->
   runs(c_src_exit_exit_cfg.exit(c, G1, G2, G3, G4, G5, G6, G7, G8), s, o) -> true
 proof
   fix G1 G2 G3 G4 G5 G6 G7 G8 DR FI S1 c s o
-  assume hw hu hc hG1 hG2 hG5 hG7 hD hF hG6 hS1 hG8 hr
+  assume hw hu hc hG1 hG2 hG5 hG7 hD hF hG6 hS1 hG8 ht hfsl htu htn hlp hl0 hr
   step a0 a1, h1 from hr
   obtain r, wl kr from h1
   let BODY(x, y) := loop_body(wl)
@@ -729,6 +732,79 @@ proof
     assume hb
     step i1 i2 i3, e1 from hb
     show e1
+  qed
+  // (label 2: the thread pointer, its tid, the lock taken)
+  let OVF := exc_val("stack_overflow", empty)
+  let LK := c_src_exit_exit_cfg.exit_lock
+  let TB := gimple.bytes_at(s.vm, int_add(s.fs_base, 48), 4)
+  let T := bits_of_int(32, TB)
+  let WL := fn_update(s, "vm", mallocng_specs.wr32(s.vm, LK, T))
+  have pv pf pd pb := apply(ms.world_parts, hw)
+  have t2: all p t y. BODY(xt.ST(s, 2, p, t), y) ->
+      (ex v ob L. (v in x86_64_linux.Vm && ob in abi.Objs) && y = exc(pair(fn_update(fn_update(s, "vm", v), "objs", ob), L), pair("raise", OVF))) ||
+      y = ok(xt.ST(WL, 4, 0, T), empty) proof
+    fix p t y
+    assume hb
+    have fsb: s.fs_base in bits(64) by simp(expand(hw, abi.World))
+    have _ _ _ fsn := expand(ht, abi.thread_ok)
+    have ss: fn_update(s, "vm", s.vm) = s := mp(fn_update_same[f := s, k := "vm"], pf, pd)
+    let S0 := fn_update(s, "vm", s.vm)
+    have s0w: S0 in abi.World := rewrite(sym(ss), hw)
+    have s0u: S0 in univ(1) := rewrite(sym(ss), hu)
+    have s0t: abi.thread_ok(S0.vm, S0.fs_base) := rewrite(sym(ss), ht)
+    have s0tu: gimple.usable(S0.vm, S0.objs, int_add(S0.fs_base, 48), 4, false) := rewrite(sym(ss), htu)
+    have s0lp: mallocng_specs.a_cas_pre(S0.vm, S0.objs, c_src_exit_exit_cfg.exit_lock) := rewrite(sym(ss), hlp)
+    have md: g.mem_defined(S0, s.fs_base, 48, 4, false) by simp(fsn, (int_lt(int_add(s.fs_base, 48), pow2(64)) by defs(arith(hfsl), pow2)), s0tu)
+    have tbo tbl := apply(g.bytes_bound, {s.vm}, {int_add(s.fs_base, 48)}, {4}, pb, simp())
+    have te: T = TB by defs(arith(tbo, tbl), bits_of_int, pow2)
+    have tb: T in bits(32) by simp(te, (TB in bits(32) by arith(tbo, tbl)))
+    have lkb: LK in bits(64) by defs(simp(), c_src_exit_exit_cfg.exit_lock)
+    have nd: !(bits_of_int(32, gimple.bytes_at(s.vm, LK, 4)) = T) by simp(hl0, te, htn)
+    have vf0: fn_update(s.vm, "bytes", s.vm.bytes) in x86_64_linux.Vm := rewrite(sym(mp(fn_update_same[f := s.vm, k := "bytes"], (is_fun(s.vm) by simp(expand(pv, x86_64_linux.Vm))),
+      ("bytes" in dom(s.vm) by simp(expand(pv, x86_64_linux.Vm))))), pv)
+    have vfs: fn_update(S0.vm, "bytes", S0.vm.bytes) in x86_64_linux.Vm := rewrite(sym(ss), vf0)
+    let CV := ite(gimple.bytes_at(S0.vm, LK, 4) = bits_of_int(32, 0), T, gimple.bytes_at(S0.vm, LK, 4))
+    have wv: mallocng_specs.wr32(S0.vm, LK, CV) in x86_64_linux.Vm by defs(apply(mp.vm_st, {S0.vm}, {S0.vm.bytes}, {LK}, {4}, {CV}, vfs), mallocng_specs.wr32)
+    step i1 i2, e1 from hb
+    have hA hK2 hK1 := e1
+    // (the block's outcome i2: the iteration's)
+    have pr: all W b q u e. i2 = exc(xt.ST(W, b, q, u), pair("raise", e)) -> y = exc(xt.ST(W, b, q, u), pair("raise", e)) proof
+      fix W b q u e
+      assume e3
+      have i1e: i1 = exc(xt.ST(W, b, q, u), pair("raise", e)) by simp(rewrite(e3, hK2))
+      show by simp(rewrite(i1e, hK1))
+    qed
+    have prk: all W b q u. i2 = ok(xt.ST(W, b, q, u), empty) -> y = ok(xt.ST(W, b, q, u), empty) proof
+      fix W b q u
+      assume e3
+      have i1e: i1 = ok(xt.ST(W, b, q, u), empty) by simp(rewrite(e3, hK2))
+      show by simp(rewrite(i1e, hK1))
+    qed
+    let PA := bits_of_int(32, gimple.bytes_at(s.vm, LK, 4))
+    let WA := fn_update(s, "vm", mallocng_specs.wr32(s.vm, LK, ite(gimple.bytes_at(s.vm, LK, 4) = bits_of_int(32, 0), T, gimple.bytes_at(s.vm, LK, 4))))
+    have ci2: (ex v ob b q u. (v in x86_64_linux.Vm && ob in abi.Objs) && i2 = exc(xt.ST(fn_update(fn_update(s, "vm", v), "objs", ob), b, q, u), pair("raise", OVF))) ||
+        i2 = ok(xt.ST(WA, 4, PA, T), empty) proof
+      step r1, eA from hA with xt.gtp_q, g.ld32_det using hG1, hw, hu, ht, fsb, s0u, md
+      have hA1 _ := eA
+      step r2, e2 from hA1 with ms.acas_q, nd using hG2, s0w, s0u, s0t, s0lp, lkb, tb, wv
+      have e2a _ := e2
+      show by taut(e2a)
+    qed
+    have cve: ite(gimple.bytes_at(s.vm, LK, 4) = bits_of_int(32, 0), T, gimple.bytes_at(s.vm, LK, 4)) = T by simp(hl0)
+    have pa0: PA = 0 by simp(hl0)
+    have k1: (ex v ob b q u. (v in x86_64_linux.Vm && ob in abi.Objs) && i2 = exc(xt.ST(fn_update(fn_update(s, "vm", v), "objs", ob), b, q, u), pair("raise", OVF))) ->
+        ex v ob L. (v in x86_64_linux.Vm && ob in abi.Objs) && y = exc(pair(fn_update(fn_update(s, "vm", v), "objs", ob), L), pair("raise", OVF)) proof
+      assume qq
+      obtain v ob b q u, hv hob e from qq
+      have ye := mp(all_elim(pr, {fn_update(fn_update(s, "vm", v), "objs", ob)}, {b}, {q}, {u}, {OVF}), e)
+      show by ex_intro({v}, {ob}, {pair(b, pair(q, u))}, taut(hv, hob, ye))
+    qed
+    have k2: i2 = ok(xt.ST(WA, 4, PA, T), empty) -> y = ok(xt.ST(WL, 4, 0, T), empty) proof
+      assume e
+      have ye := mp(all_elim(prk, {WA}, {4}, {PA}, {T}), e)
+      show := rewrite(pa0, rewrite(cve, ye))
+    qed
+    show by taut(ci2, k1, k2)
   qed
   // (label 6: the dummy, __libc_exit_fini, the dummy, _Exit)
   have t6: all W t y. W in abi.World -> W in univ(1) -> abi.thread_ok(W.vm, W.fs_base) -> abi.thread_ok(xt.DONE(W.vm), W.fs_base) ->
