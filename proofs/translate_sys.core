@@ -1262,10 +1262,21 @@ abbrev tr.req1(w, a1) := int_lt(x86_64_linux.pages_for(a1), x86_64_linux.pages_f
 
 // (not brk, or its requirement not met, nor set_tid_address: any outcome,
 // a raise too)
-theorem tr.sys1_raise(n, a1, w, x, e): !(n = 12 && tr.req1(w, a1)) -> !(n = 218) -> pair(w, exc(x, e)) in univ(1) -> runs(gimple.sys_call1(n, a1), w, exc(x, e))
+theorem tr.sys1_raise(n, a1, w, x, e): !(n = 12 && tr.req1(w, a1)) -> !(n = 218) -> !(n = 60 || n = 231) -> pair(w, exc(x, e)) in univ(1) ->
+  runs(gimple.sys_call1(n, a1), w, exc(x, e))
 proof
-  assume h h218 pu
-  show by defs(simp(h, h218, pu, keep(gimple.os_brk, gimple.sys_pages_ok, bind_rel)), gimple.sys_call1)
+  assume h h218 hx pu
+  show by defs(simp(h, h218, hx, pu, keep(gimple.os_brk, gimple.sys_pages_ok, bind_rel)), gimple.sys_call1)
+qed
+
+// (exit / exit_group: the process exits, a1's low byte its status)
+theorem tr.sys1_exit(n, a1, w): (n = 60 || n = 231) -> w in univ(1) -> bits_slice(a1, 7, 0) in univ(1) ->
+  runs(gimple.sys_call1(n, a1), w, exc(w, exc_val("exit", bits_slice(a1, 7, 0))))
+proof
+  assume hx hw hs
+  have eu: exc_val("exit", bits_slice(a1, 7, 0)) in univ(1) by defs(simp(hs), exc_val)
+  have pu: pair(w, exc(w, exc_val("exit", bits_slice(a1, 7, 0)))) in univ(1) by simp(hw, eu)
+  show by defs(simp(hx, pu, keep(gimple.os_brk, gimple.sys_pages_ok, bind_rel, gimple.os_set_tid_address)), gimple.sys_call1)
 qed
 
 // (set_tid_address: the world as it was, a thread id r)
@@ -1335,6 +1346,119 @@ proof
   show by taut(a, b)
 qed
 
+// syscall with rax 60 or 231 (exit, exit_group): the machine raises exit
+// with rdi's low byte
+theorem x86i.syscall_exit(m, y): (m.gpr[0] = 60 || m.gpr[0] = 231) -> runs(x86_64_linux.syscall(), m, y) ->
+  ex X. y = exc(X, exc_val("exit", bits_slice(m.gpr[7], 7, 0)))
+proof
+  assume h0 h
+  let EX := exc_val("exit", bits_slice(m.gpr[7], 7, 0))
+  have b0 := expand(apply(g.runs_elim, expand(h, x86_64_linux.syscall)), letin)
+  let X1 := fn_update(m, "gpr", fn_update(fn_update(m.gpr, 1, m.rip), 11, x86_64_linux.rflags_word(m.flags)))
+  have eX: fn_update(fn_update(m, "gpr", fn_update(m.gpr, 1, m.rip)), "gpr", fn_update(fn_update(m, "gpr", fn_update(m.gpr, 1, m.rip)).gpr, 11,
+    x86_64_linux.rflags_word(fn_update(m, "gpr", fn_update(m.gpr, 1, m.rip)).flags))) = X1 by simp(fn_update_twice, app_update_same, app_update_other)
+  have e0: X1.gpr[0] = m.gpr[0] by simp(app_update_same, app_update_other)
+  have e7: X1.gpr[7] = m.gpr[7] by simp(app_update_same, app_update_other)
+  obtain z1, hz hp1 from expand(rewrite(e7, rewrite(e0, rewrite(eX, b0))), bind_rel)
+  obtain x2, hd hp2 from apply(lx.or_true, apply(g.runs_elim, expand(hz, x86_64_linux.linux_syscall)))
+  // (the exit's case of the calls: the raise)
+  have c60: m.gpr[0] = 60 -> x2 = exc(pair(X1, empty), pair("raise", EX)) proof
+    assume e
+    show := rsimp(rewrite(e, hd))
+  qed
+  have c231: m.gpr[0] = 231 -> x2 = exc(pair(X1, empty), pair("raise", EX)) proof
+    assume e
+    show := rsimp(rewrite(e, hd))
+  qed
+  have hx: x2 = exc(pair(X1, empty), pair("raise", EX)) by taut(h0, c60, c231)
+  have ez := apply(lx.top_raise, rewrite(hx, hp2))
+  have o1: y = exc(X1, EX) by simp(rewrite(ez, hp1))
+  show by ex_intro({X1}, o1)
+qed
+
+// ... the instruction (0F 05) so
+theorem x86i.exit_insn(m, o, len): (m.gpr[0] = 60 || m.gpr[0] = 231) -> runs(x86_64_linux.exec_body(len, tag(156, empty)), m, o) ->
+  ex X. o = exc(X, exc_val("exit", bits_slice(m.gpr[7], 7, 0)))
+proof
+  assume h0 h
+  let M0 := fn_update(m, "rip", bits_add(64, m.rip, bits_of_int(64, len)))
+  obtain y, hy hc from apply(x86i.syscall_run, h)
+  have g0: M0.gpr[0] = m.gpr[0] by simp(app_update_other)
+  have g7: M0.gpr[7] = m.gpr[7] by simp(app_update_other)
+  obtain X, ey from rewrite(g7, apply(x86i.syscall_exit, rewrite(sym(g0), h0), hy))
+  have c1: (ex s1 v. y = ok(s1, v) && o = ok(s1, empty)) -> false proof
+    assume q
+    obtain s1 v, e _ from q
+    show by simp(rewrite(ey, e))
+  qed
+  have c2: (ex s1 e. y = exc(s1, e) && o = exc(s1, e)) -> o = y proof
+    assume q
+    obtain s1 e, e1 e2 from q
+    show := trans(e2, sym(e1))
+  qed
+  have c3: (ex t. y = diverge(t) && o = diverge(t)) -> false proof
+    assume q
+    obtain t, e _ from q
+    show by simp(rewrite(ey, e))
+  qed
+  have oy: o = y by taut(hc, c1, c2, c3)
+  show by ex_intro({X}, trans(oy, ey))
+qed
+
+// a step whose every outcome is an exit the spec matches: the claim
+theorem tr.step_xo(s, zb. bkp, zb pb wb. bka, v, p, w, m): (all o. runs(x86_64_linux.step(), m, o) -> tr.xo(p, w, o)) ->
+  tr.sim(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, p, w, m)
+proof
+  assume hs
+  let G(o2) := tr.gk(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, p, w, o2)
+  have g: all o. tr.run_k(s, zb. bkp(zb), m, o) -> G(o) proof
+    fix o
+    assume ho
+    obtain r, rk rm from expand(ho, tr.run_k)
+    // (no step goes on)
+    have ca: (ex l1. tr.rst(pair(m, empty), ok(l1, empty)) && tr.rwk(s, zb. bkp(zb), l1, r)) -> G(o) proof
+      assume e
+      obtain l1, rs _ from e
+      have b1: ex x1. runs(x86_64_linux.step(), m, x1) && (ex x2 x3. x1 = ok(x2, x3) && l1 = pair(x2, empty)) by simp(expand(rs, tr.rst), keep(x86_64_linux.step))
+      obtain x1, r1 c1 from b1
+      obtain x2 x3, e1 _ from c1
+      have f := all_elim(tr.xo_ok, {p}, {w}, {x2}, {x3})
+      show by taut(rewrite(e1, mp(all_elim(hs, {x1}), r1)), f)
+    qed
+    // (the step's exit: the run's)
+    have cb: tr.rst(pair(m, empty), r) && !is_ok(r) -> G(o) proof
+      assume hb
+      have b1: ex x1. runs(x86_64_linux.step(), m, x1) && ((ex x2 x3. x1 = ok(x2, x3) && r = ok(pair(x2, empty), empty)) ||
+        (ex x2 x3. x1 = exc(x2, x3) && r = exc(pair(x2, empty), pair("raise", x3))) || (ex x2. x1 = diverge(x2) && r = diverge(x2))) by simp(expand(hb.1, tr.rst), keep(x86_64_linux.step))
+      obtain x1, r1 c1 from b1
+      have xo1 := mp(all_elim(hs, {x1}), r1)
+      have k1: (ex x2 x3. x1 = ok(x2, x3) && r = ok(pair(x2, empty), empty)) -> G(o) proof
+        assume ek
+        obtain x2 x3, e1 _ from ek
+        have f := all_elim(tr.xo_ok, {p}, {w}, {x2}, {x3})
+        show by taut(rewrite(e1, xo1), f)
+      qed
+      have k2: (ex x2 x3. x1 = exc(x2, x3) && r = exc(pair(x2, empty), pair("raise", x3))) -> G(o) proof
+        assume ek
+        obtain x2 x3, e1 e2 from ek
+        have rm2 := rewrite(e2, expand(rm, tr.rmap))
+        have oe: o = exc(x2, x3) by simp(rm2)
+        have x2o: tr.xo(p, w, o) := rewrite(sym(oe), rewrite(e1, xo1))
+        show by defs(taut(x2o), tr.gk)
+      qed
+      have k3: (ex x2. x1 = diverge(x2) && r = diverge(x2)) -> G(o) proof
+        assume ek
+        obtain x2, e1 _ from ek
+        have f := all_elim(tr.xo_div, {p}, {w}, {x2})
+        show by taut(rewrite(e1, xo1), f)
+      qed
+      show by taut(c1, k1, k2, k3)
+    qed
+    show by taut(expand(rk, tr.rk), ca, cb)
+  qed
+  show by defs(g, tr.sim)
+qed
+
 // syscall (0F 05), rax holding n and rdi a1: the spec's sys_call1(n, a1) --
 // undefined but for brk meeting its requirement; else Linux's brk, the
 // world's memory changed alike, the result in rax (the other registers
@@ -1362,13 +1486,13 @@ proof
     have rn nb := apply(tr.regs_get, {m}, {rs}, {0}, {8}, {nv}, hrs, h0d, h0u)
     have r7 ab := apply(tr.regs_get, {m}, {rs}, {7}, {8}, {a1}, hrs, h7d, h7u)
     // undefined: the spec raises
-    have cu: !(nv = 12 && tr.req1(w, a1)) -> !(nv = 218) -> tr.sim(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, P, w, m) proof
-      assume h h218
+    have cu: !(nv = 12 && tr.req1(w, a1)) -> !(nv = 218) -> !(nv = 60 || nv = 231) -> tr.sim(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, P, w, m) proof
+      assume h h218 hx0
       have rst: abi.raise_state(w) by defs(apply(tr.world_and, wW), abi.raise_state)
       have eu: empty in univ(1) by simp()
       have eno := tr.undef_empty
       have pu: pair(w, exc(w, empty)) in univ(1) by simp(wu, eu)
-      have ro := apply(tr.sys1_raise, h, h218, pu)
+      have ro := apply(tr.sys1_raise, h, h218, hx0, pu)
       have q1 := mp(all_elim(tr.qs_raise[op := gimple.sys_call1(nv, a1), s2 := w, e := empty, a := x9 x10 x8. ka(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8),
         dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1)], {w}), ro)
       have rq := mp(all_elim(q1, {exc(w, empty)}), mp(all_elim(hk, {w}, {empty}), wu, eu))
@@ -1449,7 +1573,7 @@ proof
         have pt := mp(all_elim(hpost, {W4}, {r}), (W4 in abi.World && W4 in univ(1) by taut(w4W, w4u)), rb)
         have cl := mp(all_elim(expand(pt, tr.pt), {m2}), i2, rip2, hh2, rs2, mm2, f2)
         // the spec's call: allowed, its rest from the result
-        have okw := rewrite(sym(er), mp(g.sys_call1_ok[w := w, n := nv, a1 := a1, V := WV], wu, wv, bpw, (!(nv = 218) by simp(e12))))
+        have okw := rewrite(sym(er), mp(g.sys_call1_ok[w := w, n := nv, a1 := a1, V := WV], wu, wv, bpw, (!(nv = 218) by simp(e12)), (!(nv = 60 || nv = 231) by simp(e12))))
         let Q2 := mkprog(x0 x1. ex x8. ka(x0, r, x8) && k(x8, x1))
         have q1 := mp(all_elim(tr.qs_call[op := gimple.sys_call1(nv, a1), w4 := W4, r := r, a := x9 x10 x8. ka(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8),
           dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1)], {w}), wu, okw)
@@ -1541,7 +1665,31 @@ proof
       qed
       show := mp(mp(mp(tr.step[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb), s := s, v := v, p := P, w := w, m := m, q := y. QM(y)], st), nr), post)
     qed
-    show by taut(cu, cd, ct)
+    // exit / exit_group: the machine exits with rdi's low byte, the spec
+    // raises the same
+    have cx: (nv = 60 || nv = 231) -> tr.sim(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, P, w, m) proof
+      assume hx
+      let EX := exc_val("exit", bits_slice(a1, 7, 0))
+      have g0: m.gpr[0] = 60 || m.gpr[0] = 231 := rewrite(sym(rn), hx)
+      have rst: abi.raise_state(w) by defs(apply(tr.world_and, wW), abi.raise_state)
+      have su: bits_slice(a1, 7, 0) in univ(1) by simp(ab)
+      have eu: EX in univ(1) by defs(simp(su), exc_val)
+      have ro := apply(tr.sys1_exit, hx, wu, su)
+      have q1 := mp(all_elim(tr.qs_raise[op := gimple.sys_call1(nv, a1), s2 := w, e := EX, a := x9 x10 x8. ka(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8),
+        dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1)], {w}), ro)
+      have rq := mp(all_elim(q1, {exc(w, EX)}), mp(all_elim(hk, {w}, {EX}), wu, eu))
+      have rp := mp(all_elim(tr.p_exc[q := Q, kw := x3 x4 x2. kw(x3, x4, x2)], {w}, {w}, {EX}), wu, wu, eu, rq)
+      have st: all o. runs(x86_64_linux.step(), m, o) -> tr.xo(P, w, o) proof
+        fix o
+        assume ho
+        have hx2 := mp(all_elim(hat, {m}, {o}), ho, ipC, hr)
+        obtain X, eo from apply(x86i.exit_insn, g0, hx2)
+        have eo2 := rewrite(r7, eo)
+        show by defs(ex_intro({X}, {bits_slice(a1, 7, 0)}, {w}, taut(su, eo2, rst, rp)), tr.xo)
+      qed
+      show := apply(tr.step_xo[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb), s := s, v := v, p := P, w := w, m := m], st)
+    qed
+    show by taut(cu, cd, ct, cx)
   qed
   show by defs(g, tr.lv)
 qed
@@ -1742,10 +1890,26 @@ proof
   show by defs(taut(g), tr.eff)
 qed
 
-// sys_call1's effect: undefined but for brk with its requirement or
-// set_tid_address; then theirs (set_tid_address returning at once, brk
-// the rest)
-theorem tr.eff_sys_call1: all w n a1. tr.eff(w, o. runs(gimple.sys_call1(n, a1), w, o))
+// (a raise: no valid world owed)
+theorem tr.seff_raise: all w l v. tr.seff(w, y. y = exc(pair(w, l), pair("raise", v)))
+proof
+  fix w l v
+  have g: all y. y = exc(pair(w, l), pair("raise", v)) -> (fst(y) = 0 || (fst(y) = 1 && !(fst(out_value(y)) = "raise"))) -> tr.returns_valid(w, fst(out_state(y))) proof
+    fix y
+    assume h c
+    have f: false by simp(rewrite(h, c))
+    show by taut(f)
+  qed
+  show by defs(taut(g), tr.seff)
+qed
+
+// sys_call1's effect past the exits: undefined but for brk with its
+// requirement or set_tid_address; then theirs (set_tid_address returning
+// at once, brk the rest)
+theorem tr.eff_sys1_k: all w n a1. tr.eff(w, o. !(n = 12 || n = 218) ||
+  (ex x. ((n = 218 && bind_rel(gimple.os_set_tid_address(a1), w, x2 x3. x = exc(pair(x2, empty), pair("ret", x3)), x2 x3. x = exc(pair(x2, empty), pair("raise", x3)),
+    x2. x = diverge(x2))) || (!(n = 218) && x = ok(pair(w, empty), empty))) &&
+   lx.top(x, !tr.req1(fst(out_state(x)), a1) || bind_rel(gimple.os_brk(a1), fst(out_state(x)), x2 x3. o = ok(x2, x3), x2 x3. o = exc(x2, x3), x2. o = diverge(x2)), o)))
 proof
   fix w n a1
   let C := n = 12 || n = 218
@@ -1826,6 +1990,36 @@ proof
     have u: tr.undef(o. BODY(o)) by defs(taut(ux, ud), tr.undef)
     show by defs(taut(u), tr.eff)
   qed
-  have be: tr.eff(w, o. BODY(o)) by taut(b1, b2)
-  show by defs(apply(tr.eff_prog, {w}, be), gimple.sys_call1)
+  show by taut(b1, b2)
+qed
+
+// sys_call1's effect: an exit raises (no valid world owed); else the
+// rest's (tr.eff_sys1_k)
+theorem tr.eff_sys_call1: all w n a1. tr.eff(w, o. runs(gimple.sys_call1(n, a1), w, o))
+proof
+  fix w n a1
+  let X := exc_val("exit", bits_slice(a1, 7, 0))
+  let C := n = 60 || n = 231
+  let REST(W, o) := !(n = 12 || n = 218) ||
+    (ex x. ((n = 218 && bind_rel(gimple.os_set_tid_address(a1), W, x2 x3. x = exc(pair(x2, empty), pair("ret", x3)), x2 x3. x = exc(pair(x2, empty), pair("raise", x3)),
+      x2. x = diverge(x2))) || (!(n = 218) && x = ok(pair(W, empty), empty))) &&
+     lx.top(x, !tr.req1(fst(out_state(x)), a1) || bind_rel(gimple.os_brk(a1), fst(out_state(x)), x2 x3. o = ok(x2, x3), x2 x3. o = exc(x2, x3), x2. o = diverge(x2)), o))
+  have s1: C -> tr.seff(w, y. y = exc(pair(w, empty), pair("raise", X))) proof
+    assume _
+    show := all_elim(tr.seff_raise, {w}, {empty}, {X})
+  qed
+  have s2: !C -> tr.seff(w, y. y = ok(pair(w, empty), empty)) proof
+    assume _
+    show := all_elim(tr.seff_ok, {w}, {empty}, {empty})
+  qed
+  have sa := apply(tr.seff_if[c := C, a1 := y. y = exc(pair(w, empty), pair("raise", X)), a2 := y. y = ok(pair(w, empty), empty)], {w}, s1, s2)
+  have hk: all x. ((C && x = exc(pair(w, empty), pair("raise", X))) || (!C && x = ok(pair(w, empty), empty))) -> fst(x) = 0 ->
+      tr.eff(fst(out_state(x)), o. REST(fst(out_state(x)), o)) proof
+    fix x
+    assume _ _
+    show := all_elim(tr.eff_sys1_k, {fst(out_state(x))}, {n}, {a1})
+  qed
+  have er := apply(tr.eff_seq[a := x. (C && x = exc(pair(w, empty), pair("raise", X))) || (!C && x = ok(pair(w, empty), empty)), k := x o. REST(fst(out_state(x)), o)],
+    {w}, sa, hk)
+  show by defs(apply(tr.eff_prog, {w}, er), gimple.sys_call1)
 qed

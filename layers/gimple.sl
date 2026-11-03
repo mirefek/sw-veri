@@ -468,9 +468,11 @@ proc[World] os_set_tid_address(tidptr: Addr) -> bits[64] {
 
 // The calls by the arguments passed (the registers not passed no
 // argument of the call made, which reads only its own): with one, brk
-// (12) or set_tid_address (218); with two, munmap (11); with three,
-// mprotect (10); with six, mmap (9).
+// (12), set_tid_address (218), or exit / exit_group (60, 231: the process
+// ends with the status a1's low byte, the machine's exit); with two,
+// munmap (11); with three, mprotect (10); with six, mmap (9).
 proc[World] sys_call1(n: bits[64], a1: bits[64]) -> bits[64] {
+  if uint(n) = 60 || uint(n) = 231 { raise exit(a1[7:0]) }
   require uint(n) = 12 || uint(n) = 218
   if uint(n) = 218 { return os_set_tid_address(a1) }
   // the pages it gives back, the break's own (it takes new ones only where
