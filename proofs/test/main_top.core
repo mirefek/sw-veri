@@ -1,0 +1,170 @@
+// main at the top: the test's `main` symbol implements main's spec
+// (layers/test_malloc.sl) with musl's allocator, its callees the
+// program's code -- size, fill, intact by their C1 and specs, malloc and
+// free by the allocator's (proofs/mallocng/top.core, top_free.core)
+
+// (an argument list: at most six words)
+theorem tm.args_le(args): args in abi.ARGS -> args in list_type(bits(64)) && int_le(seq_len(args), 6)
+proof
+  assume hA
+  have rl o6 := (args in list_type(bits(64)) && ord_le(seq_len(args), 6) by simp(hA))
+  have lo: seq_len(args) in omega by simp(rl)
+  have ll: int_le(seq_len(args), 6) by arith(expand(o6, ord_le), lo)
+  show by taut(rl, ll)
+qed
+
+// ----------------------------------------------------------------------
+//  size, pat, fill, intact: their code
+
+abbrev tm.SZ := c_tests_test_malloc_cfg.size_fun
+abbrev tm.PT := c_tests_test_malloc_cfg.pat_fun
+abbrev tm.FL := c_tests_test_malloc_cfg.fill_fun(tm.PT, tm.SZ)
+abbrev tm.IN := c_tests_test_malloc_cfg.intact_fun(tm.PT, tm.SZ)
+
+theorem tm.size_c: tp.calls(tm.SZ, test_malloc.size_spec_fun())
+proof
+  fix regs s o
+  assume hl hn hs hr
+  show := mp(all_elim(tp.size_fun, {regs}, {s}, {o}), hl, hn, hs, mp(all_elim(size_ref, {regs}, {s}, {o}), hl, hn, hs, hr))
+qed
+
+theorem tm.pat_c: tp.calls(tm.PT, test_malloc.pat_spec_fun())
+proof
+  fix regs s o
+  assume hl hn hs hr
+  show := mp(all_elim(tp.pat_fun, {regs}, {s}, {o}), hl, hn, hs, mp(all_elim(pat_ref, {regs}, {s}, {o}), hl, hn, hs, hr))
+qed
+
+theorem tm.fill_c: tp.calls(tm.FL, test_malloc.fill_spec_fun())
+proof
+  fix regs s o
+  assume hl hn hs hr
+  have r := mp(all_elim(mp(all_elim(fill_ref, {tm.PT}, {tm.SZ}), tpat.io, tsize.io), {regs}, {s}, {o}), hl, hn, hs, hr)
+  show := mp(all_elim(tp.fill_fun, {tm.PT}, {tm.SZ}, {regs}, {s}, {o}), tm.pat_c, tm.size_c, hl, hn, hs, r)
+qed
+
+theorem tm.intact_c: tp.calls(tm.IN, test_malloc.intact_spec_fun())
+proof
+  fix regs s o
+  assume hl hn hs hr
+  have r := mp(all_elim(mp(all_elim(intact_ref, {tm.PT}, {tm.SZ}), tpat.io, tsize.io), {regs}, {s}, {o}), hl, hn, hs, hr)
+  show := mp(all_elim(tp.intact_fun, {tm.PT}, {tm.SZ}, {regs}, {s}, {o}), tm.pat_c, tm.size_c, hl, hn, hs, r)
+qed
+
+theorem tm.fill_impl: all statics. tr.implements_at(4199032, tm.FL, 4198400, text.code, statics)
+proof
+  fix statics
+  show := mp(all_elim(tfill.implements, {statics}, {tm.PT}, {tm.SZ}), all_elim(tpat.implements_u, {statics}), tpat.typed, tpat.io,
+    all_elim(tsize.implements_u, {statics}), tsize.typed, tsize.io)
+qed
+
+theorem tm.intact_impl: all statics. tr.implements_at(4198926, tm.IN, 4198400, text.code, statics)
+proof
+  fix statics
+  show := mp(all_elim(tintact.implements, {statics}, {tm.PT}, {tm.SZ}), all_elim(tpat.implements, {statics}), tpat.typed, tpat.io,
+    all_elim(tsize.implements, {statics}), tsize.typed, tsize.io)
+qed
+
+// ----------------------------------------------------------------------
+//  malloc and free: the allocator's code
+
+// malloc's code (over __libc_malloc_impl's G): implemented at its symbol,
+// at a call where the layer's malloc is defined, the layer's (mp.top_call)
+theorem tm.malloc_k: all c statics eo b cd st. mp.mi_cfg(c) -> app(eo, empty) = 52 -> mp.code_img(c, app(b, empty), app(cd, empty), 1) ->
+  ex G. tr.implements_at(4202244, c_src_malloc_lite_malloc_cfg.default_malloc_fun(G), 4198400, text.code, statics) &&
+    c_src_malloc_lite_malloc_cfg.default_malloc_fun(G) in fn_space(abi.ARGS, powerset(univ(1))) && tr.callee_io(c_src_malloc_lite_malloc_cfg.default_malloc_fun(G), 1) &&
+    tm.mcall(mallocng.inv(c), mallocng.owned(c), eo, b, cd, st, c_src_malloc_lite_malloc_cfg.default_malloc_fun(G))
+proof
+  fix c statics eo b cd st
+  assume hmc he hci
+  have hcf: mp.ap_cfg(c) by taut(hmc)
+  have hc _ _ _ _ _ _ := hcf
+  obtain G, hi ht ho hq from mp(all_elim(mp.mi_known, {c}, {statics}, {mp.GRS}, {c_src_malloc_mallocng_malloc_cfg.__syscall1_fun()}, {mp.MM}, {mp.MPR}, {mp.EL}), hmc,
+    mp(all_elim(mp.ap_leaves_ok, {c}, {statics}), hcf))
+  let CFG := c_src_malloc_lite_malloc_cfg.default_malloc_fun(G)
+  have ln := mp(all_elim(dmc.implements, {statics}, {G}), hi, ht, ho)
+  have mc: tm.mcall(mallocng.inv(c), mallocng.owned(c), eo, b, cd, st, CFG) proof
+    fix args s h o
+    assume hA hs su hh hr ol hpre
+    have al ll := apply(tm.args_le, hA)
+    have hr2 := mp(all_elim(default_malloc_ref, {G}, {args}, {s}, {o}), al, ll, hs, hr)
+    show := apply(mp.top_call[c := c, eo := eo, b := b, cd := cd, st := st, g := G, regs := args, k := 1, s := s, h := h, o := o], hc, he, hq, hA, hci, hs, su, hh, hr2, ol, hpre)
+  qed
+  show by ex_intro({G}, taut(ln, all_elim(dmc.typed, {G}), mp(all_elim(dmc.io, {G}), ho), mc))
+qed
+
+// free's code (nontrivial_free's and free_group's recursion unfolded 2^64
+// deep): implemented at its symbol, at a call where the layer's free is
+// defined, the layer's (mp.tf_call)
+theorem tm.free_k: all c statics eo b cd st. mp.fr_cfg(c) -> app(eo, empty) = 52 -> mp.code_img(c, app(b, empty), app(cd, empty), 1) ->
+  ex nf. tr.implements_at(4201081, c_src_malloc_free_cfg.free_fun(mp.FLF(nf)), 4198400, text.code, statics) &&
+    c_src_malloc_free_cfg.free_fun(mp.FLF(nf)) in fn_space(abi.ARGS, powerset(univ(1))) && tr.callee_io(c_src_malloc_free_cfg.free_fun(mp.FLF(nf)), 1) &&
+    tm.fcall(mallocng.inv(c), mallocng.owned(c), eo, b, cd, st, c_src_malloc_free_cfg.free_fun(mp.FLF(nf)))
+proof
+  fix c statics eo b cd st
+  assume hcf he hci
+  have hc _ _ _ _ := hcf
+  let N := 18446744073709551616
+  obtain nf0, hk2 from mp(all_elim(mp(all_elim(mp.fl_all, {c}, {statics}), hcf), {N}), (N in omega by simp()))
+  let NF := mp.FNF(nf0)
+  have hnk: mp.nf_known(c, statics, N, NF) by taut(hk2)
+  have ilf tlf olf _ := mp(all_elim(mp.fl_lf, {c}, {statics}, {N}, {NF}), hcf, hnk)
+  let CFG := c_src_malloc_free_cfg.free_fun(mp.FLF(NF))
+  have ln := mp(all_elim(frc.implements, {statics}, {mp.FLF(NF)}), ilf, tlf, olf)
+  have fc: tm.fcall(mallocng.inv(c), mallocng.owned(c), eo, b, cd, st, CFG) proof
+    fix args s h o
+    assume hA hs su hh hth hr ol hwk hp
+    have al ll := apply(tm.args_le, hA)
+    have hr2 := mp(all_elim(free_ref, {mp.FLF(NF)}, {args}, {s}, {o}), al, ll, hs, hr)
+    let S := union2(s, h)
+    // (any state the invariant holds in: its groups within N)
+    have na: ord_le(1, seq_len(args)) && !(args[0] = 0) && mp.MPRE(c, eo, b, cd, st, S) && !(S.blocks[args[0]] = none) ->
+        ex A. A in mallocng.Abs && mallocng.rep(c, A, S) && int_le(seq_len(A.used), N) proof
+      assume d
+      have _ _ hpre _ := d
+      have hinv _ _ := hpre
+      obtain A, ha hrep from apply(mallocng.inv_rep, hinv)
+      have {hm = mem} := expand(hrep, mallocng.rep)
+      have ub := apply(mp.used_bound, hc, apply(mallocng.abs_univ, ha), ha, hm)
+      show by ex_intro({A}, taut(ha, hrep, ub))
+    qed
+    show := apply(mp.tf_call[c := c, statics := statics, eo := eo, b := b, cd := cd, st := st, regs := args, w := s, h := h, n := N, nf := NF, k := 1, o := o],
+      hcf, he, hnk, hA, hs, su, hh, hth, na, hci, hr2, ol, hwk, hp)
+  qed
+  show by ex_intro({NF}, taut(ln, all_elim(frc.typed, {mp.FLF(NF)}), mp(all_elim(frc.io, {mp.FLF(NF)}), olf), fc))
+qed
+
+// ----------------------------------------------------------------------
+//  main
+
+// The test's `main` symbol implements main's spec, the allocator musl's
+theorem tm.main_top: abi.implements2(malloc.Heap.ghost, 4199122,
+  test_malloc.main_spec_fun(musl.inv, musl.owned, musl_malloc.errno_offset, musl_malloc.prog_base, musl_malloc.prog_code, musl_malloc.prog_statics))
+proof
+  let ST := app(musl_malloc.prog_statics, empty)
+  let I := musl.inv
+  let O := musl.owned
+  let eo := musl_malloc.errno_offset
+  let b := musl_malloc.prog_base
+  let cd := musl_malloc.prog_code
+  let st := musl_malloc.prog_statics
+  have he hb hcd := musl.prog
+  have hmc: mp.mi_cfg(musl.cfg) by simp(musl.cfg_ok, unfold(musl.cfg))
+  have hfc: mp.fr_cfg(musl.cfg) by simp(musl.cfg_ok, unfold(musl.cfg))
+  have hl: tm.laws(I, O, eo) by taut(musl.frame, musl.owned_private, musl.owned_mapped, musl.inv_wf, musl.live_apart)
+  have ei := unfold(musl.inv)
+  have eow := unfold(musl.owned)
+  obtain G, im tm0 om cm0 from mp(all_elim(tm.malloc_k, {musl.cfg}, {ST}, {eo}, {b}, {cd}, {st}), hmc, he, musl.code_img)
+  obtain NF, ifr tfr ofr cfr0 from mp(all_elim(tm.free_k, {musl.cfg}, {ST}, {eo}, {b}, {cd}, {st}), hfc, he, musl.code_img)
+  have cm := rewrite(sym(ei), rewrite(sym(eow), cm0))
+  have cfr := rewrite(sym(ei), rewrite(sym(eow), cfr0))
+  have t := mp(all_elim(tm.main_impl, {I}, {O}, {eo}, {b}, {cd}, {st}, {ST}, {tm.SZ}, {c_src_malloc_lite_malloc_cfg.default_malloc_fun(G)}, {tm.FL},
+      {c_src_malloc_free_cfg.free_fun(mp.FLF(NF))}, {tm.IN}),
+    hl, he, musl.free_step, hb, hcd, refl({ST}),
+    all_elim(tsize.implements, {ST}), tsize.typed, tsize.io, tm.size_c,
+    im, tm0, om, cm,
+    all_elim(tm.fill_impl, {ST}), all_elim(tfill.typed, {tm.PT}, {tm.SZ}), mp(all_elim(tfill.io, {tm.PT}, {tm.SZ}), tpat.io, tsize.io), tm.fill_c,
+    ifr, tfr, ofr, cfr,
+    all_elim(tm.intact_impl, {ST}), all_elim(tintact.typed, {tm.PT}, {tm.SZ}), mp(all_elim(tintact.io, {tm.PT}, {tm.SZ}), tpat.io, tsize.io), tm.intact_c)
+  show := t
+qed
