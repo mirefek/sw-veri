@@ -281,6 +281,24 @@ proof
     (int_add(l0, int_mul(8, k)) in omega by arith(hl0, hk)), (int_le(int_add(int_add(l0, int_mul(8, k)), 8), 18446744073709551616) by arith(hl64, hkl, hk)), ag)
 qed
 
+// (the objects' live set restored: the world with the memory V only)
+theorem tm.restore(w, g, V, L): w in abi.World -> g in malloc.Heap.ghost ->
+  fn_update(union2(fn_update(fn_update(w, "vm", V), "objs", fn_update(w.objs, "live", L)), g), "objs", fn_update(fn_update(w.objs, "live", L), "live", w.objs.live)) =
+  union2(fn_update(w, "vm", V), g)
+proof
+  assume hw hg
+  have of od := (is_fun(w.objs) && "live" in dom(w.objs) by simp(expand(hw, abi.World), keep(abi.Objs)))
+  have o1 := trans(fn_update_twice[f := w.objs, k := "live", a := L, b := w.objs.live], mp(fn_update_same[f := w.objs, k := "live"], of, od))
+  have u := mp(fn_update_union_l[a := fn_update(fn_update(w, "vm", V), "objs", fn_update(w.objs, "live", L)), b := g, k := "objs", v := w.objs],
+    apply(tm.gkeys[h := g, k := "objs"], hg, (!("objs" = "blocks") by simp())))
+  have t2 := fn_update_twice[f := fn_update(w, "vm", V), k := "objs", a := fn_update(w.objs, "live", L), b := w.objs]
+  have vo := apply(gc.vm_objs, {w}, {V}, hw)
+  let X := fn_update(fn_update(w.objs, "live", L), "live", w.objs.live)
+  let Wv := fn_update(fn_update(w, "vm", V), "objs", fn_update(w.objs, "live", L))
+  have e1 := rewrite(o1, refl({fn_update(union2(Wv, g), "objs", X)}), {2})
+  show := trans(e1, rewrite(vo, rewrite(t2, u)))
+qed
+
 // ----------------------------------------------------------------------
 //  main's run
 
@@ -289,7 +307,11 @@ theorem tm.main_run: all I O eo b cd st gsz gm gf gfr gin w h o. tm.laws(I, O, e
   tp.calls(gf, test_malloc.fill_spec_fun()) -> tp.calls(gin, test_malloc.intact_spec_fun()) ->
   w in abi.World -> h in malloc.Heap.ghost -> union2(w, h) in I -> malloc.errno_ok(eo, union2(w, h)) -> malloc.world_ok(b, cd, st, union2(w, h)) ->
   (all p. p in bits(64) -> union2(w, h).blocks[p] = none) ->
-  runs(c_tests_test_malloc.main(gsz, gm, gf, gfr, gin), w, o) -> true
+  runs(c_tests_test_malloc.main(gsz, gm, gf, gfr, gin), w, o) ->
+  abi.ovf_out(w, o) ||
+  (ex V g r L. (((V in x86_64_linux.Vm && g in malloc.Heap.ghost) && (r = 0 || r = 1)) &&
+     malloc.world_ok(b, cd, st, union2(fn_update(w, "vm", V), g)) && test_malloc.main_frame(O, eo, union2(w, h), union2(fn_update(w, "vm", V), g))) &&
+     o = ok(fn_update(fn_update(w, "vm", V), "objs", fn_update(w.objs, "live", L)), r))
 proof
   fix I O eo b cd st gsz gm gf gfr gin w h o
   assume hl he hfs hmc hfc hgs hgf hgi hw hh hi heo hwo hbn hr
@@ -523,6 +545,85 @@ proof
       show by taut(cz, ck)
     qed
     show by taut(c8, clt, (i = 8 || int_lt(i, 8) by arith(hil)))
+  qed
+  // the loop: i blocks done, i up to 8
+  let PI1(x) := ex i V g0. (((i in omega && int_le(i, 8)) && V in x86_64_linux.Vm) && g0 in malloc.Heap.ghost) && tm.mi(I, O, eo, b, cd, st, S0, H(V, g0), l[0], K1(i)) &&
+    x = pair(W(V), pair(i, R))
+  let M1(x) := int_sub(8, fst(snd(x)))
+  have k0: all k. k in omega -> k in K1(0) -> k in empty proof
+    fix k
+    assume hk2 hkK
+    have _ kl := unsel(hkK)
+    show by arith(kl)
+  qed
+  have mi00 := apply(tm.mi_sub[I := I, O := O, eo := eo, b := b, cd := cd, st := st, S0 := S0, H := H(V0, h), l0 := l[0], K := empty, K2 := K1(0)], mi0, k0)
+  have p0: PI1(pair(W(V0), pair(0, R))) by ex_intro({0}, {V0}, {h}, taut((0 in omega by simp()), (int_le(0, 8) by simp()), hVm, hh, mi00, refl({pair(W(V0), pair(0, R))})))
+  have pm: all x. PI1(x) -> M1(x) in omega proof
+    fix x
+    assume hp
+    obtain i V g0, hi0 hil _ _ _ hx from hp
+    show by simp(hx, (int_sub(8, i) in omega by arith(hi0, hil)))
+  qed
+  have nx: all x x2. PI1(x) -> BODY1(x, ok(x2, empty)) -> PI1(x2) && int_lt(M1(x2), M1(x)) proof
+    fix x x2
+    assume hp hbd
+    obtain i V g0, hi0 hil hv hg0 hmi hx from hp
+    have t := mp(all_elim(trip1, {i}, {V}, {g0}, {ok(x2, empty)}), hi0, hil, hv, hg0, hmi, rewrite(hx, hbd))
+    have nr: !(ex V2 g2. ((V2 in x86_64_linux.Vm && g2 in malloc.Heap.ghost) && tm.wk(O, eo, b, cd, st, S0, H(V2, g2), l[0])) &&
+        ok(x2, empty) = exc(pair(W(V2), pair(i, pair(1, pair(a3, pair(a4, pair(a5, 1)))))), pair("ret", 1))) proof
+      assume e
+      obtain V2 g2, _ _ _ he2 from e
+      show by defs(simp(he2), ok, exc)
+    qed
+    have nb: !(i = 8 && ok(x2, empty) = exc(pair(W(V), pair(i, R)), pair("brk", empty))) by defs(simp(), ok, exc)
+    have no: !(ex Vx v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && ok(x2, empty) = exc(pair(fn_update(fn_update(W(Vx), "vm", v), "objs", ob), pair(i, R)), pair("raise", OVF))) proof
+      assume e
+      obtain Vx v ob, _ _ he2 from e
+      show by defs(simp(he2), ok, exc)
+    qed
+    have lt ex2 := (int_lt(i, 8) && (ex V2 g2. ((V2 in x86_64_linux.Vm && g2 in malloc.Heap.ghost) && tm.mi(I, O, eo, b, cd, st, S0, H(V2, g2), l[0], K1(int_add(i, 1)))) &&
+        ok(x2, empty) = ok(pair(W(V2), pair(int_add(i, 1), R)), empty)) by taut(t, nr, nb, no))
+    obtain V2 g2, hv2 hg2 hmi2 he2 from ex2
+    have xe: x2 = pair(W(V2), pair(int_add(i, 1), R)) by simp(he2)
+    have p2: PI1(x2) by ex_intro({int_add(i, 1)}, {V2}, {g2}, taut((int_add(i, 1) in omega by arith(hi0)), (int_le(int_add(i, 1), 8) by arith(lt)), hv2, hg2, hmi2, xe))
+    have m2: int_lt(M1(x2), M1(x)) by simp(xe, hx, (int_lt(int_sub(8, int_add(i, 1)), int_sub(8, i)) by arith(hi0)))
+    show by taut(p2, m2)
+  qed
+  have wv1 := apply(g.loop[b := x y. BODY1(x, y), p := x. PI1(x), m := x. M1(x)], p0, pm, nx, wl1)
+  obtain x1, hpl1 bb1 nk1 from wv1
+  obtain i1 V1 g1, hi1 hil1 hv1 hg1 hmi1 hx1 from hpl1
+  have t1 := mp(all_elim(trip1, {i1}, {V1}, {g1}, {r1}), hi1, hil1, hv1, hg1, hmi1, rewrite(hx1, bb1))
+  let RET1 := ex V2 g2. ((V2 in x86_64_linux.Vm && g2 in malloc.Heap.ghost) && tm.wk(O, eo, b, cd, st, S0, H(V2, g2), l[0])) &&
+      r1 = exc(pair(W(V2), pair(i1, pair(1, pair(a3, pair(a4, pair(a5, 1)))))), pair("ret", 1))
+  // main's end: a return r, wk at the memory V2 -- the world, the memory
+  // kept, the objects restored
+  let GM := abi.ovf_out(w, o) ||
+    (ex V g r L. (((V in x86_64_linux.Vm && g in malloc.Heap.ghost) && (r = 0 || r = 1)) &&
+       malloc.world_ok(b, cd, st, union2(fn_update(w, "vm", V), g)) && test_malloc.main_frame(O, eo, union2(w, h), union2(fn_update(w, "vm", V), g))) &&
+       o = ok(fn_update(fn_update(w, "vm", V), "objs", fn_update(w.objs, "live", L)), r))
+  have fin: all V2 g2 r. V2 in x86_64_linux.Vm -> g2 in malloc.Heap.ghost -> tm.wk(O, eo, b, cd, st, S0, H(V2, g2), l[0]) -> (r = 0 || r = 1) ->
+      o = ok(W(V2), r) -> GM proof
+    fix V2 g2 r
+    assume hv2 hg2 hwk2 hr hoe
+    have {fo2 = objs} := apply(tm.u2f[w := w, h := g2, V := V2, O := O1], hw, hg2)
+    have sub: all a. a in omega -> a in S0.objs.live -> a in H(V2, g2).objs.live proof
+      fix a
+      assume ao al
+      have al2: a in w.objs.live := rewrite(eo0, al)
+      show by simp(fo2, (a in L by sel(taut(ao, al2))))
+    qed
+    have wf mf := apply(tm.wk_final[O := O, eo := eo, b := b, cd := cd, st := st, S0 := S0, H := H(V2, g2), l0 := l[0]], hwk2, sub)
+    have rs := apply(tm.restore[w := w, g := g2, V := V2, L := L], hw, hg2)
+    have rs2: fn_update(H(V2, g2), "objs", fn_update(H(V2, g2).objs, "live", S0.objs.live)) = union2(fn_update(w, "vm", V2), g2) by simp(rs, fo2, eo0)
+    show by disj({2}, ex_intro({V2}, {g2}, {r}, {L}, taut(hv2, hg2, hr, rewrite(rs2, wf), rewrite(rs2, mf), hoe)))
+  qed
+  let RET1 := ex V2 g2. ((V2 in x86_64_linux.Vm && g2 in malloc.Heap.ghost) && tm.wk(O, eo, b, cd, st, S0, H(V2, g2), l[0])) &&
+      r1 = exc(pair(W(V2), pair(i1, pair(1, pair(a3, pair(a4, pair(a5, 1)))))), pair("ret", 1))
+  have cret: RET1 -> GM proof
+    assume e
+    obtain V2 g2, hv2 hg2 hwk2 hr1e from e
+    step qq from rewrite(hr1e, kr1)
+    show := mp(all_elim(fin, {V2}, {g2}, {1}), hv2, hg2, hwk2, (1 = 0 || 1 = 1 by simp()), qq)
   qed
   show by taut()
 qed
