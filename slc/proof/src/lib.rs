@@ -3991,11 +3991,17 @@ impl State {
             }
         }
         let fs: Vec<&Seq> = using.iter().collect();
-        if fs.is_empty() {
-            return None;
+        if !fs.is_empty() {
+            for g in &goals {
+                if let Ok(p) = mem::rel_arith(env, lg, &fs, g) {
+                    return back(env, p);
+                }
+            }
         }
+        // (else a condition true on its own -- `!false`, a literal
+        // comparison simplified --: by no fact)
         for g in &goals {
-            if let Ok(p) = mem::rel_arith(env, lg, &fs, g) {
+            if let Ok(p) = Seq::taut(env, lg, &[], g) {
                 return back(env, p);
             }
         }
