@@ -317,9 +317,9 @@ pred exit_pre(vm: Vm, objs: Objs, p: ExitProgram, fs: Addr) =
   thread_ok(vm, fs) && usable(vm, objs, uint(fs) + 48, 4, false) && bytes_at(vm, fs + 48, 4) != 0 &&
   (uint(fs) + 8 <= uint(p.lock) || uint(p.lock) + 4 <= uint(fs)) &&
   (uint(fs) + 8 <= uint(p.completed) || uint(p.completed) + 1 <= uint(fs)) &&
-  usable(vm, objs, uint(p.lock), 4, true) && bytes_at(vm, p.lock, 4) = 0 &&
+  usable(vm, objs, uint(p.lock), 4, false) && usable(vm, objs, uint(p.lock), 4, true) && bytes_at(vm, p.lock, 4) = 0 &&
   usable(vm, objs, uint(p.fini_array), 8, false) && bytes_at(vm, p.fini_array, 8) = uint(p.dtors) &&
-  usable(vm, objs, uint(p.completed), 1, true) &&
+  usable(vm, objs, uint(p.completed), 1, false) && usable(vm, objs, uint(p.completed), 1, true) &&
   usable(vm, objs, uint(p.cxa_got), 8, false) && bytes_at(vm, p.cxa_got, 8) = 0
 
 // exit(code): a stack overflow, or the process ends with the status
