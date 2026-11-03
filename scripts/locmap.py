@@ -49,6 +49,9 @@ SOURCES = [
     ("crt/crt1.c", "build/gimple-O0/sl/c_crt1.sl", "c_crt_crt1"),
     ("src/env/__libc_start_main.c", "build/gimple-O0/sl/c_libc_start_main.sl", "c_src_env___libc_start_main"),
     ("src/env/__init_tls.c", "build/gimple-O0/sl/c_init_tls.sl", "c_src_env___init_tls"),
+    # the exit path after main
+    ("src/exit/exit.c", "build/gimple-O0/sl/c_exit.sl", "c_src_exit_exit"),
+    ("src/exit/_Exit.c", "build/gimple-O0/sl/c__Exit.sl", "c_src_exit__Exit"),
     # the test program (its -g object from scripts/dump-gimple.sh)
     ("tests/test_malloc.c", "build/gimple-O0/sl/c_test_malloc.sl", "c_tests_test_malloc"),
 ]

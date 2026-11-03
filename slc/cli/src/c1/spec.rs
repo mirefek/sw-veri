@@ -1317,6 +1317,17 @@ impl<'e> Gen<'e> {
             let (j, inst) = self.by(qi, "tr.q_some_e", &[("e", e), ("k", x[2].clone()), ("kw", x[3].clone()), ("w", w.clone())])?;
             return Ok(Some(Red::Q(j, inst)));
         }
+        // (... before blocks' rest K: its raise of nothing through them)
+        if let Some(k) = self
+            .app(&body, "ex", 1)
+            .and_then(|e| self.app(&e[0], "and", 2).map(|y| y.to_vec()))
+            .filter(|y| self.app(&y[0], "true", 0).is_some())
+            .and_then(|y| self.lam(&y[1], &["x0", "x1", "x2"], &["x2", "x1"]))
+        {
+            let e = self.mk("exc", vec![self.mk("pair", vec![w.clone(), self.mk("empty", vec![])]), self.mk("pair", vec![Term::bytes(b"raise"), self.mk("empty", vec![])])]);
+            let (j, inst) = self.by(qi, "tr.q_some_g", &[("e", e), ("K", k), ("w", w.clone())])?;
+            return Ok(Some(Red::Q(j, inst)));
+        }
         // a loop's iteration ended (tr.lcont): the body went on (its marked
         // return), or it left (the rest in the wrapper)
         if let Some(x) = self.app(&body, "tr.lcont", 4).map(|x| x.to_vec()) {

@@ -1231,8 +1231,8 @@ impl<'e> Gen<'e> {
         // t: r holding p -- the register, the instruction's rest, p, G)
         let mut ind: Option<(u128, Term, Term, Term)> = None;
         let g = if indirect {
-            if self.stop.is_none() {
-                return Err(format!("{:x}: a call through a pointer (only stopping at main so far)", a));
+            if self.stop.is_none() && (self.startup || one) {
+                return Err(format!("{:x}: a call through a pointer without a stop: only call, not in the startup mode", a));
             }
             let gp = self.app(&g, "app", 2).ok_or_else(|| format!("{:x}: `call *%r`, the spec's callee {} not the code map's entry", a, self.print(&g)))?.to_vec();
             let fl = self.app(&insn.fields, "pair", 2).ok_or_else(|| format!("{:x}: `call *`: not a register", a))?.to_vec();
@@ -1351,6 +1351,18 @@ impl<'e> Gen<'e> {
                 // (stopping at t: the callee's contract with the stop at t, as
                 // the caller's -- k)
                 let hc = match self.stop {
+                    // (through the code map, no stop: tr.code_okn, and G typed)
+                    None if ind.is_some() => {
+                        let hc = self.mk("tr.code_okn", vec![g.clone(), lit(nargs as u128), lit(st.fr), lb, lc, statics]);
+                        let fs = self.mk("fn_space", vec![self.mk("abi.ARGS", vec![]), self.mk("powerset", vec![self.mk("univ", vec![lit(1)])])]);
+                        let ht = self.mk("in", vec![g.clone(), self.mk("fn_space", vec![self.mk("bits", vec![lit(64)]), fs])]);
+                        self.hcall[gi] = Some(self.assume(&hc)?);
+                        let hts = self.assume(&ht)?;
+                        self.htyp[gi] = Some(hts.clone());
+                        self.hio[gi] = Some(hts);
+                        self.cinfo[gi] = Some((fa, nargs, !aligned, vec![hc.clone(), ht]));
+                        hc
+                    }
                     // (through the code map: tr.code_ok, and G typed -- the
                     // startup mode's tr.code_okm(false, ..))
                     Some((tt, _)) if ind.is_some() => {
@@ -1764,6 +1776,85 @@ impl<'e> Gen<'e> {
                         hat,
                     ]]
                     .concat(),
+                ),
+                &[],
+            );
+        }
+        // (through the code map, no stop: tr.calli)
+        if let (Some((r, z, tp, gv)), None) = (ind.clone(), self.stop) {
+            let inst = R::Inst(
+                "tr.calli".into(),
+                vec![
+                    ("s", self.s.clone()),
+                    ("v", self.v.clone()),
+                    ("base", self.base.clone()),
+                    ("code", self.code.clone()),
+                    ("fr", lit(st.fr)),
+                    ("a", lit(a)),
+                    ("a2", lit(a2)),
+                    ("len", lit(insn.len)),
+                    ("gr", lit(r)),
+                    ("z", z),
+                    ("nb", lit(8)),
+                    ("T", tp),
+                    ("fptr", gv),
+                    ("args", list.clone()),
+                    ("n", lit(nargs as u128)),
+                    ("cb", self.lbase.clone()),
+                    ("cc", self.lcode.clone()),
+                    ("st", self.statics_var()),
+                    ("hs", st.hst.clone()),
+                    ("ds", st.ds.clone()),
+                    ("fd2", lit(fd2)),
+                    ("rs", st.rs.clone()),
+                    ("rc", self.regs_map(&rc)),
+                    ("w", w.clone()),
+                    ("ka", al.clone()),
+                    ("xx", xl.clone()),
+                    ("dd", dl.clone()),
+                    ("k", kl.clone()),
+                    ("kw", self.kw3()),
+                    ("bkp", self.bkp.clone()),
+                    ("bka", self.bka.clone()),
+                ],
+            );
+            let hl = self.hl.clone().unwrap();
+            let cfr = defs(RP::Simp(false, vec![], vec![], false), &["tr.cfr"]);
+            let hal = if aligned { taut(vec![R::S(self.sal16()?)]) } else { simp0() };
+            let (ha, ho) = (p(self.hap_pf(&st.hst)), p(self.ofr_pf(&lit(st.fr))));
+            return self.run(
+                &mp(
+                    inst,
+                    vec![
+                        simp0(),
+                        ho,
+                        ha,
+                        p(f(&insn.name)),
+                        simp_l(),
+                        simp0(),
+                        simp_l(),
+                        simp_l(),
+                        simp_l(),
+                        simp0(),
+                        hcon,
+                        hal,
+                        s(&hl),
+                        simp0(),
+                        cfr,
+                        simp0(),
+                        simp0(),
+                        simp0(),
+                        s(&htyp),
+                        p(hreg),
+                        p(self.cs_sub_pf(&rc, &st.rs)),
+                        p(hin),
+                        simp0(),
+                        simp0(),
+                        s(&hk),
+                        s(&hd),
+                        s(&pc),
+                        self.nobp_below(&self.bkp.clone(), st.fr),
+                    ],
                 ),
                 &[],
             );
