@@ -1537,3 +1537,18 @@ item is a short summary of finished work; details are in the files named.
   blocks), divergence only where undefined, `tm.main_impl` by main's C1;
   `tm.main_top` with the callees the program's code (size, fill, intact
   by their C1 and specs; malloc, free by `mp.top_call`, `mp.tf_call`).
+- **The exit path** (after main: `exit` -> `__libc_exit_fini` -> `_Exit`).
+  The exit an outcome at every level (GIMPLE's `sys_call1` 60 / 231
+  raises `exit(a1[7:0])`; the bridge's `tr.xo`; the syscall rule). C1 of
+  exit.c, _Exit.c and gcc's fini code (proofs/mallocng/machine/c1_exit.core;
+  `__do_global_dtors_aux` / `deregister_tm_clones` as readable models in
+  musl_asm), the link (link_exit.core: the fini_array's code map,
+  `tr.calli` for a call through a register without a stop). The purpose
+  (startup_specs.exit_spec: from `exit_pre` -- a sound thread with its id,
+  the lock free, the fini_array's entry the dtors', the GOT word 0 -- an
+  overflow or `exit(code[7:0])`), C2 (proofs/mallocng/fun/exit.core: the
+  structured leaves, `__libc_exit_fini`'s loop, exit on its CFG form by its
+  label loop), `xt.exit_impl`. Engine additions on the way: a `require`
+  decided in C1, rip-relative compares, the frame pointer pushed after a
+  test, any-outcome rests (`tr.q_some_g`), `step` deciding a literal
+  condition with no fact.
