@@ -17,9 +17,22 @@ other crash, never exit 42. Runs that never end are allowed (§2).
   in the user space from the bridge (abi.sl's `stack_reserve`, the world
   without the stack's pages); main's spec (`tm.main_top`) is undefined
   where it fails.
-- (d) After main: stage2's `exit(main(..))` -- musl's `exit`,
-  `__funcs_on_exit`, `__libc_exit_fini` (.fini_array, `_fini`),
-  `__stdio_exit`, `_Exit` (exit_group): C1, specs, C2, as the startup's.
+- (d) After main: stage2's `exit(main(..))` -- musl's `exit` (its
+  exit_lock by a_cas, `__funcs_on_exit` / `__stdio_exit` / `_fini` the
+  dummy), `__libc_exit_fini` (.fini_array: gcc's `__do_global_dtors_aux`,
+  `deregister_tm_clones`, readable models as frame_dummy's), `_Exit`
+  (exit_group, then exit, through its unit's `__syscall1`). The exit as
+  an outcome at every level, as the stop at main:
+  - GIMPLE (layer change): `sys_call1` with 60 / 231 raises the
+    machine's `exit(a1[7:0])`;
+  - the bridge: `tr.ub` (and its kin: `abi.raises_at`'s, `tr.at_t`'s,
+    abi_ghost's) excludes exits as it excludes at_main (one def,
+    `tr.nstop`), so a spec that exits is no undefined one;
+  - the run stops at `_Exit`'s syscall instruction (a breakpoint, as the
+    stop at main), the arrival: the spec raising `exit` with rdi's low
+    byte; the stop mode's at_main generalized to that arrival;
+  - C1 of the exit path in that mode, specs, C2; at the top the one
+    machine step (syscall: `exit(rdi[7:0])`).
 - (e) The whole run: startup linked with main as a callee by its
   contract (not a breakpoint), the invariant from `musl.init` at its
   entry, the exit path after; the claim proven.
