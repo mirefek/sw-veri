@@ -25,14 +25,15 @@ other crash, never exit 42. Runs that never end are allowed (§2).
   an outcome at every level, as the stop at main:
   - GIMPLE (layer change): `sys_call1` with 60 / 231 raises the
     machine's `exit(a1[7:0])`;
-  - the bridge: `tr.ub` (and its kin: `abi.raises_at`'s, `tr.at_t`'s,
-    abi_ghost's) excludes exits as it excludes at_main (one def,
-    `tr.nstop`), so a spec that exits is no undefined one;
-  - the run stops at `_Exit`'s syscall instruction (a breakpoint, as the
-    stop at main), the arrival: the spec raising `exit` with rdi's low
-    byte; the stop mode's at_main generalized to that arrival;
-  - C1 of the exit path in that mode, specs, C2; at the top the one
-    machine step (syscall: `exit(rdi[7:0])`).
+  - the bridge (done): undefined behaviour leaves exits out
+    (`abi.nstop`), and the exit is an outcome of the claims and
+    contracts (`tr.xo`: the machine's exit, the spec raising the same),
+    carried through the callee rules; the ABI's contract still counts it
+    a raise (`abi.raises_ab`);
+  - next: the syscall rule for exit / exit_group giving `tr.xo` (the
+    machine's step raising `exit(rdi[7:0])`), the C1 engine using it;
+  - C1 of the exit path, specs, C2; stage2 with main as a callee by its
+    contract and exit after.
 - (e) The whole run: startup linked with main as a callee by its
   contract (not a breakpoint), the invariant from `musl.init` at its
   entry, the exit path after; the claim proven.
