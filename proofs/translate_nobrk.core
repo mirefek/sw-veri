@@ -1,0 +1,894 @@
+// The contracts without a stop in either mode (docs/todo.md 1(d)): of the
+// runs from an entry with no breakpoint (tr.run_d), in the mode b's view
+// (tr.vw) -- for the callers of main and exit, whose contracts
+// (tr.implements_at) are of such runs. A contract of the runs stopping at t
+// says nothing of a run's prefix past t, so no stop address serves a
+// caller of a function given by such a contract. As tr.impl_m with the stop
+// never allowed (k false), no breakpoints.
+
+def tr.impl_d(b, u, f, spec, base, code, statics) :=
+  all args objs mem s o. args in abi.ARGS -> objs in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(s.vm, base, code, statics) ->
+    s.rip = f -> tr.eok(b, u, s, args) -> tr.objs_ok(s, objs) -> tr.vok(b, s, objs, mem) -> tr.run_d(s, s, o) ->
+    tr.mtv(b, s, abi.wob(objs, tr.cbm(b, s.fs_base)), spec[args], tr.vw(b, s, objs, mem), o, false)
+
+// ... for either alignment of a call from a frame fr
+def tr.ccs_d(b, fr, f, g, cb, cc, st) := (int_mod(fr, 16) = 8 && tr.impl_d(b, false, f, g, cb, cc, st)) || tr.impl_d(b, true, f, g, cb, cc, st)
+
+// The callee's claim at its entry C (a call's: its registers' n arguments,
+// the callers' objects L): what its contract gives there
+abbrev tr.chd(b, fr, C, T, g, n, L, cb, cc, st) := all regs mem oc. regs in abi.ARGS -> seq_len(regs) = n -> L in set_type(omega) -> mem in x86_64_linux.Vm -> C in x86_64_linux.Machine -> C in univ(1) -> abi.loaded(C.vm, cb, cc, st) -> C.rip = T -> tr.eok(b, true, C, regs) -> (int_mod(fr, 16) = 8 -> tr.eok(b, false, C, regs)) -> tr.objs_ok(C, L) -> tr.vok(b, C, L, mem) -> tr.run_d(C, C, oc) -> tr.mtv(b, C, abi.wob(L, tr.cbm(b, C.fs_base)), g[regs], tr.vw(b, C, L, mem), oc, false)
+
+theorem tr.ccs_d_chd: all b fr C T g n L cb cc st. tr.ccs_d(b, fr, T, g, cb, cc, st) -> tr.chd(b, fr, C, T, g, n, L, cb, cc, st)
+proof
+  fix b fr C T g n L cb cc st
+  assume himp
+  fix regs mem oc
+  assume hA hl hvo hmv cM cu lC crip eu e8 ook vok hrd
+  have a8: (int_mod(fr, 16) = 8 && tr.impl_d(b, false, T, g, cb, cc, st)) -> tr.mtv(b, C, abi.wob(L, tr.cbm(b, C.fs_base)), g[regs], tr.vw(b, C, L, mem), oc, false) proof
+    assume h8
+    show := mp(all_elim(expand(h8.2, tr.impl_d), {regs}, {L}, {mem}, {C}, {oc}), hA, hvo, hmv, cM, cu, lC, crip, mp(e8, h8.1), ook, vok, hrd)
+  qed
+  have au: tr.impl_d(b, true, T, g, cb, cc, st) -> tr.mtv(b, C, abi.wob(L, tr.cbm(b, C.fs_base)), g[regs], tr.vw(b, C, L, mem), oc, false) proof
+    assume hu0
+    show := mp(all_elim(expand(hu0, tr.impl_d), {regs}, {L}, {mem}, {C}, {oc}), hA, hvo, hmv, cM, cu, lC, crip, eu, ook, vok, hrd)
+  qed
+  show by taut(expand(himp, tr.ccs_d), a8, au)
+qed
+
+// ----------------------------------------------------------------------
+//  Contracts so from the others
+
+// (a stop outcome matches only where the spec raises: then anything does)
+theorem tr.mtv_stop: all b s V P W x o. tr.mtv(b, s, V, P, W, ok(x, exc_val("stop", empty)), false) -> tr.mtv(b, s, V, P, W, o, false)
+proof
+  fix b s V P W x o
+  assume h
+  have mt := expand(h, tr.mtv)
+  have n2: tr.crash(s, P, W, ok(x, exc_val("stop", empty))) -> false proof
+    assume c
+    obtain m1 a k0, {oe} from expand(c, tr.crash)
+    show by simp(oe)
+  qed
+  have n3 := all_elim(tr.div_ok, {P}, {W}, {x}, {exc_val("stop", empty)})
+  have n4: (ex m1. ok(x, exc_val("stop", empty)) = ok(m1, empty) && tr.rtv(b, s, V, P, W, m1)) -> false proof
+    assume eo
+    obtain m1, eo1 _ from eo
+    show by simp(eo1, tr.stop_ne)
+  qed
+  have n6 := all_elim(tr.xo_ok, {P}, {W}, {x}, {exc_val("stop", empty)})
+  have u: tr.ub(s, V, P, W) by taut(mt, n2, n3, n4, n6)
+  show by defs(taut(u), tr.mtv)
+qed
+
+// a contract never stopping at t (its stop matched only where the spec
+// raises): the contract without the stop
+theorem tr.impl_d_of: all b u f spec t base code statics. tr.impl_m(b, u, f, spec, t, false, base, code, statics) -> tr.impl_d(b, u, f, spec, base, code, statics)
+proof
+  fix b u f spec t base code statics
+  assume h
+  have g: all args objs mem s o. args in abi.ARGS -> objs in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(s.vm, base, code, statics) ->
+      s.rip = f -> tr.eok(b, u, s, args) -> tr.objs_ok(s, objs) -> tr.vok(b, s, objs, mem) -> tr.run_d(s, s, o) ->
+      tr.mtv(b, s, abi.wob(objs, tr.cbm(b, s.fs_base)), spec[args], tr.vw(b, s, objs, mem), o, false) proof
+    fix args objs mem s o
+    assume h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 hr
+    let V := abi.wob(objs, tr.cbm(b, s.fs_base))
+    let W := tr.vw(b, s, objs, mem)
+    have d := apply(tr.run_d_s[s := s, t := t, m := s, o := o], hr)
+    have c1: tr.run_s(s, t, s, o) -> tr.mtv(b, s, V, spec[args], W, o, false) proof
+      assume rs
+      show := mp(all_elim(expand(h, tr.impl_m), {args}, {objs}, {mem}, {s}, {o}), h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, rs)
+    qed
+    have c2: (ex x. tr.run_s(s, t, s, ok(x, exc_val("stop", empty)))) -> tr.mtv(b, s, V, spec[args], W, o, false) proof
+      assume e
+      obtain x, rs from e
+      have mt := mp(all_elim(expand(h, tr.impl_m), {args}, {objs}, {mem}, {s}, {ok(x, exc_val("stop", empty))}), h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, rs)
+      show := mp(all_elim(tr.mtv_stop, {b}, {s}, {V}, {spec[args]}, {W}, {x}, {o}), mt)
+    qed
+    show by taut(d, c1, c2)
+  qed
+  show by defs(g, tr.impl_d)
+qed
+
+// the main mode's contract (tr.implements_at): the contract without the
+// stop in the mode
+theorem tr.impl_d_at: all f spec base code statics. tr.implements_at(f, spec, base, code, statics) -> tr.impl_d(true, false, f, spec, base, code, statics)
+proof
+  fix f spec base code statics
+  assume h
+  have g: all args objs mem s o. args in abi.ARGS -> objs in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(s.vm, base, code, statics) ->
+      s.rip = f -> tr.eok(true, false, s, args) -> tr.objs_ok(s, objs) -> tr.vok(true, s, objs, mem) -> tr.run_d(s, s, o) ->
+      tr.mtv(true, s, abi.wob(objs, tr.cbm(true, s.fs_base)), spec[args], tr.vw(true, s, objs, mem), o, false) proof
+    fix args objs mem s o
+    assume h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11
+    have eo: abi.entry_ok(s, args) by taut(all_elim(tr.eok_t, {s}, {args}), h4, h8)
+    have vo: abi.view_ok(s, objs, mem) by taut(all_elim(tr.vok_t, {s}, {objs}, {mem}), h10)
+    have mt := mp(all_elim(expand(h, tr.implements_at), {args}, {objs}, {mem}, {s}, {o}), h1, h2, h3, h4, h5, h6, h7, eo, h9, vo, h11)
+    have mk: tr.matches_tk(spec, args, objs, mem, s, o, false) by defs(taut(mt), tr.matches_tk)
+    show := apply(tr.mt_of, mk)
+  qed
+  show by defs(g, tr.impl_d)
+qed
+
+theorem tr.impl_d_at_u: all f spec base code statics. tr.implements_at_u(f, spec, base, code, statics) -> tr.impl_d(true, true, f, spec, base, code, statics)
+proof
+  fix f spec base code statics
+  assume h
+  have g: all args objs mem s o. args in abi.ARGS -> objs in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(s.vm, base, code, statics) ->
+      s.rip = f -> tr.eok(true, true, s, args) -> tr.objs_ok(s, objs) -> tr.vok(true, s, objs, mem) -> tr.run_d(s, s, o) ->
+      tr.mtv(true, s, abi.wob(objs, tr.cbm(true, s.fs_base)), spec[args], tr.vw(true, s, objs, mem), o, false) proof
+    fix args objs mem s o
+    assume h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11
+    have eo: tr.entry_ok_u(s, args) by taut(all_elim(tr.eok_ut, {s}, {args}), h8)
+    have vo: abi.view_ok(s, objs, mem) by taut(all_elim(tr.vok_t, {s}, {objs}, {mem}), h10)
+    have mt := mp(all_elim(expand(h, tr.implements_at_u), {args}, {objs}, {mem}, {s}, {o}), h1, h2, h3, h4, h5, h6, h7, eo, h9, vo, h11)
+    have mk: tr.matches_tk(spec, args, objs, mem, s, o, false) by defs(taut(mt), tr.matches_tk)
+    show := apply(tr.mt_of, mk)
+  qed
+  show by defs(g, tr.impl_d)
+qed
+
+// (a callee's contract of the main mode: so)
+theorem tr.ccs_d_of: all fr f g cb cc st. tr.callee_contract(fr, f, g, cb, cc, st) -> tr.ccs_d(true, fr, f, g, cb, cc, st)
+proof
+  fix fr f g cb cc st
+  assume h
+  have a: (int_mod(fr, 16) = 8 && tr.implements_at(f, g, cb, cc, st)) -> tr.ccs_d(true, fr, f, g, cb, cc, st) proof
+    assume h8
+    have d := apply(tr.impl_d_at, h8.2)
+    show by defs(taut(h8.1, d), tr.ccs_d)
+  qed
+  have u: tr.implements_at_u(f, g, cb, cc, st) -> tr.ccs_d(true, fr, f, g, cb, cc, st) proof
+    assume hu
+    have d := apply(tr.impl_d_at_u, hu)
+    show by defs(taut(d), tr.ccs_d)
+  qed
+  show by taut(expand(h, tr.callee_contract), a, u)
+qed
+
+// ----------------------------------------------------------------------
+//  The contract from the claim at the entry, no breakpoint
+
+theorem tr.entry_dm: all b P W s V o. s in x86_64_linux.Machine -> int_lt(s.gpr[4], 140737488355328) ->
+  (b -> tr.mainv(s, V)) ->
+  tr.sim(s, zb. false, zb pb wb. false, V, P, W, s) -> tr.run_d(s, s, o) -> tr.mtv(b, s, V, P, W, o, false)
+proof
+  fix b P W s V o
+  assume hM hsl hbm h rd
+  have r4 := apply(x86i.rsp_typed, hM)
+  have lt := apply(tr.sp_lt, {s.gpr[4]}, r4, hsl)
+  have sm := expand(h, tr.sim)
+  // (a return reached: the spec's)
+  have rt: all m1. tr.retok(s, V, P, W, m1) -> tr.rtv(b, s, V, P, W, m1) proof
+    fix m1
+    assume hr
+    have rx := expand(hr, tr.retok)
+    have ew: ex w3. runs(P, W, ok(w3, pair(m1.gpr[0], m1.gpr[2]))) && w3 in abi.World && w3 in univ(1) &&
+        tr.wmc(s.vm, m1.vm, w3.vm, abi.wob(V.live, w3.objs.c_bytes), s.fs_base, abi.sp(s)) && m1.os = w3.os && tr.rfs(s, V, m1, w3) by taut(rx)
+    obtain w3, h3 from ew
+    have f1: b -> m1.fs_base = s.fs_base proof
+      assume hb
+      have mv := mp(hbm, hb)
+      show by taut(h3, mv)
+    qed
+    have f2: !b -> m1.fs_base = w3.fs_base by taut(h3)
+    have e3: ex w2. runs(P, W, ok(w2, pair(m1.gpr[0], m1.gpr[2]))) && w2 in abi.World && w2 in univ(1) &&
+        tr.wmc(s.vm, m1.vm, w2.vm, abi.wob(V.live, w2.objs.c_bytes), s.fs_base, abi.sp(s)) && m1.os = w2.os &&
+        w2.objs.c_bytes = V.c_bytes && (b -> m1.fs_base = s.fs_base) && (!b -> m1.fs_base = w2.fs_base) by ex_intro({w3}, taut(h3, f1, f2))
+    show by defs(taut(rx, e3), tr.rtv)
+  qed
+  have k1: tr.ub(s, V, P, W) -> tr.mtv(b, s, V, P, W, o, false) proof
+    assume u
+    show by defs(taut(u), tr.mtv)
+  qed
+  have rdk := apply(tr.run_d_k, {s}, {s}, {o}, rd, lt)
+  // the claim's run to the same outcome
+  have c1: (ex o1. tr.run_k(s, zb. false, s, o1) && (o1 = o || (fst(o1) = 2 && fst(o) = 2))) -> tr.mtv(b, s, V, P, W, o, false) proof
+    assume e
+    obtain o1, rk eo from e
+    have g := expand(mp(all_elim(sm, {o1}), rk), tr.gk)
+    have k2: tr.crash(s, P, W, o1) -> tr.mtv(b, s, V, P, W, o, false) proof
+      assume c
+      obtain m1 a k0, {oe} from expand(c, tr.crash)
+      have nd: !(fst(o1) = 2) by simp(oe)
+      have oe2: o1 = o by taut(eo, nd)
+      have c2 := rewrite(oe2, c)
+      show by defs(taut(c2), tr.mtv)
+    qed
+    have k3: tr.div(P, W, o1) -> tr.mtv(b, s, V, P, W, o, false) proof
+      assume d
+      obtain t2, te from expand(d, tr.div).1
+      have f1: fst(o1) = 2 by simp(te)
+      have f0a: o1 = o -> fst(o) = 2 proof
+        assume e5
+        show := rewrite(e5, f1)
+      qed
+      have f0: fst(o) = 2 by taut(eo, f0a)
+      have ed := apply(tr.run_d_div, rd, f0)
+      have d2: tr.div(P, W, o) by defs(taut(ed, expand(d, tr.div).2), tr.div)
+      show by defs(taut(d2), tr.mtv)
+    qed
+    // (the claim's run returning: the run returns there)
+    have k4: (ex m1. o1 = ok(m1, empty) && tr.arr(s, zb. false, zb pb wb. false, V, m1, P, W)) -> tr.mtv(b, s, V, P, W, o, false) proof
+      assume e2
+      obtain m1, oe1 ha from e2
+      have st := apply(tr.run_k_stop[bkp := zb. false], {s}, {s}, {m1}, {empty}, rewrite(oe1, rk))
+      have ou: tr.out(s, m1) by taut(expand(st, tr.stopk))
+      have hr := mp(expand(ha, tr.arr).1, ou)
+      have rv := mp(all_elim(rt, {m1}), hr)
+      have nd: !(fst(o1) = 2) by simp(oe1)
+      have oe0: o1 = o by taut(eo, nd)
+      have oe: o = ok(m1, empty) := trans(sym(oe0), oe1)
+      have e5: ex m2. o = ok(m2, empty) && tr.rtv(b, s, V, P, W, m2) by ex_intro({m1}, taut(oe, rv))
+      show by defs(taut(e5), tr.mtv)
+    qed
+    have k5: tr.xo(P, W, o1) -> tr.mtv(b, s, V, P, W, o, false) proof
+      assume hx
+      obtain m1 st x, _ xe _ _ from expand(hx, tr.xo)
+      have nd: !(fst(o1) = 2) by simp(xe)
+      have oe2: o1 = o by taut(eo, nd)
+      show by defs(taut(rewrite(oe2, hx)), tr.mtv)
+    qed
+    show by taut(g, k1, k2, k3, k4, k5)
+  qed
+  // the claim's run stopping where the run leaves with disc: undefined
+  have c2: (ex x. o = exc(x, exc_val("disc", empty)) && tr.run_k(s, zb. false, s, ok(x, empty)) && !tr.at_ret(s, x)) -> tr.mtv(b, s, V, P, W, o, false) proof
+    assume e
+    obtain x, oe rk nat from e
+    have g := expand(mp(all_elim(sm, {ok(x, empty)}), rk), tr.gk)
+    have k2: tr.crash(s, P, W, ok(x, empty)) -> false proof
+      assume c
+      obtain m1 a k0, {oe} from expand(c, tr.crash)
+      show by simp(oe)
+    qed
+    have k3 := all_elim(tr.div_ok, {P}, {W}, {x}, {empty})
+    have k4: (ex m1. ok(x, empty) = ok(m1, empty) && tr.arr(s, zb. false, zb pb wb. false, V, m1, P, W)) -> false proof
+      assume e2
+      obtain m1, oe1 ha from e2
+      have me: m1 = x by simp(oe1)
+      have st := apply(tr.run_k_stop[bkp := zb. false], {s}, {s}, {x}, {empty}, rk)
+      have ou: tr.out(s, x) by taut(expand(st, tr.stopk))
+      have ha2 := rewrite(me, ha)
+      have rx := expand(mp(expand(ha2, tr.arr).1, ou), tr.retok)
+      have at: tr.at_ret(s, x) by taut(rx)
+      show by taut(at, nat)
+    qed
+    show by taut(g, k1, k2, k3, k4, all_elim(tr.xo_ok, {P}, {W}, {x}, {empty}))
+  qed
+  show by taut(rdk, c1, c2)
+qed
+
+// (... in the mode b: tr.entry_gkm's premises)
+theorem tr.fin_dm: all b f. (all spec args s v mem o. s in x86_64_linux.Machine -> int_lt(s.gpr[4], 140737488355328) -> s.rip = f ->
+  tr.sim(s, zb. false, zb pb wb. false, abi.wob(v, tr.cbm(b, s.fs_base)), spec[args], tr.vw(b, s, v, mem), s) -> tr.run_d(s, s, o) ->
+  tr.mtv(b, s, abi.wob(v, tr.cbm(b, s.fs_base)), spec[args], tr.vw(b, s, v, mem), o, false))
+proof
+  fix b f
+  fix spec args s v mem o
+  assume hM hsl hrip h rd
+  have bm: b -> tr.mainv(s, abi.wob(v, tr.cbm(b, s.fs_base))) proof
+    assume hb
+    have e := mp(ite_t[c := b, a := abi.cbytes0(s.fs_base), b := abi.cball], hb)
+    show by simp(e)
+  qed
+  show := apply(tr.entry_dm, {b}, {spec[args]}, {tr.vw(b, s, v, mem)}, {s}, {abi.wob(v, tr.cbm(b, s.fs_base))}, {o}, hM, hsl, bm, h, rd)
+qed
+
+// ----------------------------------------------------------------------
+//  The call rules without a stop (as tr.callee_sim_smc's, its runs from
+//  the callee's entry tr.run_d): a direct call under the callee's contract
+//  (tr.chd), the caller's breakpoints none below its frame
+
+theorem tr.callee_sim_dmc(b, g, args, x9 x10 x8. a, x9 x10 x8. xx, x9 x8. dd, x8 x1. k, x3 x4 x2. kw, zb. bkp, zb pb wb. bka): all s v base code fr m w n hs fd RA T m1 e1 C cb cc st rs rc.
+  tr.hap(s, hs, v) -> tr.ofr(s, fr, v) ->
+  tr.inv(s, base, code, fr, m, w) -> tr.cfr(fr) -> tr.mem(s, m, w, v) -> v.c_bytes = tr.cbm(b, s.fs_base) -> base in omega -> tr.regs(m, rs) -> tr.cs_sub(rc, rs) ->
+  tr.args_in(m, args) -> seq_len(args) = n -> n in omega -> int_le(n, 6) -> RA in bits(64) -> T in bits(64) ->
+  runs(x86_64_linux.touch_range(bits_sub(64, m.gpr[4], 8), 8, 1), fn_update(m, "rip", RA), ok(m1, e1)) ->
+  C = fn_update(fn_update(fn_update(m1, "vm", fn_update(m1.vm, "bytes", x86_64_linux.store_le(m1.vm.bytes, bits_sub(64, m.gpr[4], 8), 8, RA))),
+    "gpr", fn_update(m1.gpr, 4, bits_sub(64, m.gpr[4], 8))), "rip", T) ->
+  tr.chd(b, fr, C, T, g, n, v.live, cb, cc, st) ->
+  (int_mod(fr, 16) = 8 -> tr.sal16(s)) -> abi.loaded(s.vm, cb, cc, st) -> cb in omega ->
+  tr.homes(s, m, hs) -> tr.hin(hs, fr) -> fd in omega -> int_le(fd, int_add(fr, 8)) ->
+  g in fn_space(abi.ARGS, powerset(univ(1))) -> tr.callee_io(g, n) ->
+  (all x e. x in univ(1) -> e in univ(1) -> runs(mkprog(x0 x1. ex x8. xx(x, e, x8) && k(x8, x1)), w, exc(x, e))) -> (all t0. t0 in univ(1) -> runs(mkprog(x0 x1. ex x8. dd(t0, x8) && k(x8, x1)), w, diverge(t0))) ->
+  (all w4 r0 r1. w4 in abi.World && w4 in univ(1) -> r0 in bits(64) -> r1 in bits(64) -> tr.pt(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb),
+    v, base, code, fr, RA, hs, fd, fn_update(fn_update(rc, 0, pair(8, r0)), 2, pair(8, r1)),
+    mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. a(x0, pair(r0, r1), x8) && k(x8, x1)), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w4)) ->
+  (all z. int_lt(z.gpr[4], m.gpr[4]) -> !bkp(z)) ->
+  tr.cl(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v,
+    mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. bind_rel(gc.cm(b, g, args), x0, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), x1,
+    x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w, C)
+proof
+  fix s v base code fr m w n hs fd RA T m1 e1 C cb cc st rs rc
+  assume hap hofr hi hcf hmm hmn hb hrs hsub hargs hln hno hn6 hra ht htr hC himp hal hld hcb hhs hhin hfo hfd hgt hio hk hd hpost hbx
+  let S := s.gpr[4]
+  let W1 := w
+  let P := mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. bind_rel(gc.cm(b, g, args), x0, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), x1,
+    x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))
+  let R := m.gpr[4]
+  let regs := tr.aregs(m, n)
+  have {sM, mM, wW, wu} := apply(tr.inv_call, hi)
+  have {kc} := hi
+  have {rb, r16, rlt, rss = rs, sb, slt} := apply(tr.call_rsp, hi, hcf)
+  have cM cu co cf cc0 cgs cfl cgpr crip ckc cvf cle cpi cby cstk cacc := apply(tr.push_ok, {s}, {base}, {code}, {fr}, {m}, {w}, {RA}, {T}, {m1}, {e1}, {C}, hi, hcf, hra, ht, htr, hC)
+  have cv: C.vm in x86_64_linux.Vm := apply(x86i.parts, cM).4
+  have c4: C.gpr[4] = int_sub(R, 8) by simp(cgpr)
+  have spc: abi.sp(C) = R by simp(c4, rb, r16, rlt)
+  have sp8: abi.sp(s) = int_add(S, 8) by simp(sb, slt)
+  have rg1 rg2 rg3 hA _ rlen _ := apply(tr.aregs_ok, {m}, {args}, {n}, mM, hln, hno, hn6, hargs)
+  have rg: gc.regs_ok(regs, args) := conj(rg1, rg2, rg3)
+  // (C: no stop of the caller's -- below its rsp)
+  have nrC: int_lt(C.gpr[4], abi.sp(s)) by arith(c4, sp8, rss, rb, r16)
+  have ltC: int_lt(C.gpr[4], m.gpr[4]) by arith(c4, r16)
+  have nbC := mp(all_elim(hbx, {C}), ltC)
+  // GIMPLE's checks failing at the world grown (the main mode's): undefined
+  have bad: (b && !gc.sound(W1)) -> tr.cl(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, P, w, C) proof
+    assume hn
+    have ub := apply(tr.gcall_ub_m[b := b, g := g, args := args, a := x9 x10 x8. a(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {s}, {v}, {w}, {regs}, wW, wu, rg, hn.1, hn.2, hk)
+    have su := apply(tr.sim_ub[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], {s}, {v}, {P}, {w}, {C}, ub)
+    show := apply(tr.sim_cl[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], {s}, {v}, {P}, {w}, {C}, nrC, nbC, su)
+  qed
+  // ... holding: the callee's entry, its contract
+  have good: (b -> gc.sound(W1)) -> tr.cl(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, P, w, C) proof
+    assume hs
+    have eoku eok vok ook veq wvv dso := apply(tr.callee_ready_m, {b}, {s}, {base}, {code}, {fr}, {m}, {w}, {v}, {RA}, {T}, {m1}, {e1}, {C}, {n}, hofr, hi, hcf, hmm, hmn, hra, ht, hno, hn6, htr, hC, hs)
+    have l1 := mp(all_elim(expand(kc, tr.keeps_code), {cb}, {cc}, {st}), hcb, hld)
+    have lC := mp(all_elim(expand(ckc, tr.keeps_code), {cb}, {cc}, {st}), hcb, l1)
+    let WV := W1.vm
+    let VC := abi.wob(v.live, tr.cbm(b, C.fs_base))
+    let WC := tr.vw(b, C, v.live, WV)
+    let G := g[regs]
+    have ctr: all oc. tr.run_d(C, C, oc) -> tr.mtv(b, C, VC, G, WC, oc, false) proof
+      fix oc
+      assume hrd
+      have e8: int_mod(fr, 16) = 8 -> tr.eok(b, false, C, regs) proof
+        assume h8
+        show := mp(eok, h8, mp(hal, h8))
+      qed
+      show := mp(all_elim(himp, {regs}, {WV}, {oc}), hA, rlen, dso, wvv, cM, cu, lC, crip, eoku, e8, ook, vok, hrd)
+    qed
+    have w1W: W1 in abi.World := wW
+    have w1u: W1 in univ(1) := wu
+    // the callee raising: the caller raises so
+    have rex: all x e. e in univ(1) -> runs(G, WC, exc(x, e)) -> runs(P, w, exc(x, e)) proof
+      fix x e
+      assume eu rr
+      have rr2 := rewrite(veq, rr)
+      have pu := apply(tr.spec_univ, {g}, {regs}, {W1}, {exc(x, e)}, hgt, hA, rr2)
+      have xu: x in univ(1) by simp(pu)
+      show := apply(tr.gcall_exc_m[b := b, g := g, args := args, a := x9 x10 x8. a(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {w}, {regs}, {x}, {e}, wu, xu, eu, rg, hs, rr2, hk)
+    qed
+    have rub: tr.ub(C, VC, G, WC) -> tr.ub(s, v, P, w) proof
+      assume hr
+      obtain e x, eu eno ena rst rr from expand(hr, tr.ub)
+      have pe := mp(all_elim(rex, {x}, {e}), eu, rr)
+      show by defs(ex_intro({e}, {x}, taut(eu, eno, ena, rst, pe)), tr.ub)
+    qed
+    // the callee returned to x: the caller's claim reaching x (or the call
+    // undefined)
+    have rcl: all x. tr.run_d(C, C, ok(x, empty)) -> tr.ub(s, v, P, w) || tr.cl(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, P, w, x) proof
+      fix x
+      assume hrx
+      have mt2 := expand(mp(all_elim(ctr, {ok(x, empty)}), hrx), tr.mtv)
+      have n2: tr.crash(C, G, WC, ok(x, empty)) -> false proof
+        assume ca
+        obtain m2 a0 k0, {oe} from expand(ca, tr.crash)
+        show by simp(oe)
+      qed
+      have u1: tr.ub(C, VC, G, WC) -> tr.ub(s, v, P, w) || tr.cl(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, P, w, x) proof
+        assume ra
+        have ub := mp(rub, ra)
+        show by taut(ub)
+      qed
+      have u2: (ex m1. ok(x, empty) = ok(m1, empty) && tr.rtv(b, C, VC, G, WC, m1)) -> tr.ub(s, v, P, w) || tr.cl(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, P, w, x) proof
+        assume eo
+        obtain m2, eo1 rv from eo
+        have xm: x = m2 by simp(eo1)
+        let r0 := x.gpr[0]
+        let r1 := x.gpr[2]
+        have xM xu ew xcpu xgs xrip0 xr4 xcs xdf := expand(rewrite(sym(xm), rv), tr.rtv)
+        obtain w2, hg0 w2W w2u wm1 xos cb1 xfs1 xfs0 from ew
+        have wm0: tr.wmc(C.vm, x.vm, w2.vm, abi.wob(v.live, w2.objs.c_bytes), C.fs_base, abi.sp(C)) by simp(wm1, keep(tr.wmc))
+        have w2cb: w2.objs.c_bytes = tr.cbm(b, C.fs_base) by simp(cb1)
+        have hg8 := rewrite(veq, hg0)
+        have r0R: 0 in x86_64_linux.Reg by simp()
+        have r2R: 2 in x86_64_linux.Reg by simp()
+        have r0b := mp(mp(all_elim(x86i.reg_typed, {x}, {0}), xM), r0R)
+        have r1b := mp(mp(all_elim(x86i.reg_typed, {x}, {2}), xM), r2R)
+        have r0u: r0 in univ(1) by simp(r0b)
+        have r1u: r1 in univ(1) by simp(r1b)
+        // the callee's spec: a valid world on its return, or undefined there (so is this call)
+        have ci := mp(all_elim(expand(hio, tr.callee_io), {regs}, {W1}, {w2}, {pair(r0, r1)}),
+          (ord_le(n, seq_len(regs)) by defs(simp(rlen), ord_le)), hg8)
+        have mr: tr.may_raise(g, regs, W1) -> tr.ub(s, v, P, w) || tr.cl(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, P, w, x) proof
+          assume hm
+          have eu: empty in univ(1) by simp()
+          have hx: all x e. x in univ(1) -> e in univ(1) -> runs(g[regs], W1, exc(x, e)) by taut(expand(expand(hm, tr.may_raise), tr.undef))
+          have pe := mp(all_elim(hx, {W1}, {empty}), w1u, eu)
+          have eno := tr.undef_empty
+          have rst: abi.raise_state(W1) by defs(apply(tr.world_and, w1W), abi.raise_state)
+          have pe2 := subst({y. runs(g[regs], y, exc(W1, empty))}, sym(veq), pe)
+          have ra: tr.ub(C, VC, G, WC) by defs(ex_intro({empty}, {W1}, taut(eu, eno, rst, pe2)), tr.ub)
+          show := mp(u1, ra)
+        qed
+        // the caller goes on at the return address with the result
+        have fk: tr.returns_valid(W1, w2) -> tr.ub(s, v, P, w) || tr.cl(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, P, w, x) proof
+          assume rv
+          have xv: x.vm in x86_64_linux.Vm := apply(x86i.parts, xM).4
+          have pinv pmem phom pfr preg prip := apply(tr.post_call_m, {b}, {s}, {base}, {code}, {fr}, {m}, {w}, {v}, {RA}, {T}, {m1}, {e1}, {C}, {x}, {w2}, {hs}, {fd}, {rs}, {rc},
+            hi, hcf, hmm, hmn, hb, hra, ht, htr, hC, rv, xM, xu, w2W, w2u, wm0, xos, w2cb, xfs1, xfs0, xcpu, xgs, xrip0, xr4, xcs, xdf, hhs, hap, hofr, hhin, hfo, hfd, hrs, hsub)
+          let W4 := gc.bm(b, w2, W1)
+          have _ pk := apply(tr.gcall_ret_m[b := b, g := g, args := args, a := x9 x10 x8. a(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {w}, {regs}, {w2}, {r0}, {r1}, wu, w2u, r0u, r1u, rg, hs, hg8, hk)
+          have red: tr.red(P, w, mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. a(x0, pair(r0, r1), x8) && k(x8, x1)), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), W4) by defs(pk, tr.red)
+          have {w4W = wW, w4u = wu} := pinv
+          have ptk := mp(all_elim(hpost, {W4}, {r0}, {r1}), taut(w4W, w4u), r0b, r1b)
+          have sm := mp(all_elim(expand(ptk, tr.pt), {x}), pinv, prip, phom, preg, pmem, pfr)
+          have sm2 := apply(tr.cl_red[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], {s}, {v}, {P}, {w},
+            {mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. a(x0, pair(r0, r1), x8) && k(x8, x1)), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))}, {W4}, {x}, red, sm)
+          show by taut(sm2)
+        qed
+        show by taut(fk, ci, mr)
+      qed
+      have n3 := all_elim(tr.div_ok, {G}, {WC}, {x}, {empty})
+      have n6 := all_elim(tr.xo_ok, {G}, {WC}, {x}, {empty})
+      show by taut(mt2, n2, n3, n6, u1, u2)
+    qed
+    // the callee exiting: so does the caller's spec
+    have xcl: all o1. tr.xo(G, WC, o1) -> tr.xo(P, w, o1) proof
+      fix o1
+      assume hx
+      obtain m2 st x, stu eo rst rr from expand(hx, tr.xo)
+      have eu: exc_val("exit", st) in univ(1) by defs(simp(stu), exc_val)
+      have pe := mp(all_elim(rex, {x}, {exc_val("exit", st)}), eu, rr)
+      show by defs(ex_intro({m2}, {st}, {x}, taut(stu, eo, rst, pe)), tr.xo)
+    qed
+    // the caller's run from C
+    have spl: int_le(abi.sp(C), abi.sp(s)) by arith(spc, sp8, rss)
+    have cl0: int_lt(C.gpr[4], abi.sp(C)) by arith(c4, spc, r16)
+    have hbc: all z. int_lt(z.gpr[4], abi.sp(C)) -> !bkp(z) proof
+      fix z
+      assume lt
+      show := mp(all_elim(hbx, {z}), rewrite(spc, lt))
+    qed
+    have g0: all o. tr.run_k(s, zb. bkp(zb), C, o) -> tr.gk(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, P, w, o) proof
+      fix o
+      assume hr
+      let GK(o2) := tr.gk(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, P, w, o2)
+      have rs := apply(tr.run_split_k[bkp := zb. bkp(zb)], {s}, {C}, {o}, sM, spl, cl0, hbc, hr)
+      have ub2: tr.ub(s, v, P, w) -> GK(o) proof
+        assume u
+        show by defs(taut(u), tr.gk)
+      qed
+      // (a return reached at x: the caller's run stops there, or goes on)
+      have atx: all x. tr.run_d(C, C, ok(x, empty)) -> o = ok(x, empty) -> GK(o) proof
+        fix x
+        assume hrx oe
+        have c := mp(all_elim(rcl, {x}), hrx)
+        have k2: tr.cl(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, P, w, x) -> GK(o) proof
+          assume hc
+          have st := apply(tr.run_k_stop[bkp := zb. bkp(zb)], {s}, {C}, {x}, {empty}, rewrite(oe, hr))
+          have ar := mp(expand(hc, tr.cl).1, st)
+          have e2: ex m3. o = ok(m3, empty) && tr.arr(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, m3, P, w) by ex_intro({x}, taut(oe, ar))
+          show by defs(taut(e2), tr.gk)
+        qed
+        show by taut(c, ub2, k2)
+      qed
+      // (1) the caller's run is the callee's
+      have b1: (ex o1. tr.run_d(C, C, o1) && (o1 = o || (fst(o1) = 2 && fst(o) = 2))) -> GK(o) proof
+        assume e
+        obtain o1, hrc eo from e
+        have mt2 := expand(mp(all_elim(ctr, {o1}), hrc), tr.mtv)
+        have u1: tr.ub(C, VC, G, WC) -> GK(o) proof
+          assume ra
+          show := mp(ub2, mp(rub, ra))
+        qed
+        have u2: tr.crash(C, G, WC, o1) -> GK(o) proof
+          assume ca
+          have cr := apply(tr.callee_crash_m[b := b, g := g, args := args, a := x9 x10 x8. a(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {s}, {base}, {code}, {fr}, {m}, {w}, {v}, {regs}, {C}, {o1}, hi, hcf, hmm, co, c4, rg, hs, hgt, hA, veq, hk, hd, ca)
+          obtain m2 a0 k0, {oe} from expand(cr, tr.crash)
+          have nd: !(fst(o1) = 2) by simp(oe)
+          have oe1: o1 = o by taut(eo, nd)
+          have cr2 := rewrite(oe1, cr)
+          show by defs(taut(cr2), tr.gk)
+        qed
+        have u3: (ex m1. o1 = ok(m1, empty) && tr.rtv(b, C, VC, G, WC, m1)) -> GK(o) proof
+          assume eo2
+          obtain m2, eo3 _ from eo2
+          have nd: !(fst(o1) = 2) by simp(eo3)
+          have oe1: o1 = o by taut(eo, nd)
+          have oe: o = ok(m2, empty) := trans(sym(oe1), eo3)
+          have hrx := rewrite(eo3, hrc)
+          show := mp(all_elim(atx, {m2}), hrx, oe)
+        qed
+        // (the callee diverging: so does the caller's spec)
+        have u4: tr.div(G, WC, o1) -> GK(o) proof
+          assume dv
+          have dv1 dv2 := expand(dv, tr.div)
+          obtain t2, rd from dv2
+          obtain t3, te from dv1
+          have f1: fst(o1) = 2 by simp(te)
+          have f0a: o1 = o -> fst(o) = 2 proof
+            assume e5
+            show := rewrite(e5, f1)
+          qed
+          have f0: fst(o) = 2 by taut(eo, f0a)
+          obtain r0, _ rm0 from expand(hr, tr.run_k)
+          have od := apply(tr.rmap_div, {r0}, {o}, rm0, f0)
+          have rd2 := rewrite(veq, rd)
+          have pu := apply(tr.spec_univ, {g}, {regs}, {W1}, {diverge(t2)}, hgt, hA, rd2)
+          have t2u: t2 in univ(1) by simp(pu)
+          have pd := apply(tr.gcall_div_m[b := b, g := g, args := args, a := x9 x10 x8. a(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {w}, {regs}, {t2}, wu, t2u, rg, hs, rd2, hd)
+          have e2: ex t4. runs(P, w, diverge(t4)) by ex_intro({t2}, pd)
+          have e3: ex t5. o = diverge(t5) by ex_intro({snd(r0)}, od)
+          have d: tr.div(P, w, o) by defs(taut(e3, e2), tr.div)
+          show by defs(taut(d), tr.gk)
+        qed
+        have u6: tr.xo(G, WC, o1) -> GK(o) proof
+          assume hx
+          have px := mp(all_elim(xcl, {o1}), hx)
+          obtain m2 st x, _ xe _ _ from expand(hx, tr.xo)
+          have nd: !(fst(o1) = 2) by simp(xe)
+          have oe1: o1 = o by taut(eo, nd)
+          show by defs(taut(rewrite(oe1, px)), tr.gk)
+        qed
+        show by taut(mt2, u1, u2, u3, u4, u6)
+      qed
+      // (2) the callee returned to x, the caller's run on from x
+      have b2: (ex x r1 o1. tr.run_d(C, C, ok(x, empty)) && tr.rwk(s, zb. bkp(zb), pair(x, empty), r1) && tr.rmap(r1, o1) &&
+          (o1 = o || (fst(o1) = 2 && fst(o) = 2))) -> GK(o) proof
+        assume e
+        obtain x r1 o1, hrx hw1 hm1 eo from e
+        have c := mp(all_elim(rcl, {x}), hrx)
+        have k2: tr.cl(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, P, w, x) -> GK(o) proof
+          assume hc
+          have g1 := apply(tr.cl_rwk[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], {s}, {v}, {P}, {w}, {x}, {r1}, {o1}, hc, hw1, hm1)
+          have same: o1 = o -> GK(o) proof
+            assume e5
+            show := rewrite(e5, g1)
+          qed
+          have divs: (fst(o1) = 2 && fst(o) = 2) -> GK(o) proof
+            assume dd2
+            have od1 := apply(tr.rmap_div, {r1}, {o1}, hm1, dd2.1)
+            obtain r0, _ rm0 from expand(hr, tr.run_k)
+            have od := apply(tr.rmap_div, {r0}, {o}, rm0, dd2.2)
+            have g2 := apply(tr.gk_div[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], {s}, {v}, {P}, {w}, {snd(r1)}, {snd(r0)}, rewrite(od1, g1))
+            show := rewrite(sym(od), g2)
+          qed
+          show by taut(eo, same, divs)
+        qed
+        show by taut(c, ub2, k2)
+      qed
+      // (3) the callee leaving its discipline: its contract has it raise
+      have b3: (ex x. tr.run_d(C, C, exc(x, exc_val("disc", empty)))) -> GK(o) proof
+        assume ed
+        obtain x, hx from ed
+        have mt2 := expand(mp(all_elim(ctr, {exc(x, exc_val("disc", empty))}), hx), tr.mtv)
+        have n1: (ex m1. exc(x, exc_val("disc", empty)) = ok(m1, empty) && tr.rtv(b, C, VC, G, WC, m1)) -> false proof
+          assume eo
+          obtain m2, eo2 _ from eo
+          show by simp(eo2)
+        qed
+        have n2: tr.crash(C, G, WC, exc(x, exc_val("disc", empty))) -> false proof
+          assume ca
+          obtain m2 a0 k0, {oe} from expand(ca, tr.crash)
+          show by simp(expand(oe, exc_val))
+        qed
+        have n3 := all_elim(tr.div_exc, {G}, {WC}, {x}, {exc_val("disc", empty)})
+        have n5 := all_elim(tr.xo_disc, {G}, {WC}, {x})
+        have r3: tr.ub(C, VC, G, WC) by taut(mt2, n1, n2, n3, n5)
+        show := mp(ub2, mp(rub, r3))
+      qed
+      show by taut(rs, b1, b2, b3)
+    qed
+    have sm: tr.sim(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, P, w, C) by defs(g0, tr.sim)
+    show := apply(tr.sim_cl[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], {s}, {v}, {P}, {w}, {C}, nrC, nbC, sm)
+  qed
+  show by taut(bad, good)
+qed
+
+// (the callee's contract for either alignment, tr.ccs_d)
+theorem tr.callee_sim_dm(b, g, args, x9 x10 x8. a, x9 x10 x8. xx, x9 x8. dd, x8 x1. k, x3 x4 x2. kw, zb. bkp, zb pb wb. bka): all s v base code fr m w n hs fd RA T m1 e1 C cb cc st rs rc.
+  tr.hap(s, hs, v) -> tr.ofr(s, fr, v) ->
+  tr.inv(s, base, code, fr, m, w) -> tr.cfr(fr) -> tr.mem(s, m, w, v) -> v.c_bytes = tr.cbm(b, s.fs_base) -> base in omega -> tr.regs(m, rs) -> tr.cs_sub(rc, rs) ->
+  tr.args_in(m, args) -> seq_len(args) = n -> n in omega -> int_le(n, 6) -> RA in bits(64) -> T in bits(64) ->
+  runs(x86_64_linux.touch_range(bits_sub(64, m.gpr[4], 8), 8, 1), fn_update(m, "rip", RA), ok(m1, e1)) ->
+  C = fn_update(fn_update(fn_update(m1, "vm", fn_update(m1.vm, "bytes", x86_64_linux.store_le(m1.vm.bytes, bits_sub(64, m.gpr[4], 8), 8, RA))),
+    "gpr", fn_update(m1.gpr, 4, bits_sub(64, m.gpr[4], 8))), "rip", T) ->
+  tr.ccs_d(b, fr, T, g, cb, cc, st) ->
+  (int_mod(fr, 16) = 8 -> tr.sal16(s)) -> abi.loaded(s.vm, cb, cc, st) -> cb in omega ->
+  tr.homes(s, m, hs) -> tr.hin(hs, fr) -> fd in omega -> int_le(fd, int_add(fr, 8)) ->
+  g in fn_space(abi.ARGS, powerset(univ(1))) -> tr.callee_io(g, n) ->
+  (all x e. x in univ(1) -> e in univ(1) -> runs(mkprog(x0 x1. ex x8. xx(x, e, x8) && k(x8, x1)), w, exc(x, e))) -> (all t0. t0 in univ(1) -> runs(mkprog(x0 x1. ex x8. dd(t0, x8) && k(x8, x1)), w, diverge(t0))) ->
+  (all w4 r0 r1. w4 in abi.World && w4 in univ(1) -> r0 in bits(64) -> r1 in bits(64) -> tr.pt(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb),
+    v, base, code, fr, RA, hs, fd, fn_update(fn_update(rc, 0, pair(8, r0)), 2, pair(8, r1)),
+    mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. a(x0, pair(r0, r1), x8) && k(x8, x1)), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w4)) ->
+  (all z. int_lt(z.gpr[4], m.gpr[4]) -> !bkp(z)) ->
+  tr.cl(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v,
+    mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. bind_rel(gc.cm(b, g, args), x0, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), x1,
+    x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w, C)
+proof
+  fix s v base code fr m w n hs fd RA T m1 e1 C cb cc st rs rc
+  assume hap hofr hi hcf hmm hmn hb hrs hsub hargs hln hno hn6 hra ht htr hC himp hal hld hcb hhs hhin hfo hfd hgt hio hk hd hpost hbx
+  have hc := mp(all_elim(tr.ccs_d_chd, {b}, {fr}, {C}, {T}, {g}, {n}, {v.live}, {cb}, {cc}, {st}), himp)
+  show := apply(tr.callee_sim_dmc[b := b, g := g, args := args, a := x9 x10 x8. a(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2),
+    bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], {s}, {v}, {base}, {code}, {fr}, {m}, {w}, {n}, {hs}, {fd}, {RA}, {T}, {m1}, {e1}, {C}, {cb}, {cc}, {st}, {rs}, {rc},
+    hap, hofr, hi, hcf, hmm, hmn, hb, hrs, hsub, hargs, hln, hno, hn6, hra, ht, htr, hC, hc, hal, hld, hcb, hhs, hhin, hfo, hfd, hgt, hio, hk, hd, hpost, hbx)
+qed
+
+// the code map's contracts: at every address one without a stop
+def tr.code_okd(b, fptr, n, fr, cb, cc, st) := all T. T in bits(64) -> tr.ccs_d(b, fr, T, fptr[T], cb, cc, st) && tr.callee_io(fptr[T], n)
+
+// a call through the code map
+theorem tr.callee_ind_dm(b, fptr, args, x9 x10 x8. a, x9 x10 x8. xx, x9 x8. dd, x8 x1. k, x3 x4 x2. kw, zb. bkp, zb pb wb. bka): all s v base code fr m w n hs fd RA T m1 e1 C cb cc st rs rc.
+  tr.hap(s, hs, v) -> tr.ofr(s, fr, v) ->
+  tr.inv(s, base, code, fr, m, w) -> tr.cfr(fr) -> tr.mem(s, m, w, v) -> v.c_bytes = tr.cbm(b, s.fs_base) -> base in omega -> tr.regs(m, rs) -> tr.cs_sub(rc, rs) ->
+  tr.args_in(m, args) -> seq_len(args) = n -> n in omega -> int_le(n, 6) -> RA in bits(64) -> T in bits(64) ->
+  runs(x86_64_linux.touch_range(bits_sub(64, m.gpr[4], 8), 8, 1), fn_update(m, "rip", RA), ok(m1, e1)) ->
+  C = fn_update(fn_update(fn_update(m1, "vm", fn_update(m1.vm, "bytes", x86_64_linux.store_le(m1.vm.bytes, bits_sub(64, m.gpr[4], 8), 8, RA))),
+    "gpr", fn_update(m1.gpr, 4, bits_sub(64, m.gpr[4], 8))), "rip", T) ->
+  tr.code_okd(b, fptr, n, fr, cb, cc, st) -> (int_mod(fr, 16) = 8 -> tr.sal16(s)) -> abi.loaded(s.vm, cb, cc, st) -> cb in omega ->
+  tr.homes(s, m, hs) -> tr.hin(hs, fr) -> fd in omega -> int_le(fd, int_add(fr, 8)) ->
+  fptr in fn_space(bits(64), fn_space(abi.ARGS, powerset(univ(1)))) ->
+  (all x e. x in univ(1) -> e in univ(1) -> runs(mkprog(x0 x1. ex x8. xx(x, e, x8) && k(x8, x1)), w, exc(x, e))) -> (all t0. t0 in univ(1) -> runs(mkprog(x0 x1. ex x8. dd(t0, x8) && k(x8, x1)), w, diverge(t0))) ->
+  (all w4 r0 r1. w4 in abi.World && w4 in univ(1) -> r0 in bits(64) -> r1 in bits(64) -> tr.pt(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb),
+    v, base, code, fr, RA, hs, fd, fn_update(fn_update(rc, 0, pair(8, r0)), 2, pair(8, r1)),
+    mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. a(x0, pair(r0, r1), x8) && k(x8, x1)), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w4)) ->
+  (all z. int_lt(z.gpr[4], m.gpr[4]) -> !bkp(z)) ->
+  tr.cl(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v,
+    mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. bind_rel(gc.cm(b, fptr[T], args), x0, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), x1,
+    x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w, C)
+proof
+  fix s v base code fr m w n hs fd RA T m1 e1 C cb cc st rs rc
+  assume hap hofr hi hcf hmm hmn hb hrs hsub hargs hln hno hn6 hra ht htr hC hcode hal hld hcb hhs hhin hfo hfd hft hk hd hpost hbx
+  let G := fptr[T]
+  have hcs hio := mp(all_elim(expand(hcode, tr.code_okd), {T}), ht)
+  have gt: G in fn_space(abi.ARGS, powerset(univ(1))) := mp(fn_space_app[a := bits(64), b := fn_space(abi.ARGS, powerset(univ(1))), f := fptr, x := T], hft, ht)
+  show := apply(tr.callee_sim_dm[b := b, g := G, args := args, a := x9 x10 x8. a(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2),
+    bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], {s}, {v}, {base}, {code}, {fr}, {m}, {w}, {n}, {hs}, {fd}, {RA}, {T}, {m1}, {e1}, {C}, {cb}, {cc}, {st}, {rs}, {rc},
+    hap, hofr, hi, hcf, hmm, hmn, hb, hrs, hsub, hargs, hln, hno, hn6, hra, ht, htr, hC, hcs, hal, hld, hcb, hhs, hhin, hfo, hfd, gt, hio, hk, hd, hpost, hbx)
+qed
+
+// ----------------------------------------------------------------------
+//  The call instructions so: `call rel32` under the callee's contract,
+//  `call *%gr` through the code map; one result (gc.c1m); the startup
+//  GIMPLE's calls (gimple.call0, gimple.call1_0: b false)
+
+theorem tr.call_dm(b, s, v, base, code, fr, a, a2, len, off, f, g, args, n, cb, cc, st, hs, ds, fd2, rs, rc, w, x9 x10 x8. ka, x9 x10 x8. xx, x9 x8. dd, x8 x1. k, x3 x4 x2. kw, zb. bkp, zb pb wb. bka):
+  v.c_bytes = tr.cbm(b, s.fs_base) -> tr.ofr(s, fr, v) -> tr.hap(s, hs, v) ->
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(m.vm, base, code) -> m.rip = a -> runs(x86_64_linux.exec_body(len, tag(120, off)), m, o)) ->
+  a2 = bits_add(64, a, bits_of_int(64, len)) -> off in bits(32) -> base in omega ->
+  f = bits_add(64, a2, bits_sext(32, 64, off)) -> tr.ccs_d(b, fr, f, g, cb, cc, st) -> (int_mod(fr, 16) = 8 -> tr.sal16(s)) -> abi.loaded(s.vm, cb, cc, st) -> cb in omega ->
+  tr.cfr(fr) -> seq_len(args) = n -> n in omega -> int_le(n, 6) ->
+  g in fn_space(abi.ARGS, powerset(univ(1))) -> tr.callee_io(g, n) ->
+  (all m. tr.regs(m, rs) -> tr.args_in(m, args)) -> tr.cs_sub(rc, rs) -> tr.hin(hs, fr) -> fd2 in omega -> int_le(fd2, int_add(fr, 8)) ->
+  (all x e. x in univ(1) -> e in univ(1) -> runs(mkprog(x0 x1. ex x8. xx(x, e, x8) && k(x8, x1)), w, exc(x, e))) ->
+  (all t0. t0 in univ(1) -> runs(mkprog(x0 x1. ex x8. dd(t0, x8) && k(x8, x1)), w, diverge(t0))) ->
+  (all w4 r0 r1. w4 in abi.World && w4 in univ(1) -> r0 in bits(64) -> r1 in bits(64) -> tr.pt(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a2, hs, fd2, fn_update(fn_update(rc, 0, pair(8, r0)), 2, pair(8, r1)),
+    mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. ka(x0, pair(r0, r1), x8) && k(x8, x1)), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w4)) ->
+  (all z. int_lt(z.gpr[4], int_sub(s.gpr[4], fr)) -> !bkp(z)) ->
+  tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, ds, rs, mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. bind_rel(gc.cm(b, g, args), x0, x9 x10. ka(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), x1,
+    x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w)
+proof
+  assume hmn hofr hap hat ha2 hoff hb hf himp hal hld hcb hcf hln hno hn6 hgt hio hreg hsub hhin hfo hfd hk hd hpost hbf
+  have a2b: a2 in bits(64) by simp(ha2)
+  have hst := apply(tr.push_rel[s := s, base := base, code := code, fr := fr, a := a, a2 := a2, len := len, off := off, f := f, rs := rs, w := w], hat, ha2, hoff, hf, hcf)
+  have hcl: all m m1 e1 C. tr.inv(s, base, code, fr, m, w) -> m.rip = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> tr.mem(s, m, w, v) -> tr.frame(s, m, ds) ->
+      runs(x86_64_linux.touch_range(bits_sub(64, m.gpr[4], 8), 8, 1), fn_update(m, "rip", a2), ok(m1, e1)) ->
+      C = fn_update(fn_update(fn_update(m1, "vm", fn_update(m1.vm, "bytes", x86_64_linux.store_le(m1.vm.bytes, bits_sub(64, m.gpr[4], 8), 8, a2))),
+        "gpr", fn_update(m1.gpr, 4, bits_sub(64, m.gpr[4], 8))), "rip", f) ->
+      tr.cl(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. bind_rel(gc.cm(b, g, args), x0, x9 x10. ka(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), x1,
+        x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w, C) proof
+    fix m m1 e1 C
+    assume hi hr hh hrs hmm hfr tr2 hC2
+    have hin := mp(all_elim(hreg, {m}), hrs)
+    have tb: f in bits(64) by simp(hf)
+    have hbm: all z. int_lt(z.gpr[4], m.gpr[4]) -> !bkp(z) proof
+      fix z
+      assume lt
+      have rspm := apply(tr.inv_parts, hi).4
+      show := mp(all_elim(hbf, {z}), rewrite(rspm, lt))
+    qed
+    show := apply(tr.callee_sim_dm[b := b, g := g, args := args, a := x9 x10 x8. ka(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2),
+      bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)],
+      {s}, {v}, {base}, {code}, {fr}, {m}, {w}, {n}, {hs}, {fd2}, {a2}, {f}, {m1}, {e1}, {C}, {cb}, {cc}, {st}, {rs}, {rc}, hap, hofr,
+      hi, hcf, hmm, hmn, hb, hrs, hsub, hin, hln, hno, hn6, a2b, tb, tr2, hC2, himp, hal, hld, hcb, hh, hhin, hfo, hfd, hgt, hio, hk, hd, hpost, hbm)
+  qed
+  show := apply(tr.call_gm[b := b, s := s, v := v, base := base, code := code, fr := fr, a := a, a2 := a2, T := f, g := g, args := args, hs := hs, ds := ds, rs := rs, w := w,
+    ka := x9 x10 x8. ka(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2),
+    bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], hst, a2b, hcf, hk, hcl)
+qed
+
+theorem tr.calli_dm(b, s, v, base, code, fr, a, a2, len, gr, z, nb, T, fptr, args, n, cb, cc, st, hs, ds, fd2, rs, rc, w, x9 x10 x8. ka, x9 x10 x8. xx, x9 x8. dd, x8 x1. k, x3 x4 x2. kw, zb. bkp, zb pb wb. bka):
+  v.c_bytes = tr.cbm(b, s.fs_base) -> tr.ofr(s, fr, v) -> tr.hap(s, hs, v) ->
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(m.vm, base, code) -> m.rip = a -> runs(x86_64_linux.exec_body(len, tag(121, pair(tag(0, gr), z))), m, o)) ->
+  a2 = bits_add(64, a, bits_of_int(64, len)) -> gr in x86_64_linux.Reg -> gr in dom(rs) -> rs[gr] = pair(nb, T) -> T in bits(64) -> base in omega ->
+  tr.code_okd(b, fptr, n, fr, cb, cc, st) -> (int_mod(fr, 16) = 8 -> tr.sal16(s)) -> abi.loaded(s.vm, cb, cc, st) -> cb in omega ->
+  tr.cfr(fr) -> seq_len(args) = n -> n in omega -> int_le(n, 6) ->
+  fptr in fn_space(bits(64), fn_space(abi.ARGS, powerset(univ(1)))) ->
+  (all m. tr.regs(m, rs) -> tr.args_in(m, args)) -> tr.cs_sub(rc, rs) -> tr.hin(hs, fr) -> fd2 in omega -> int_le(fd2, int_add(fr, 8)) ->
+  (all x e. x in univ(1) -> e in univ(1) -> runs(mkprog(x0 x1. ex x8. xx(x, e, x8) && k(x8, x1)), w, exc(x, e))) ->
+  (all t0. t0 in univ(1) -> runs(mkprog(x0 x1. ex x8. dd(t0, x8) && k(x8, x1)), w, diverge(t0))) ->
+  (all w4 r0 r1. w4 in abi.World && w4 in univ(1) -> r0 in bits(64) -> r1 in bits(64) -> tr.pt(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a2, hs, fd2, fn_update(fn_update(rc, 0, pair(8, r0)), 2, pair(8, r1)),
+    mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. ka(x0, pair(r0, r1), x8) && k(x8, x1)), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w4)) ->
+  (all z. int_lt(z.gpr[4], int_sub(s.gpr[4], fr)) -> !bkp(z)) ->
+  tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, ds, rs, mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. bind_rel(gc.cm(b, fptr[T], args), x0, x9 x10. ka(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), x1,
+    x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w)
+proof
+  assume hmn hofr hap hat ha2 hg hgd hgu htb hb hcode hal hld hcb hcf hln hno hn6 hft hreg hsub hhin hfo hfd hk hd hpost hbf
+  have a2b: a2 in bits(64) by simp(ha2)
+  have hst := apply(tr.push_reg[s := s, base := base, code := code, fr := fr, a := a, a2 := a2, len := len, g := gr, z := z, nb := nb, T := T, rs := rs, w := w], hat, ha2, hg, hgd, hgu, hcf)
+  have hcl: all m m1 e1 C. tr.inv(s, base, code, fr, m, w) -> m.rip = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> tr.mem(s, m, w, v) -> tr.frame(s, m, ds) ->
+      runs(x86_64_linux.touch_range(bits_sub(64, m.gpr[4], 8), 8, 1), fn_update(m, "rip", a2), ok(m1, e1)) ->
+      C = fn_update(fn_update(fn_update(m1, "vm", fn_update(m1.vm, "bytes", x86_64_linux.store_le(m1.vm.bytes, bits_sub(64, m.gpr[4], 8), 8, a2))),
+        "gpr", fn_update(m1.gpr, 4, bits_sub(64, m.gpr[4], 8))), "rip", T) ->
+      tr.cl(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. bind_rel(gc.cm(b, fptr[T], args), x0, x9 x10. ka(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), x1,
+        x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w, C) proof
+    fix m m1 e1 C
+    assume hi hr hh hrs hmm hfr tr2 hC2
+    have hin := mp(all_elim(hreg, {m}), hrs)
+    have hbm: all z. int_lt(z.gpr[4], m.gpr[4]) -> !bkp(z) proof
+      fix z
+      assume lt
+      have rspm := apply(tr.inv_parts, hi).4
+      show := mp(all_elim(hbf, {z}), rewrite(rspm, lt))
+    qed
+    show := apply(tr.callee_ind_dm[b := b, fptr := fptr, args := args, a := x9 x10 x8. ka(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2),
+      bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)],
+      {s}, {v}, {base}, {code}, {fr}, {m}, {w}, {n}, {hs}, {fd2}, {a2}, {T}, {m1}, {e1}, {C}, {cb}, {cc}, {st}, {rs}, {rc}, hap, hofr,
+      hi, hcf, hmm, hmn, hb, hrs, hsub, hin, hln, hno, hn6, a2b, htb, tr2, hC2, hcode, hal, hld, hcb, hh, hhin, hfo, hfd, hft, hk, hd, hpost, hbm)
+  qed
+  show := apply(tr.call_gm[b := b, s := s, v := v, base := base, code := code, fr := fr, a := a, a2 := a2, T := T, g := fptr[T], args := args, hs := hs, ds := ds, rs := rs, w := w,
+    ka := x9 x10 x8. ka(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2),
+    bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], hst, a2b, hcf, hk, hcl)
+qed
+
+theorem tr.call1_dm(b, s, v, base, code, fr, a, a2, len, off, f, g, args, n, cb, cc, st, hs, ds, fd2, rs, rc, w, x9 x10 x8. ka, x9 x10 x8. xx, x9 x8. dd, x8 x1. k, x3 x4 x2. kw, zb. bkp, zb pb wb. bka):
+  v.c_bytes = tr.cbm(b, s.fs_base) -> tr.hap(s, hs, v) -> tr.ofr(s, fr, v) ->
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(m.vm, base, code) -> m.rip = a -> runs(x86_64_linux.exec_body(len, tag(120, off)), m, o)) ->
+  a2 = bits_add(64, a, bits_of_int(64, len)) -> off in bits(32) -> base in omega ->
+  f = bits_add(64, a2, bits_sext(32, 64, off)) -> tr.ccs_d(b, fr, f, g, cb, cc, st) -> (int_mod(fr, 16) = 8 -> tr.sal16(s)) -> abi.loaded(s.vm, cb, cc, st) -> cb in omega ->
+  tr.cfr(fr) -> seq_len(args) = n -> n in omega -> int_le(n, 6) ->
+  g in fn_space(abi.ARGS, powerset(univ(1))) -> tr.callee_io(g, n) ->
+  (all m. tr.regs(m, rs) -> tr.args_in(m, args)) -> tr.cs_sub(rc, rs) -> tr.hin(hs, fr) -> fd2 in omega -> int_le(fd2, int_add(fr, 8)) ->
+  (all x e. x in univ(1) -> e in univ(1) -> runs(mkprog(x0 x1. ex x8. xx(x, e, x8) && k(x8, x1)), w, exc(x, e))) ->
+  (all t0. t0 in univ(1) -> runs(mkprog(x0 x1. ex x8. dd(t0, x8) && k(x8, x1)), w, diverge(t0))) ->
+  (all w4 r0. w4 in abi.World && w4 in univ(1) -> r0 in bits(64) -> tr.pt(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a2, hs, fd2, fn_update(rc, 0, pair(8, r0)),
+    mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. ka(x0, r0, x8) && k(x8, x1)), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w4)) ->
+  (all z. int_lt(z.gpr[4], int_sub(s.gpr[4], fr)) -> !bkp(z)) ->
+  tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, ds, rs, mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. bind_rel(gc.c1m(b, g, args), x0, x9 x10. ka(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), x1,
+    x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w)
+proof
+  assume hmn hap hofr hat ha2 hoff hb hf himp hal hld hcb hcf hln hno hn6 hgt hio hreg hsub hhin hfo hfd hk hd hpost hbf
+  have hcl: (all w4 r0 r1. w4 in abi.World && w4 in univ(1) -> r0 in bits(64) -> r1 in bits(64) ->
+      tr.pt(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a2, hs, fd2, fn_update(fn_update(rc, 0, pair(8, r0)), 2, pair(8, r1)), mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. ka(x0, fst(pair(r0, r1)), x8) && k(x8, x1)), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w4)) ->
+      tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, ds, rs, mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. bind_rel(gc.cm(b, g, args), x0, x9 x10. ka(x9, fst(x10), x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), x1,
+        x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w) proof
+    assume post
+    show := mp(tr.call_dm[b := b, bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb), s := s, v := v, base := base, code := code, fr := fr, a := a, a2 := a2, len := len, off := off, f := f, g := g, args := args, n := n, cb := cb, cc := cc, st := st,
+      hs := hs, ds := ds, fd2 := fd2, rs := rs, rc := rc, w := w, ka := x9 x10 x8. ka(x9, fst(x10), x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], hmn, hofr, hap,
+      hat, ha2, hoff, hb, hf, himp, hal, hld, hcb, hcf, hln, hno, hn6, hgt, hio, hreg, hsub, hhin, hfo, hfd, hk, hd, post, hbf)
+  qed
+  show := apply(tr.call1_of_m[b := b, s := s, v := v, base := base, code := code, fr := fr, a := a, a2 := a2, g := g, args := args, hs := hs, ds := ds, fd2 := fd2, rs := rs, rc := rc, w := w,
+    ka := x9 x10 x8. ka(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2), bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], hsub, hpost, hcl)
+qed
+
+theorem tr.calli1_dm(b, s, v, base, code, fr, a, a2, len, gr, z, nb, T, fptr, args, n, cb, cc, st, hs, ds, fd2, rs, rc, w, x9 x10 x8. ka, x9 x10 x8. xx, x9 x8. dd, x8 x1. k, x3 x4 x2. kw, zb. bkp, zb pb wb. bka):
+  v.c_bytes = tr.cbm(b, s.fs_base) -> tr.hap(s, hs, v) -> tr.ofr(s, fr, v) ->
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(m.vm, base, code) -> m.rip = a -> runs(x86_64_linux.exec_body(len, tag(121, pair(tag(0, gr), z))), m, o)) ->
+  a2 = bits_add(64, a, bits_of_int(64, len)) -> gr in x86_64_linux.Reg -> gr in dom(rs) -> rs[gr] = pair(nb, T) -> T in bits(64) -> base in omega ->
+  tr.code_okd(b, fptr, n, fr, cb, cc, st) -> (int_mod(fr, 16) = 8 -> tr.sal16(s)) -> abi.loaded(s.vm, cb, cc, st) -> cb in omega ->
+  tr.cfr(fr) -> seq_len(args) = n -> n in omega -> int_le(n, 6) ->
+  fptr in fn_space(bits(64), fn_space(abi.ARGS, powerset(univ(1)))) ->
+  (all m. tr.regs(m, rs) -> tr.args_in(m, args)) -> tr.cs_sub(rc, rs) -> tr.hin(hs, fr) -> fd2 in omega -> int_le(fd2, int_add(fr, 8)) ->
+  (all x e. x in univ(1) -> e in univ(1) -> runs(mkprog(x0 x1. ex x8. xx(x, e, x8) && k(x8, x1)), w, exc(x, e))) ->
+  (all t0. t0 in univ(1) -> runs(mkprog(x0 x1. ex x8. dd(t0, x8) && k(x8, x1)), w, diverge(t0))) ->
+  (all w4 r0. w4 in abi.World && w4 in univ(1) -> r0 in bits(64) -> tr.pt(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a2, hs, fd2, fn_update(rc, 0, pair(8, r0)),
+    mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. ka(x0, r0, x8) && k(x8, x1)), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w4)) ->
+  (all z. int_lt(z.gpr[4], int_sub(s.gpr[4], fr)) -> !bkp(z)) ->
+  tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, ds, rs, mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. bind_rel(gc.c1m(b, fptr[T], args), x0, x9 x10. ka(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), x1,
+    x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w)
+proof
+  assume hmn hap hofr hat ha2 hg hgd hgu htb hb hcode hal hld hcb hcf hln hno hn6 hft hreg hsub hhin hfo hfd hk hd hpost hbf
+  have hcl: (all w4 r0 r1. w4 in abi.World && w4 in univ(1) -> r0 in bits(64) -> r1 in bits(64) ->
+      tr.pt(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a2, hs, fd2, fn_update(fn_update(rc, 0, pair(8, r0)), 2, pair(8, r1)), mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. ka(x0, fst(pair(r0, r1)), x8) && k(x8, x1)), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w4)) ->
+      tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, ds, rs, mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. bind_rel(gc.cm(b, fptr[T], args), x0, x9 x10. ka(x9, fst(x10), x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), x1,
+        x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w) proof
+    assume post
+    show := mp(tr.calli_dm[b := b, bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb), s := s, v := v, base := base, code := code, fr := fr, a := a, a2 := a2, len := len, gr := gr, z := z, nb := nb, T := T, fptr := fptr, args := args, n := n, cb := cb, cc := cc, st := st,
+      hs := hs, ds := ds, fd2 := fd2, rs := rs, rc := rc, w := w, ka := x9 x10 x8. ka(x9, fst(x10), x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], hmn, hofr, hap,
+      hat, ha2, hg, hgd, hgu, htb, hb, hcode, hal, hld, hcb, hcf, hln, hno, hn6, hft, hreg, hsub, hhin, hfo, hfd, hk, hd, post, hbf)
+  qed
+  show := apply(tr.call1_of_m[b := b, s := s, v := v, base := base, code := code, fr := fr, a := a, a2 := a2, g := fptr[T], args := args, hs := hs, ds := ds, fd2 := fd2, rs := rs, rc := rc, w := w,
+    ka := x9 x10 x8. ka(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2), bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], hsub, hpost, hcl)
+qed
+
+theorem tr.call0_d(s, v, base, code, fr, a, a2, len, off, f, g, args, n, cb, cc, st, hs, ds, fd2, rs, rc, w, x9 x10 x8. ka, x9 x10 x8. xx, x9 x8. dd, x8 x1. k, x3 x4 x2. kw, zb. bkp, zb pb wb. bka):
+  v.c_bytes = tr.cbm(false, s.fs_base) -> tr.ofr(s, fr, v) -> tr.hap(s, hs, v) ->
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(m.vm, base, code) -> m.rip = a -> runs(x86_64_linux.exec_body(len, tag(120, off)), m, o)) ->
+  a2 = bits_add(64, a, bits_of_int(64, len)) -> off in bits(32) -> base in omega ->
+  f = bits_add(64, a2, bits_sext(32, 64, off)) -> tr.ccs_d(false, fr, f, g, cb, cc, st) -> (int_mod(fr, 16) = 8 -> tr.sal16(s)) -> abi.loaded(s.vm, cb, cc, st) -> cb in omega ->
+  tr.cfr(fr) -> seq_len(args) = n -> n in omega -> int_le(n, 6) ->
+  g in fn_space(abi.ARGS, powerset(univ(1))) -> tr.callee_io(g, n) ->
+  (all m. tr.regs(m, rs) -> tr.args_in(m, args)) -> tr.cs_sub(rc, rs) -> tr.hin(hs, fr) -> fd2 in omega -> int_le(fd2, int_add(fr, 8)) ->
+  (all x e. x in univ(1) -> e in univ(1) -> runs(mkprog(x0 x1. ex x8. xx(x, e, x8) && k(x8, x1)), w, exc(x, e))) ->
+  (all t0. t0 in univ(1) -> runs(mkprog(x0 x1. ex x8. dd(t0, x8) && k(x8, x1)), w, diverge(t0))) ->
+  (all w4 r0 r1. w4 in abi.World && w4 in univ(1) -> r0 in bits(64) -> r1 in bits(64) -> tr.pt(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a2, hs, fd2, fn_update(fn_update(rc, 0, pair(8, r0)), 2, pair(8, r1)),
+    mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. ka(x0, pair(r0, r1), x8) && k(x8, x1)), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w4)) ->
+  (all z. int_lt(z.gpr[4], int_sub(s.gpr[4], fr)) -> !bkp(z)) ->
+  tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, ds, rs, mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. bind_rel(gimple.call0(g, args), x0, x9 x10. ka(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), x1,
+    x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w)
+proof
+  assume hmn hofr hap hat ha2 hoff hb hf himp hal hld hcb hcf hln hno hn6 hgt hio hreg hsub hhin hfo hfd hk hd hpost hbf
+  have r := mp(tr.call_dm[b := false, s := s, v := v, base := base, code := code, fr := fr, a := a, a2 := a2, len := len, off := off, f := f, g := g, args := args, n := n, cb := cb, cc := cc, st := st,
+    hs := hs, ds := ds, fd2 := fd2, rs := rs, rc := rc, w := w, ka := x9 x10 x8. ka(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2),
+    bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], hmn, hofr, hap, hat, ha2, hoff, hb, hf, himp, hal, hld, hcb, hcf, hln, hno, hn6, hgt, hio, hreg, hsub, hhin, hfo, hfd, hk, hd, hpost, hbf)
+  show := rewrite(mp(ite_f[c := false, a := gimple.call(g, args), b := gimple.call0(g, args)], (!false by taut())), r)
+qed
+
+theorem tr.calli0_d(s, v, base, code, fr, a, a2, len, gr, z, nb, T, fptr, args, n, cb, cc, st, hs, ds, fd2, rs, rc, w, x9 x10 x8. ka, x9 x10 x8. xx, x9 x8. dd, x8 x1. k, x3 x4 x2. kw, zb. bkp, zb pb wb. bka):
+  v.c_bytes = tr.cbm(false, s.fs_base) -> tr.ofr(s, fr, v) -> tr.hap(s, hs, v) ->
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(m.vm, base, code) -> m.rip = a -> runs(x86_64_linux.exec_body(len, tag(121, pair(tag(0, gr), z))), m, o)) ->
+  a2 = bits_add(64, a, bits_of_int(64, len)) -> gr in x86_64_linux.Reg -> gr in dom(rs) -> rs[gr] = pair(nb, T) -> T in bits(64) -> base in omega ->
+  tr.code_okd(false, fptr, n, fr, cb, cc, st) -> (int_mod(fr, 16) = 8 -> tr.sal16(s)) -> abi.loaded(s.vm, cb, cc, st) -> cb in omega ->
+  tr.cfr(fr) -> seq_len(args) = n -> n in omega -> int_le(n, 6) ->
+  fptr in fn_space(bits(64), fn_space(abi.ARGS, powerset(univ(1)))) ->
+  (all m. tr.regs(m, rs) -> tr.args_in(m, args)) -> tr.cs_sub(rc, rs) -> tr.hin(hs, fr) -> fd2 in omega -> int_le(fd2, int_add(fr, 8)) ->
+  (all x e. x in univ(1) -> e in univ(1) -> runs(mkprog(x0 x1. ex x8. xx(x, e, x8) && k(x8, x1)), w, exc(x, e))) ->
+  (all t0. t0 in univ(1) -> runs(mkprog(x0 x1. ex x8. dd(t0, x8) && k(x8, x1)), w, diverge(t0))) ->
+  (all w4 r0 r1. w4 in abi.World && w4 in univ(1) -> r0 in bits(64) -> r1 in bits(64) -> tr.pt(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a2, hs, fd2, fn_update(fn_update(rc, 0, pair(8, r0)), 2, pair(8, r1)),
+    mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. ka(x0, pair(r0, r1), x8) && k(x8, x1)), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w4)) ->
+  (all z. int_lt(z.gpr[4], int_sub(s.gpr[4], fr)) -> !bkp(z)) ->
+  tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, ds, rs, mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. bind_rel(gimple.call0(fptr[T], args), x0, x9 x10. ka(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), x1,
+    x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w)
+proof
+  assume hmn hofr hap hat ha2 hg hgd hgu htb hb hcode hal hld hcb hcf hln hno hn6 hft hreg hsub hhin hfo hfd hk hd hpost hbf
+  have r := mp(tr.calli_dm[b := false, s := s, v := v, base := base, code := code, fr := fr, a := a, a2 := a2, len := len, gr := gr, z := z, nb := nb, T := T, fptr := fptr, args := args, n := n, cb := cb, cc := cc, st := st,
+    hs := hs, ds := ds, fd2 := fd2, rs := rs, rc := rc, w := w, ka := x9 x10 x8. ka(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2),
+    bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], hmn, hofr, hap, hat, ha2, hg, hgd, hgu, htb, hb, hcode, hal, hld, hcb, hcf, hln, hno, hn6, hft, hreg, hsub, hhin, hfo, hfd, hk, hd, hpost, hbf)
+  show := rewrite(mp(ite_f[c := false, a := gimple.call(fptr[T], args), b := gimple.call0(fptr[T], args)], (!false by taut())), r)
+qed
+
+theorem tr.call1_0_d(s, v, base, code, fr, a, a2, len, off, f, g, args, n, cb, cc, st, hs, ds, fd2, rs, rc, w, x9 x10 x8. ka, x9 x10 x8. xx, x9 x8. dd, x8 x1. k, x3 x4 x2. kw, zb. bkp, zb pb wb. bka):
+  v.c_bytes = tr.cbm(false, s.fs_base) -> tr.hap(s, hs, v) -> tr.ofr(s, fr, v) ->
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(m.vm, base, code) -> m.rip = a -> runs(x86_64_linux.exec_body(len, tag(120, off)), m, o)) ->
+  a2 = bits_add(64, a, bits_of_int(64, len)) -> off in bits(32) -> base in omega ->
+  f = bits_add(64, a2, bits_sext(32, 64, off)) -> tr.ccs_d(false, fr, f, g, cb, cc, st) -> (int_mod(fr, 16) = 8 -> tr.sal16(s)) -> abi.loaded(s.vm, cb, cc, st) -> cb in omega ->
+  tr.cfr(fr) -> seq_len(args) = n -> n in omega -> int_le(n, 6) ->
+  g in fn_space(abi.ARGS, powerset(univ(1))) -> tr.callee_io(g, n) ->
+  (all m. tr.regs(m, rs) -> tr.args_in(m, args)) -> tr.cs_sub(rc, rs) -> tr.hin(hs, fr) -> fd2 in omega -> int_le(fd2, int_add(fr, 8)) ->
+  (all x e. x in univ(1) -> e in univ(1) -> runs(mkprog(x0 x1. ex x8. xx(x, e, x8) && k(x8, x1)), w, exc(x, e))) ->
+  (all t0. t0 in univ(1) -> runs(mkprog(x0 x1. ex x8. dd(t0, x8) && k(x8, x1)), w, diverge(t0))) ->
+  (all w4 r0. w4 in abi.World && w4 in univ(1) -> r0 in bits(64) -> tr.pt(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a2, hs, fd2, fn_update(rc, 0, pair(8, r0)),
+    mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. ka(x0, r0, x8) && k(x8, x1)), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w4)) ->
+  (all z. int_lt(z.gpr[4], int_sub(s.gpr[4], fr)) -> !bkp(z)) ->
+  tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, ds, rs, mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. bind_rel(gimple.call1_0(g, args), x0, x9 x10. ka(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), x1,
+    x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w)
+proof
+  assume hmn hap hofr hat ha2 hoff hb hf himp hal hld hcb hcf hln hno hn6 hgt hio hreg hsub hhin hfo hfd hk hd hpost hbf
+  have r := mp(tr.call1_dm[b := false, s := s, v := v, base := base, code := code, fr := fr, a := a, a2 := a2, len := len, off := off, f := f, g := g, args := args, n := n, cb := cb, cc := cc, st := st,
+    hs := hs, ds := ds, fd2 := fd2, rs := rs, rc := rc, w := w, ka := x9 x10 x8. ka(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2),
+    bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], hmn, hap, hofr, hat, ha2, hoff, hb, hf, himp, hal, hld, hcb, hcf, hln, hno, hn6, hgt, hio, hreg, hsub, hhin, hfo, hfd, hk, hd, hpost, hbf)
+  show := rewrite(mp(ite_f[c := false, a := gimple.call1(g, args), b := gimple.call1_0(g, args)], (!false by taut())), r)
+qed
+
+theorem tr.calli1_0_d(s, v, base, code, fr, a, a2, len, gr, z, nb, T, fptr, args, n, cb, cc, st, hs, ds, fd2, rs, rc, w, x9 x10 x8. ka, x9 x10 x8. xx, x9 x8. dd, x8 x1. k, x3 x4 x2. kw, zb. bkp, zb pb wb. bka):
+  v.c_bytes = tr.cbm(false, s.fs_base) -> tr.hap(s, hs, v) -> tr.ofr(s, fr, v) ->
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(m.vm, base, code) -> m.rip = a -> runs(x86_64_linux.exec_body(len, tag(121, pair(tag(0, gr), z))), m, o)) ->
+  a2 = bits_add(64, a, bits_of_int(64, len)) -> gr in x86_64_linux.Reg -> gr in dom(rs) -> rs[gr] = pair(nb, T) -> T in bits(64) -> base in omega ->
+  tr.code_okd(false, fptr, n, fr, cb, cc, st) -> (int_mod(fr, 16) = 8 -> tr.sal16(s)) -> abi.loaded(s.vm, cb, cc, st) -> cb in omega ->
+  tr.cfr(fr) -> seq_len(args) = n -> n in omega -> int_le(n, 6) ->
+  fptr in fn_space(bits(64), fn_space(abi.ARGS, powerset(univ(1)))) ->
+  (all m. tr.regs(m, rs) -> tr.args_in(m, args)) -> tr.cs_sub(rc, rs) -> tr.hin(hs, fr) -> fd2 in omega -> int_le(fd2, int_add(fr, 8)) ->
+  (all x e. x in univ(1) -> e in univ(1) -> runs(mkprog(x0 x1. ex x8. xx(x, e, x8) && k(x8, x1)), w, exc(x, e))) ->
+  (all t0. t0 in univ(1) -> runs(mkprog(x0 x1. ex x8. dd(t0, x8) && k(x8, x1)), w, diverge(t0))) ->
+  (all w4 r0. w4 in abi.World && w4 in univ(1) -> r0 in bits(64) -> tr.pt(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a2, hs, fd2, fn_update(rc, 0, pair(8, r0)),
+    mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. ka(x0, r0, x8) && k(x8, x1)), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w4)) ->
+  (all z. int_lt(z.gpr[4], int_sub(s.gpr[4], fr)) -> !bkp(z)) ->
+  tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, ds, rs, mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. bind_rel(gimple.call1_0(fptr[T], args), x0, x9 x10. ka(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), x1,
+    x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w)
+proof
+  assume hmn hap hofr hat ha2 hg hgd hgu htb hb hcode hal hld hcb hcf hln hno hn6 hft hreg hsub hhin hfo hfd hk hd hpost hbf
+  have r := mp(tr.calli1_dm[b := false, s := s, v := v, base := base, code := code, fr := fr, a := a, a2 := a2, len := len, gr := gr, z := z, nb := nb, T := T, fptr := fptr, args := args, n := n, cb := cb, cc := cc, st := st,
+    hs := hs, ds := ds, fd2 := fd2, rs := rs, rc := rc, w := w, ka := x9 x10 x8. ka(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2),
+    bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], hmn, hap, hofr, hat, ha2, hg, hgd, hgu, htb, hb, hcode, hal, hld, hcb, hcf, hln, hno, hn6, hft, hreg, hsub, hhin, hfo, hfd, hk, hd, hpost, hbf)
+  show := rewrite(mp(ite_f[c := false, a := gimple.call1(fptr[T], args), b := gimple.call1_0(fptr[T], args)], (!false by taut())), r)
+qed

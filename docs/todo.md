@@ -17,17 +17,33 @@ other crash, never exit 42. Runs that never end are allowed (§2).
   in the user space from the bridge (abi.sl's `stack_reserve`, the world
   without the stack's pages); main's spec (`tm.main_top`) is undefined
   where it fails.
-- (d) After main: the exit path done (`xt.exit_impl`: exit's machine code
-  implements `startup_specs.exit_spec`, docs/done.md). Next: stage2
-  (`libc_start_main_stage2`: `exit(main(..))`) with main as a callee by its
-  contract and exit after -- `exit_pre` at main's return: the thread's tid
-  set (by __init_tp), exit_lock 0, the fini_array word, completed.0, the
-  `__cxa_finalize` GOT word kept from exec through startup and main (main's
-  spec keeps the memory outside the allocator's and errno; the words are
-  the binary's statics, none of them).
-- (e) The whole run: startup linked with main as a callee by its
-  contract (not a breakpoint), the invariant from `musl.init` at its
-  entry, the exit path after; the claim proven.
+- (d) After main (the exit path done: `xt.exit_impl`, docs/done.md):
+  stage2 (`exit(main(..))`), __libc_start_main and _start_c with main and
+  exit as callees by their contracts. The startup contracts all stop at
+  main's entry (`tr.run_s` with t = main); main's and exit's are of the
+  runs without a stop (`tr.run_d`), and a contract of those says nothing of
+  a run's prefix -- so no stop address works for a caller of main (a stop
+  address no rip can be needs every reached state typed, which the x86
+  model does not give). Steps:
+  1. Bridge (GIMPLE->CPU translation, generic): the startup mode without a
+     stop -- `tr.impl_d(b, ..)` (tr.run_d, the mode's view), from a
+     contract never stopping (`tr.impl_m(.., false)`) and from
+     `tr.implements_at`; its entry and call rules (direct, through a code
+     map), adapted from the stop ones (`tr.callee_sim_smc` with
+     `tr.run_split_k`, no stop case).
+  2. Engine: `startup` without `stop` / `nostop` picks them.
+  3. Bridge: a main-mode callee from a startup-mode caller -- its spec
+     wrapped to switch the world's C bytes (the canary hidden during the
+     call, restored after); the thread and canary sound at the call.
+  4. main without its ghost (GIMPLE, C2): `main_spec` with the blocks none
+     at entry, the ghost dropped; its contract from `tm.main_top`'s parts.
+  5. C1 of stage2, __libc_start_main, _start_c in the new mode; link.
+  6. C2: their specs on to exit -- `exit_pre` at main's return (the tid set
+     by __init_tp; exit_lock 0, the fini_array word, completed.0, the
+     `__cxa_finalize` GOT word kept: binary statics outside the allocator's
+     at main's entry, which main's frame keeps).
+- (e) The whole run: from exec, `_start`'s code to _start_c's contract,
+  `program_ok` from its spec; the claim proven.
 
 The malloc claim's `Init` is about the runs that reach `main`, vacuous
 if none did; (e) shows nothing more of that (a witness that some exec
