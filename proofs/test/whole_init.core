@@ -216,12 +216,12 @@ proof
 qed
 
 // main entered at pw.MM (startup's effect from _start_c's entry): a heap
-// with V, no blocks, the thread at fs, the initial stack live -- in
-// mallocng's invariant
-theorem pw.inv_w1: all m0 s lo top argv envp auxv V fs H. ui.SX(m0, s, lo, top, argv, envp, auxv) ->
+// with V, no blocks, the thread at fs, the initial stack live -- mallocng's
+// representation holds there, of the empty state with exec's vector
+theorem pw.rep_w1: all m0 s lo top argv envp auxv V fs H. ui.SX(m0, s, lo, top, argv, envp, auxv) ->
   ui.at_main(s, ui.iobjs(m0.gpr[4], top), pw.MM(s, V, fs), m0.gpr[4], V, fs) ->
   H in rec_and(abi.World, malloc.Heap.ghost) -> H.vm = V -> H.blocks = fn_build(bits(64), x. none) -> H.fs_base = fs -> H.objs.live = ui.iobjs(m0.gpr[4], top) ->
-  H in musl.inv
+  ui.A0(m0, argv, envp, auxv) in mallocng.Abs && mallocng.rep(ui.C, ui.A0(m0, argv, envp, auxv), H)
 proof
   fix m0 s lo top argv envp auxv V fs H
   assume hx hat hHw hHv hHb hHf hHl
@@ -248,9 +248,51 @@ proof
     show := rewrite(sym(hHl), (x in ui.iobjs(m0.gpr[4], top) by sel(taut(hxo, i1, i2))))
   qed
   have r2 := apply(pw.rep_xfer, {ui.C}, {A}, {S}, {H}, r0, trans(hHv, sym(sv)), trans(hHb, sym(sb)), trans(hHf, sym(sf)), ax)
-  have i1 := apply(mallocng.inv_intro[c := ui.C, s := H, A := A], hHw, aa, r2)
+  show := conj(aa, r2)
+qed
+
+// ... so in mallocng's invariant
+theorem pw.inv_w1: all m0 s lo top argv envp auxv V fs H. ui.SX(m0, s, lo, top, argv, envp, auxv) ->
+  ui.at_main(s, ui.iobjs(m0.gpr[4], top), pw.MM(s, V, fs), m0.gpr[4], V, fs) ->
+  H in rec_and(abi.World, malloc.Heap.ghost) -> H.vm = V -> H.blocks = fn_build(bits(64), x. none) -> H.fs_base = fs -> H.objs.live = ui.iobjs(m0.gpr[4], top) ->
+  H in musl.inv
+proof
+  fix m0 s lo top argv envp auxv V fs H
+  assume hx hat hHw hHv hHb hHf hHl
+  have aa r2 := apply(pw.rep_w1[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, V := V, fs := fs, H := H], hx, hat, hHw, hHv, hHb, hHf, hHl)
+  have i1 := apply(mallocng.inv_intro[c := ui.C, s := H, A := ui.A0(m0, argv, envp, auxv)], hHw, aa, r2)
   have e: musl.cfg = ui.C by defs(refl({ui.C}), musl.cfg)
   show by defs(rewrite(sym(e), i1), musl.inv)
+qed
+
+// ... what the allocator owns there: its static bytes (ui.RO, ui.DATA) or
+// the vector's on the initial stack
+theorem pw.owned_w1: all m0 s lo top argv envp auxv V fs H a. ui.SX(m0, s, lo, top, argv, envp, auxv) ->
+  ui.at_main(s, ui.iobjs(m0.gpr[4], top), pw.MM(s, V, fs), m0.gpr[4], V, fs) ->
+  H in rec_and(abi.World, malloc.Heap.ghost) -> H.vm = V -> H.blocks = fn_build(bits(64), x. none) -> H.fs_base = fs -> H.objs.live = ui.iobjs(m0.gpr[4], top) ->
+  a in omega -> a in musl.owned[H] -> (ui.RO(a) || ui.DATA(a)) || (int_le(m0.gpr[4], a) && int_lt(a, int_mul(top, x86_64_linux.PAGE)))
+proof
+  fix m0 s lo top argv envp auxv V fs H a
+  assume hx hat hHw hHv hHb hHf hHl ha ho
+  let A := ui.A0(m0, argv, envp, auxv)
+  let AT := ui.AT(m0, argv, envp)
+  have aa hr := apply(pw.rep_w1[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, V := V, fs := fs, H := H], hx, hat, hHw, hHv, hHb, hHf, hHl)
+  have e: musl.cfg = ui.C by defs(refl({ui.C}), musl.cfg)
+  have ho2: a in mallocng.owned(ui.C)[H] := rewrite(e, expand(ho, musl.owned))
+  obtain B, hBa hBr hBf from apply(mallocng.owned_mem[c := ui.C, s := H, a := a], hHw, ho2)
+  have eq := mp(mallocng.abs_unique[c := ui.C, s := H, A := B, B := A], ui.C_ok, hHw, hBa, aa, hBr, hr)
+  have f1 := unsel(expand(rewrite(eq, hBf), mallocng.footprint))
+  have f2 := unsel(expand((a in mallocng.fp_set(mallocng.fp_ranges(ui.C, A), H.blocks) by taut(f1)), mallocng.fp_set))
+  have ir: mallocng.in_ranges(a, mallocng.fp_ranges(ui.C, A)) by taut(f2)
+  have at al := apply(ui.mx_typ[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := pw.MM(s, V, fs), V := V, fs := fs],
+    (ui.MX(m0, s, lo, top, argv, envp, auxv, pw.MM(s, V, fs), V, fs) by defs(conj(hx, hat), ui.MX)))
+  have w := expand(apply(ui.fp_where[AT := AT, L := auxv, a := a], at, al, ha, ir), ui.FW)
+  have c2: mallocng.in_ranges(a, mallocng.auxv_ranges(A)) -> int_le(m0.gpr[4], a) && int_lt(a, int_mul(top, x86_64_linux.PAGE)) proof
+    assume hi
+    have i1 i2 _ := apply(ui.ax_in[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, x := a], hx, ha, hi)
+    show by taut(i1, i2)
+  qed
+  show by taut(w, c2)
 qed
 
 // ----------------------------------------------------------------------
