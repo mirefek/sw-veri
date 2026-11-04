@@ -200,3 +200,55 @@ proof
   have he2 hb2 hcd2 := musl.prog
   show by defs(simp(hHv, hHf, hHc, c1, tok, cok, c4, cd, cs, c6, c7, c8, hb2, hcd2, keep(abi.loaded, abi.code_at, x86_64_linux.off_stack_space)), malloc.world_ok, abi.loaded)
 qed
+
+// ----------------------------------------------------------------------
+//  the allocator's invariant at main's call
+
+// (pw.MM's view: V)
+theorem pw.mm_view: all s V fs ob w. V in x86_64_linux.Vm -> startup_specs.frame(ui.wvm(s.vm), V, ob, w) -> ui.wvm(pw.MM(s, V, fs).vm) = V
+proof
+  fix s V fs ob w
+  assume hv hfr
+  have fb _ := expand(hfr, startup_specs.frame)
+  have ve := apply(pw.v_bytes, {ui.wvm(s.vm)}, {V}, hv, fb)
+  have mv: pw.MM(s, V, fs).vm = fn_update(s.vm, "bytes", V.bytes) by simp()
+  show := trans(rewrite(sym(mv), all_elim(pw.wvm_b, {s.vm}, {V.bytes})), sym(ve))
+qed
+
+// main entered at pw.MM (startup's effect from _start_c's entry): a heap
+// with V, no blocks, the thread at fs, the initial stack live -- in
+// mallocng's invariant
+theorem pw.inv_w1: all m0 s lo top argv envp auxv V fs H. ui.SX(m0, s, lo, top, argv, envp, auxv) ->
+  ui.at_main(s, ui.iobjs(m0.gpr[4], top), pw.MM(s, V, fs), m0.gpr[4], V, fs) ->
+  H in rec_and(abi.World, malloc.Heap.ghost) -> H.vm = V -> H.blocks = fn_build(bits(64), x. none) -> H.fs_base = fs -> H.objs.live = ui.iobjs(m0.gpr[4], top) ->
+  H in musl.inv
+proof
+  fix m0 s lo top argv envp auxv V fs H
+  assume hx hat hHw hHv hHb hHf hHl
+  let M := pw.MM(s, V, fs)
+  let S := claim_malloc.empty_heap(M, ui.OB(m0, argv, envp))
+  let A := ui.A0(m0, argv, envp, auxv)
+  have hv hfr _ _ _ _ _ _ := expand(hat, ui.at_main)
+  have h: ui.MX(m0, s, lo, top, argv, envp, auxv, M, V, fs) by defs(conj(hx, hat), ui.MX)
+  have r0 := apply(ui.rep_main[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := M, V := V, fs := fs], h)
+  have at al := apply(ui.mx_typ[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, m := M, V := V, fs := fs], h)
+  have {aa = abs} := apply(mp.a0_type[AT := ui.AT(m0, argv, envp), L := auxv], at, al)
+  have wv := apply(pw.mm_view, {s}, {V}, {fs}, {abi.wob(ui.iobjs(m0.gpr[4], top), abi.cball)}, {startup_specs.start_writes(ui.G)}, hv, hfr)
+  have sv0: S.vm = claim_malloc.c_vm(M.vm) by defs(rsimp(), claim_malloc.empty_heap)
+  have sv: S.vm = V := trans(sv0, trans(all_elim(ui.cv_eq, {M.vm}), wv))
+  have sb: S.blocks = fn_build(bits(64), x. none) by defs(rsimp(), claim_malloc.empty_heap)
+  have sf: S.fs_base = fs by defs(rsimp(), claim_malloc.empty_heap)
+  // (the vector's bytes: on the initial stack, live)
+  have ax: mallocng.aux_live(A, H.objs) proof
+    unfold mallocng.aux_live
+    assume _
+    fix x
+    assume hxo hr
+    have i1 i2 _ := apply(ui.ax_in[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, x := x], hx, hxo, hr)
+    show := rewrite(sym(hHl), (x in ui.iobjs(m0.gpr[4], top) by sel(taut(hxo, i1, i2))))
+  qed
+  have r2 := apply(pw.rep_xfer, {ui.C}, {A}, {S}, {H}, r0, trans(hHv, sym(sv)), trans(hHb, sym(sb)), trans(hHf, sym(sf)), ax)
+  have i1 := apply(mallocng.inv_intro[c := ui.C, s := H, A := A], hHw, aa, r2)
+  have e: musl.cfg = ui.C by defs(refl({ui.C}), musl.cfg)
+  show by defs(rewrite(sym(e), i1), musl.inv)
+qed
