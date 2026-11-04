@@ -252,3 +252,86 @@ proof
   have e: musl.cfg = ui.C by defs(refl({ui.C}), musl.cfg)
   show by defs(rewrite(sym(e), i1), musl.inv)
 qed
+
+// ----------------------------------------------------------------------
+//  exit's words at main's call: exec's, kept by startup's frame
+
+// (startup's writes: the spans of its globals -- apart from exit's lock
+// and the dtors' completed byte)
+theorem pw.sw_at: all x. x in startup_specs.start_writes(ui.G) ->
+  (int_le(4227080, x) && int_lt(x, 4227084)) || (int_le(4227112, x) && int_lt(x, 4227120)) || (int_le(4227128, x) && int_lt(x, 4227264)) ||
+  (int_le(4228256, x) && int_lt(x, 4228688))
+proof
+  fix x
+  assume h
+  rsimp startup_specs.start_writes, startup_specs.span in h
+  have _ d := unsel(h)
+  have c1 := apply(ui.span_c[x := x, a := c_src_env___libc_start_main.__libc, n := 1, L := 4227128, U := 4227264], eval(), eval())
+  have c2 := apply(ui.span_c[x := x, a := int_add(c_src_env___libc_start_main.__libc, 8), n := 48, L := 4227128, U := 4227264], eval(), eval())
+  have c3 := apply(ui.span_c[x := x, a := c_src_env___libc_start_main.__environ, n := 8, L := 4228256, U := 4228688], eval(), eval())
+  have c4 := apply(ui.span_c[x := x, a := c_src_env___libc_start_main.__hwcap, n := 8, L := 4227128, U := 4227264], eval(), eval())
+  have c5 := apply(ui.span_c[x := x, a := c_src_env___libc_start_main.__sysinfo, n := 8, L := 4227128, U := 4227264], eval(), eval())
+  have c6 := apply(ui.span_c[x := x, a := c_src_env___libc_start_main.__progname, n := 8, L := 4227128, U := 4227264], eval(), eval())
+  have c7 := apply(ui.span_c[x := x, a := c_src_env___libc_start_main.__progname_full, n := 8, L := 4227128, U := 4227264], eval(), eval())
+  have c8 := apply(ui.span_c[x := x, a := c_src_env___init_tls.__default_stacksize, n := 4, L := 4227080, U := 4227084], eval(), eval())
+  have c9 := apply(ui.span_c[x := x, a := c_src_env___init_tls.builtin_tls, n := 336, L := 4228256, U := 4228688], eval(), eval())
+  have c10 := apply(ui.span_c[x := x, a := c_src_env___init_tls.main_tls, n := 48, L := 4228256, U := 4228688], eval(), eval())
+  have c11 := apply(ui.span_c[x := x, a := c_src_env___stack_chk_fail.__stack_chk_guard, n := 8, L := 4227112, U := 4227120], eval(), eval())
+  show by taut(d, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11)
+qed
+
+// (usable with other objects: the same live ones, the bytes the C world's
+// in both)
+theorem pw.usable_cb(vm, o1, o2, a, n, w): gimple.usable(vm, o1, a, n, w) -> o2.live = o1.live ->
+  (all i. i in omega -> int_lt(i, n) -> int_add(a, i) in o1.c_bytes -> int_add(a, i) in o2.c_bytes) -> gimple.usable(vm, o2, a, n, w)
+proof
+  assume hu hl hc
+  let P(i) := int_div(int_add(a, i), x86_64_linux.PAGE)
+  let C(i) := x86_64_linux.mapped(vm, P(i)) && !(snd(vm.pages[P(i)]).kind = 2)
+  let X(i, ob) := ite(w, snd(vm.pages[P(i)]).prot.w, snd(vm.pages[P(i)]).prot.r) && int_add(a, i) in ob.c_bytes
+  let Y(i, ob) := int_lt(int_add(a, i), int_pow(2, 64)) && int_add(a, i) in ob.live
+  have g: all i. i in omega -> int_lt(i, n) -> ite(C(i), X(i, o2), Y(i, o2)) proof
+    fix i
+    assume hi hn
+    have ui := mp(all_elim(expand(hu, gimple.usable), {i}), hi, hn)
+    have c1: C(i) -> ite(C(i), X(i, o2), Y(i, o2)) proof
+      assume h1
+      have x1 x2 := rewrite(mp(ite_t[c := C(i), a := X(i, o1), b := Y(i, o1)], h1), ui)
+      have x3 := mp(all_elim(hc, {i}), hi, hn, x2)
+      show := rewrite(sym(mp(ite_t[c := C(i), a := X(i, o2), b := Y(i, o2)], h1)), (X(i, o2) by taut(x1, x3)))
+    qed
+    have c2: !C(i) -> ite(C(i), X(i, o2), Y(i, o2)) proof
+      assume h1
+      have y1 y2 := rewrite(mp(ite_f[c := C(i), a := X(i, o1), b := Y(i, o1)], h1), ui)
+      have y3: int_add(a, i) in o2.live := rewrite(sym(hl), y2)
+      show := rewrite(sym(mp(ite_f[c := C(i), a := X(i, o2), b := Y(i, o2)], h1)), (Y(i, o2) by taut(y1, y3)))
+    qed
+    show by taut(c1, c2)
+  qed
+  show by defs(g, gimple.usable)
+qed
+
+// (n bytes of the image's read-only or data pages, none startup's
+// writes: V's as the view's)
+theorem pw.v_img_bytes: all argv envp m0 s lo top V ob a n. x86_64_linux.exec_state(musl_malloc.file, argv, envp, m0) -> ui.ctx(m0, s, lo, top) -> int_lt(1032, lo) ->
+  startup_specs.frame(ui.wvm(s.vm), V, ob, startup_specs.start_writes(ui.G)) -> a in omega -> n in omega -> int_le(int_add(a, n), 4228688) ->
+  (all i. i in omega -> int_lt(i, n) -> ui.img_page(int_div(int_add(a, i), x86_64_linux.PAGE), false) && !(int_add(a, i) in startup_specs.start_writes(ui.G))) ->
+  gimple.bytes_at(V, a, n) = gimple.bytes_at(ui.wvm(s.vm), a, n)
+proof
+  fix argv envp m0 s lo top V ob a n
+  assume he hc hlo hfr ha hn hl hp
+  have _ fo := expand(hfr, startup_specs.frame)
+  have be: all i. i in omega -> int_lt(i, n) -> V.bytes[bits_add(64, a, bits_of_int(64, i))] = ui.wvm(s.vm).bytes[bits_add(64, a, bits_of_int(64, i))] proof
+    fix i
+    assume hi hil
+    have pi nw := mp(all_elim(hp, {i}), hi, hil)
+    have ea := apply(ms.add_i, {a}, {i}, ha, hi, arith(hl, hil, hi, ha, hn))
+    have wi := apply(ui.w_img[argv := argv, envp := envp, m0 := m0, s := s, lo := lo, top := top, p := int_div(int_add(a, i), x86_64_linux.PAGE), w := false],
+      he, hc, hlo, (int_div(int_add(a, i), x86_64_linux.PAGE) in omega by defs(arith(ha, hi), x86_64_linux.PAGE)), pi)
+    have wm wk _ _ _ := wi
+    have nsf: !abi.stack_free(ui.wvm(s.vm), ob, int_add(a, i)) by defs(taut(wm, wk), abi.stack_free)
+    have q := mp(all_elim(fo, {int_add(a, i)}), (int_add(a, i) in bits(64) by arith(hl, hil, hi, ha)), nw, nsf)
+    show := rewrite(sym(ea), q)
+  qed
+  show := apply(mp.bytes_same[U := V, vm := ui.wvm(s.vm), a := a, n := n], hn, be)
+qed
