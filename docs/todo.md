@@ -31,24 +31,29 @@ other crash, never exit 42. Runs that never end are allowed (§2).
   (link_whole.core, proofs/test/main_whole.core: `tm.whole_link`, the
   machine code from _start_c's entry implementing the linked GIMPLE --
   __libc_start_init by its purpose, main's and exit's linked code wrapped).
-  C2 of that linked GIMPLE (GIMPLE spec proving), from _start_c's
-  precondition to an exit 0 or 1 or an overflow: done for stage2 given
-  `pw.MR` at main's call (`pw.s2_main`, proofs/test/whole_exit.core: main's
-  outcomes, exit's precondition kept by main's frame, exit's end; the
-  thread's id now in startup_specs' `thread_set`), and generically for
-  __libc_start_main and _start_c (`pw.lsm_fun`, `pw.stc_fun`). Next,
-  `pw.MR` at stage2's call from startup's post (`sp.TMV`, `thread_at`) and
-  exec's image:
-  - main's precondition (`tm.PRE` on the world with the canary hidden and
-    no blocks): the invariant at GIMPLE level -- `ui.rep_main` works on a
-    machine at main and the heap `empty_heap(m, auxv bytes)`; the world
-    here has the whole initial stack live (rep reads objs only in
-    `aux_live`). The words exit reads not the allocator's (`pw.NK`) by
-    `ui.owned_main` likewise.
-  - exit's words at exec (`ui.img_read`, `ui.us_img`; .bss zero), kept by
-    startup's frame (outside `start_writes`).
-- (e) The whole run: from exec, `_start`'s code to _start_c's contract,
-  `program_ok` from its spec; the claim proven.
+  The C2 of that linked GIMPLE is done: from _start_c's precondition at
+  exec's view, an exit with 0 or 1 or an overflow (`pw.stc_end`,
+  proofs/test/whole_run.core; main's precondition at stage2's call from
+  startup's effect and exec's image, proofs/test/whole_init.core:
+  `pw.mr_w1`, world_ok `pw.wok` (item c0 done); stage2 `pw.s2_main`,
+  proofs/test/whole_exit.core; the thread's id now in startup_specs'
+  `thread_set`).
+- (e) The whole run's top, machine level: `program_ok` for
+  `claim_program.run_process` from exec.
+  - run_process unfolded (as `ui.UR` for run_until) and its first steps:
+    `ui.start4` / `ui.start_call` generalized over the run's continuation
+    (their run_until use is only `ui.until_step`); _start's call pushing
+    the return address may fault -- a stack overflow (`overflow_at` with
+    exec's rsp), to show.
+  - run_process from _start_c's entry against the contract's disciplined
+    run `tr.run_d` (`while_guard` twice: the return stop, the discipline
+    -- as `tr.run_disc`); the early stops (disc, a return) excluded by
+    the contract's `tr.mtv` and the spec's END (`abi.nstop` excludes exit).
+  - the contract (`tm.whole_link`) at _start_c's entry: `abi.loaded` with
+    the program's statics (under the stack's floor, as in `pw.wok`), the
+    entry facts (`ui.entry_eok`, `ui.entry_objs`, `ui.wvm_vok`); `tr.mtv`'s
+    crash (overflow_at from the entry's sp, exec's rsp), exit (0 or 1) and
+    divergence cases give `program_ok`; then the claim `musl_program`.
 
 The malloc claim's `Init` is about the runs that reach `main`, vacuous
 if none did; (e) shows nothing more of that (a witness that some exec
