@@ -335,3 +335,132 @@ proof
   qed
   show := apply(mp.bytes_same[U := V, vm := ui.wvm(s.vm), a := a, n := n], hn, be)
 qed
+
+// (bytes on the data pages 1031 and 1032: image pages)
+theorem pw.img_rng: all a n w. a in omega -> n in omega -> int_le(4222976, a) -> int_le(int_add(a, n), 4231168) ->
+  all i. i in omega -> int_lt(i, n) -> ui.img_page(int_div(int_add(a, i), x86_64_linux.PAGE), w)
+proof
+  fix a n w
+  assume ha hn h1 h2
+  fix i
+  assume hi hil
+  show by defs(arith(ha, hn, h1, h2, hi, hil), x86_64_linux.PAGE)
+qed
+
+// exit's precondition at main's call: exit's words exec's (the lock and
+// completed byte in the .bss, the fini_array entry and the GOT word from
+// the file), startup's frame keeping them; the thread set up
+theorem pw.xpre_w1: all argv envp m0 s lo top V fs. x86_64_linux.exec_state(musl_malloc.file, argv, envp, m0) -> ui.ctx(m0, s, lo, top) -> int_lt(1032, lo) ->
+  V in x86_64_linux.Vm -> startup_specs.frame(ui.wvm(s.vm), V, abi.wob(ui.iobjs(m0.gpr[4], top), abi.cball), startup_specs.start_writes(ui.G)) ->
+  fs in bits(64) -> startup_specs.thread_at(ui.G, V, fs) ->
+  startup_specs.exit_pre(V, abi.wob(ui.iobjs(m0.gpr[4], top), abi.cbytes0(fs)), xt.XP, fs)
+proof
+  fix argv envp m0 s lo top V fs
+  assume he hc hlo hv hfr hfb hta
+  let W := ui.wvm(s.vm)
+  let OB0 := abi.wob(ui.iobjs(m0.gpr[4], top), abi.cball)
+  let OB := abi.wob(ui.iobjs(m0.gpr[4], top), abi.cbytes0(fs))
+  have fb _ := expand(hfr, startup_specs.frame)
+  have ve := apply(pw.v_bytes, {W}, {V}, hv, fb)
+  have vp: V.pages = W.pages by simp(apply(ui.app_eq[k := "pages"], ve))
+  have ts it := expand(hta, startup_specs.thread_at)
+  have tok _ tid := expand(ts, startup_specs.thread_set)
+  have it1 it2 := expand(it, startup_specs.in_tls)
+  have bt: ui.G.builtin_tls = 4228288 by eval()
+  have fr: int_le(4228288, fs) && int_le(int_add(fs, 200), 4228624) by arith(it1, it2, bt, hfb)
+  // (usable bytes on the data pages, none the canary's: V's)
+  have U: all a n w. a in omega -> n in omega -> int_le(4222976, a) -> int_le(int_add(a, n), 4231168) ->
+      (all i. i in omega -> int_lt(i, n) -> !(int_add(a, i) in abi.canary(fs))) -> gimple.usable(V, OB, a, n, w) proof
+    fix a n w
+    assume ha hn h1 h2 hnc
+    have u0 := apply(ui.us_img[argv := argv, envp := envp, m0 := m0, s := s, lo := lo, top := top, x := a, n := n, w := w], he, hc, hlo, ha,
+      apply(pw.img_rng, {a}, {n}, {w}, ha, hn, h1, h2))
+    have pe: all i. i in omega -> int_lt(i, n) -> V.pages[int_div(int_add(a, i), x86_64_linux.PAGE)] = W.pages[int_div(int_add(a, i), x86_64_linux.PAGE)] proof
+      fix i
+      assume _ _
+      show := apply(ui.app_eq[k := int_div(int_add(a, i), x86_64_linux.PAGE)], vp)
+    qed
+    have u1 := apply(mp.usable_pg[vm := W, vm2 := V, objs := ui.wob0(m0.gpr[4], top), a := a, n := n, w := w], pe, u0)
+    have cb: all i. i in omega -> int_lt(i, n) -> int_add(a, i) in ui.wob0(m0.gpr[4], top).c_bytes -> int_add(a, i) in OB.c_bytes proof
+      fix i
+      assume hi hil _
+      show by simp(mp(all_elim(hnc, {i}), hi, hil), (int_add(a, i) in omega by arith(ha, hi)))
+    qed
+    show := apply(pw.usable_cb[vm := V, o1 := ui.wob0(m0.gpr[4], top), o2 := OB, a := a, n := n, w := w], u1, simp(), cb)
+  qed
+  // (bytes on the data pages, none startup's writes: V's the view's)
+  have B: all a n. a in omega -> n in omega -> int_le(4222976, a) -> int_le(int_add(a, n), 4228688) ->
+      (all i. i in omega -> int_lt(i, n) -> !(int_add(a, i) in startup_specs.start_writes(ui.G))) -> gimple.bytes_at(V, a, n) = gimple.bytes_at(W, a, n) proof
+    fix a n
+    assume ha hn h1 h2 hnw
+    have pg := apply(pw.img_rng, {a}, {n}, {false}, ha, hn, h1, (int_le(int_add(a, n), 4231168) by arith(h2)))
+    have hp: all i. i in omega -> int_lt(i, n) -> ui.img_page(int_div(int_add(a, i), x86_64_linux.PAGE), false) && !(int_add(a, i) in startup_specs.start_writes(ui.G)) proof
+      fix i
+      assume hi hil
+      show by taut(mp(all_elim(pg, {i}), hi, hil), mp(all_elim(hnw, {i}), hi, hil))
+    qed
+    show := apply(pw.v_img_bytes[argv := argv, envp := envp, m0 := m0, s := s, lo := lo, top := top, V := V, ob := OB0, a := a, n := n], he, hc, hlo, hfr, ha, hn, h2, hp)
+  qed
+  // (exit's words apart from startup's writes, from the canary)
+  have nw: all a n. a in omega -> n in omega -> int_le(int_add(a, n), 4227080) || (int_le(4227084, a) && int_le(int_add(a, n), 4227112)) ||
+      (int_le(4227120, a) && int_le(int_add(a, n), 4227128)) -> (all i. i in omega -> int_lt(i, n) -> !(int_add(a, i) in startup_specs.start_writes(ui.G))) proof
+    fix a n
+    assume ha hn hr
+    fix i
+    assume hi hil hw
+    have q := apply(pw.sw_at, hw)
+    show by arith(q, hr, hi, hil, ha)
+  qed
+  have nc: all a n. a in omega -> n in omega -> int_le(int_add(a, n), 4227128) -> (all i. i in omega -> int_lt(i, n) -> !(int_add(a, i) in abi.canary(fs))) proof
+    fix a n
+    assume ha hn hr
+    fix i
+    assume hi hil hcn
+    have _ c1 _ := unsel(expand(hcn, abi.canary))
+    show by arith(c1, fr, hr, hi, hil)
+  qed
+  // the thread's id word
+  have n48: all i. i in omega -> int_lt(i, 4) -> !(int_add(int_add(fs, 48), i) in abi.canary(fs)) proof
+    fix i
+    assume hi hil hcn
+    have _ _ c2 := unsel(expand(hcn, abi.canary))
+    show by arith(c2, hi)
+  qed
+  have u48 := mp(all_elim(U, {int_add(fs, 48)}, {4}, {false}), (int_add(fs, 48) in omega by arith(hfb)), simp(), (int_le(4222976, int_add(fs, 48)) by arith(fr)),
+    (int_le(int_add(int_add(fs, 48), 4), 4231168) by arith(fr)), n48)
+  // the lock: .bss, zero
+  have {g3 = s3} := ui.elf
+  have _ bss := apply(ui.seg_bytes[argv := argv, envp := envp, m0 := m0, j := 3, ty := 1, fl := 6, of := 28616, va := 4227016, fs := 72, ms := 1672], he, eval(), eval(), g3)
+  have lk: pw.LK = 4227120 by eval()
+  have lw0 := apply(ui.w_img_bytes[argv := argv, envp := envp, m0 := m0, s := s, lo := lo, top := top, a := 4227120, n := 4], he, hc, hlo, eval(), eval(), eval(),
+    apply(pw.img_rng, {4227120}, {4}, {false}, eval(), eval(), eval(), eval()))
+  have lzs: all j. j in omega -> int_lt(j, 4) -> m0.vm.bytes[bits_of_int(64, int_add(4227120, j))] = 0 proof
+    fix j
+    assume hj hjl
+    show := mp(all_elim(bss, {int_add(4227120, j)}), arith(hj), arith(hj), arith(hj, hjl))
+  qed
+  have lw := trans(lw0, trans(apply(ui.bytes_zero[vm := m0.vm, a := 4227120, n := 4], eval(), eval(), eval(), lzs), (int_sum(0, 4, i. 0) = 0 by eval())))
+  have lv := trans(mp(all_elim(B, {4227120}, {4}), eval(), eval(), eval(), eval(), mp(all_elim(nw, {4227120}, {4}), eval(), eval(), eval())), lw)
+  // the fini_array entry, the GOT word: the file's
+  have ff := apply(ui.img_read[argv := argv, envp := envp, m0 := m0, s := s, lo := lo, top := top, j := 3, ty := 1, fl := 6, of := 28616, va := 4227016, fs := 72, ms := 1672,
+    a := 4227024, n := 8], he, hc, hlo, eval(), eval(), g3, eval(), eval(), eval(), eval(), eval(), eval(), eval(),
+    apply(pw.img_rng, {4227024}, {8}, {false}, eval(), eval(), eval(), eval()))
+  have fv := trans(mp(all_elim(B, {4227024}, {8}), eval(), eval(), eval(), eval(), mp(all_elim(nw, {4227024}, {8}), eval(), eval(), eval())),
+    trans(rewrite((int_add(28616, int_sub(4227024, 4227016)) = 28624 by eval()), ff),
+      apply(ui.le_val[F := musl_malloc.file, off := 28624, n := 8, v := 4198784], unfold(musl_malloc.file), eval(), eval(), eval(), eval(), eval())))
+  have gf := apply(ui.img_read[argv := argv, envp := envp, m0 := m0, s := s, lo := lo, top := top, j := 3, ty := 1, fl := 6, of := 28616, va := 4227016, fs := 72, ms := 1672,
+    a := 4227040, n := 8], he, hc, hlo, eval(), eval(), g3, eval(), eval(), eval(), eval(), eval(), eval(), eval(),
+    apply(pw.img_rng, {4227040}, {8}, {false}, eval(), eval(), eval(), eval()))
+  have gv := trans(mp(all_elim(B, {4227040}, {8}), eval(), eval(), eval(), eval(), mp(all_elim(nw, {4227040}, {8}), eval(), eval(), eval())),
+    trans(rewrite((int_add(28616, int_sub(4227040, 4227016)) = 28640 by eval()), gf),
+      apply(ui.le_val[F := musl_malloc.file, off := 28640, n := 8, v := 0], unfold(musl_malloc.file), eval(), eval(), eval(), eval(), eval())))
+  // usable: the lock, completed (read and written), the fini_array entry and the GOT word (read)
+  have ul := mp(all_elim(U, {4227120}, {4}, {false}), eval(), eval(), eval(), eval(), mp(all_elim(nc, {4227120}, {4}), eval(), eval(), eval()))
+  have ulw := mp(all_elim(U, {4227120}, {4}, {true}), eval(), eval(), eval(), eval(), mp(all_elim(nc, {4227120}, {4}), eval(), eval(), eval()))
+  have uf := mp(all_elim(U, {4227024}, {8}, {false}), eval(), eval(), eval(), eval(), mp(all_elim(nc, {4227024}, {8}), eval(), eval(), eval()))
+  have uc := mp(all_elim(U, {4227104}, {1}, {false}), eval(), eval(), eval(), eval(), mp(all_elim(nc, {4227104}, {1}), eval(), eval(), eval()))
+  have ucw := mp(all_elim(U, {4227104}, {1}, {true}), eval(), eval(), eval(), eval(), mp(all_elim(nc, {4227104}, {1}), eval(), eval(), eval()))
+  have ug := mp(all_elim(U, {4227040}, {8}, {false}), eval(), eval(), eval(), eval(), mp(all_elim(nc, {4227040}, {8}), eval(), eval(), eval()))
+  have xv: xt.XP.lock = 4227120 && xt.XP.fini_array = 4227024 && xt.XP.dtors = 4198784 && xt.XP.completed = 4227104 && xt.XP.cxa_got = 4227040 by eval()
+  show by defs(simp(xv, tok, u48, tid, fr, ul, ulw, lv, uf, fv, uc, ucw, ug, gv, keep(gimple.usable, gimple.bytes_at, abi.thread_ok)), startup_specs.exit_pre)
+qed
