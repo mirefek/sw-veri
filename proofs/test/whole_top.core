@@ -190,3 +190,90 @@ proof
   qed
   show by taut(expand(hm, tr.mtv), c1, c2, c3, c4, c5)
 qed
+
+// (the early stops: none of those outcomes)
+theorem pw.xo_disc: all s x. !pw.XO(s, exc(x, exc_val("disc", empty)))
+proof
+  fix s x
+  let D := exc(x, exc_val("disc", empty))
+  have a1: (ex t. D = diverge(t)) -> false proof
+    assume e
+    obtain t, et from e
+    show by simp(et)
+  qed
+  have a2: (ex m1 a k. (D = exc(m1, exc_val("segv", pair(a, k))) && (k = 0 || k = 1 || k = 3)) && a in bits(64) && abi.overflow_at(m1.vm, m1.gpr[4], abi.sp(s), a)) -> false proof
+    assume e
+    obtain m1 a k, et .. from e
+    have _ ee := apply(ui.exc_inj, et)
+    have q1 _ := apply(pair_inj[a := "disc", b := empty, c := "segv", d := pair(a, k)], (pair("disc", empty) = pair("segv", pair(a, k)) by defs(ee, exc_val)))
+    show by taut(q1, (!("disc" = "segv") by eval()))
+  qed
+  have a3: (ex m1. D = exc(m1, exc_val("stack_fault", empty))) -> false proof
+    assume e
+    obtain m1, et from e
+    have _ ee := apply(ui.exc_inj, et)
+    have q1 _ := apply(pair_inj[a := "disc", b := empty, c := "stack_fault", d := empty], (pair("disc", empty) = pair("stack_fault", empty) by defs(ee, exc_val)))
+    show by taut(q1, (!("disc" = "stack_fault") by eval()))
+  qed
+  have a4: (ex m1 st. D = exc(m1, exc_val("exit", st)) && (st = 0 || st = 1)) -> false proof
+    assume e
+    obtain m1 st, et _ from e
+    have _ ee := apply(ui.exc_inj, et)
+    have q1 _ := apply(pair_inj[a := "disc", b := empty, c := "exit", d := st], (pair("disc", empty) = pair("exit", st) by defs(ee, exc_val)))
+    show by taut(q1, (!("disc" = "exit") by eval()))
+  qed
+  show by taut(a1, a2, a3, a4)
+qed
+
+theorem pw.xo_ok: all s x. !pw.XO(s, ok(x, empty))
+proof
+  fix s x
+  have a1: (ex t. ok(x, empty) = diverge(t)) -> false proof
+    assume e
+    obtain t, et from e
+    show by simp(et)
+  qed
+  have a2: (ex m1 a k. (ok(x, empty) = exc(m1, exc_val("segv", pair(a, k))) && (k = 0 || k = 1 || k = 3)) && a in bits(64) && abi.overflow_at(m1.vm, m1.gpr[4], abi.sp(s), a)) -> false proof
+    assume e
+    obtain m1 a k, et .. from e
+    show by simp(et)
+  qed
+  have a3: (ex m1. ok(x, empty) = exc(m1, exc_val("stack_fault", empty))) -> false proof
+    assume e
+    obtain m1, et from e
+    show by simp(et)
+  qed
+  have a4: (ex m1 st. ok(x, empty) = exc(m1, exc_val("exit", st)) && (st = 0 || st = 1)) -> false proof
+    assume e
+    obtain m1 st, et _ from e
+    show by simp(et)
+  qed
+  show by taut(a1, a2, a3, a4)
+qed
+
+// ----------------------------------------------------------------------
+//  From _start_c's entry
+
+// (the program's statics at the entry: off the stack's space -- under its
+// floor, below the image's last page)
+theorem pw.loaded_st: all m0 s lo top argv envp auxv. ui.SX(m0, s, lo, top, argv, envp, auxv) -> abi.loaded(s.vm, 4198400, text.code, tm.ST)
+proof
+  fix m0 s lo top argv envp auxv
+  assume hx
+  have hc hlo _ _ _ _ _ _ _ he _ _ := expand(hx, ui.SX)
+  have hM _ _ hsp _ _ _ h5 := expand(hc, ui.ctx)
+  have _ _ _ _ _ _ _ sp8 := expand(hsp, x86_64_linux.stack_pages)
+  have ca _ := expand(apply(ui.entry_loaded, h5, apply(ui.text_code[argv := argv, envp := envp, m0 := m0], he)), abi.loaded)
+  have st sl _ := apply(pw.s_fields, hc)
+  have fl: x86_64_linux.stack_floor(s.vm) = x86_64_linux.stack_floor(m0.vm) by defs(simp(st, sl), x86_64_linux.stack_floor)
+  have m32: x86_64_linux.mapped(m0.vm, 1032) by defs(simp(apply(ui.pg_img[argv := argv, envp := envp, m0 := m0, p := 1032], he, simp())), x86_64_linux.mapped)
+  have f32 := mp(all_elim(sp8, {1032}), simp(), conj(hlo, m32))
+  have cs: all a. a in omega -> a in tm.ST -> x86_64_linux.off_stack_space(s.vm, int_div(a, x86_64_linux.PAGE), 1) proof
+    fix a
+    assume ha hs
+    have se := apply(musl.unit_app, unfold(musl_malloc.prog_statics))
+    have al: int_lt(a, 4228688) by simp(expand(rewrite(se, hs), int_range), ha)
+    show by defs(arith(f32, fl, al, ha), x86_64_linux.off_stack_space)
+  qed
+  show by defs(taut(ca, cs), abi.loaded)
+qed
