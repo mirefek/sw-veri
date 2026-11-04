@@ -112,8 +112,8 @@ pred tls_fresh(vm: Vm, g: StartGlobals) =
 pred in_tls(g: StartGlobals, fs: Addr) = uint(g.builtin_tls) <= uint(fs) && uint(fs) + 200 <= uint(g.builtin_tls) + 336
 
 // the thread: its descriptor at fs (its own address in its first word), the
-// stack protector's word in it
-pred thread_set(vm: Vm, fs: Addr) = thread_ok(vm, fs) && canary_ok(vm, fs)
+// stack protector's word in it, its id set (set_tid_address's, not 0)
+pred thread_set(vm: Vm, fs: Addr) = thread_ok(vm, fs) && canary_ok(vm, fs) && bytes_at(vm, fs + 48, 4) != 0
 
 // the thread set up in the static TLS area (the allocator keeps its
 // ranges apart from the descriptor)

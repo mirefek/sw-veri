@@ -61,17 +61,22 @@ abbrev sp.ssp_out(g, s, o) := abi.ovf_out(s, o) ||
   (ex V. ((V in x86_64_linux.Vm && startup_specs.frame(s.vm, V, s.objs, startup_specs.ssp_writes(g))) && startup_specs.thread_set(V, s.fs_base)) &&
     o = ok(fn_update(s, "vm", V), empty))
 
-// (the thread kept set up: its first word unchanged)
+// (the thread kept set up: its first word and its id unchanged)
 theorem sp.ts_keep: all vm X fs. startup_specs.thread_set(vm, fs) -> x86_64_linux.le(X, fs, 8) = x86_64_linux.le(vm.bytes, fs, 8) ->
+  fs in bits(64) -> int_lt(int_add(fs, 48), 18446744073709551616) ->
+  gimple.bytes_at(fn_update(vm, "bytes", X), int_add(fs, 48), 4) = gimple.bytes_at(vm, int_add(fs, 48), 4) ->
   startup_specs.thread_set(fn_update(vm, "bytes", X), fs)
 proof
   fix vm X fs
-  assume h he
-  have tok cok := expand(h, startup_specs.thread_set)
+  assume h he hfb hfl hid
+  have e48: bits_add(64, fs, 48) = int_add(fs, 48) by defs(arith(hfb, hfl), bits_add, bits_of_int, pow2)
+  have tok cok tid0 := expand(h, startup_specs.thread_set)
+  have tid: !(gimple.bytes_at(vm, int_add(fs, 48), 4) = 0) by simp(e48, tid0)
   have t2 := apply(ms.thread_keep, {vm}, {X}, {fs}, tok, he)
   have hx := expand(cok, abi.canary_ok, x86_64_linux.readable, abi.stack_page, x86_64_linux.mapped)
   have c2: abi.canary_ok(fn_update(vm, "bytes", X), fs) by defs(simp(hx), abi.canary_ok, x86_64_linux.readable, abi.stack_page, x86_64_linux.mapped)
-  show by defs(taut(t2, c2), startup_specs.thread_set)
+  have i2: !(gimple.bytes_at(fn_update(vm, "bytes", X), bits_add(64, fs, 48), 4) = 0) by simp(e48, hid, tid)
+  show by defs(taut(t2, c2, i2), startup_specs.thread_set)
 qed
 
 // (a byte of the guard or of the descriptor's area: startup's, and
@@ -160,7 +165,7 @@ proof
   have fsb: FS in bits(64) by simp(expand(hw, abi.World))
   have it1 it2 := expand(hit, startup_specs.in_tls)
   have fsr: int_le(4228288, FS) && int_le(int_add(FS, 200), 4228624) by arith(it1, it2, hgB, btv)
-  have tok _ := expand(hts, startup_specs.thread_set)
+  have tok _ _ := expand(hts, startup_specs.thread_set)
   have _ _ _ fnz := expand(tok, abi.thread_ok)
   // (what was usable at the entry: usable in a memory as the entry's but
   // for bytes)
@@ -211,8 +216,9 @@ proof
   have l2 := apply(x86.le8_nat, {U}, {FS}, ub)
   have bq: gimple.bytes_at(U5, FS, 8) = gimple.bytes_at(U, FS, 8) by mem(p1e, gdv, fsr, fsb)
   have leq: x86_64_linux.le(x86_64_linux.store_le(U.bytes, int_add(P1, 0), 1, 0), FS, 8) = x86_64_linux.le(U.bytes, FS, 8) by simp(l1, l2, bq)
-  have ts5 := apply(sp.ts_keep, {U}, {x86_64_linux.store_le(U.bytes, int_add(P1, 0), 1, 0)}, {FS}, hts, leq)
-  have tok5 _ := expand(ts5, startup_specs.thread_set)
+  have bi5: gimple.bytes_at(U5, int_add(FS, 48), 4) = gimple.bytes_at(U, int_add(FS, 48), 4) by mem(p1e, gdv, fsr, fsb)
+  have ts5 := apply(sp.ts_keep, {U}, {x86_64_linux.store_le(U.bytes, int_add(P1, 0), 1, 0)}, {FS}, hts, leq, fsb, arith(fsr), bi5)
+  have tok5 _ _ := expand(ts5, startup_specs.thread_set)
   have tw5: abi.thread_ok(W5.vm, W5.fs_base) by simp(tok5)
   obtain oc, hrc hdc from apply(g.bind_open, h1)
   obtain o2c, hc0 hrel from apply(sp.call1_0_e, hrc)
@@ -353,7 +359,8 @@ proof
       have l3 := apply(x86.le8_nat, {U6}, {FS}, u6t)
       have bq2: gimple.bytes_at(U6, FS, 8) = gimple.bytes_at(U5, FS, 8) by mem(fsb, fsr)
       have leq2: x86_64_linux.le(x86_64_linux.store_le(U5.bytes, int_add(FS, 40), 8, VAL), FS, 8) = x86_64_linux.le(U5.bytes, FS, 8) by simp(l3, l1, bq2)
-      have ts6 := rewrite(v6e, apply(sp.ts_keep, {U5}, {x86_64_linux.store_le(U5.bytes, int_add(FS, 40), 8, VAL)}, {FS}, ts5, leq2))
+      have bi6: gimple.bytes_at(U6, int_add(FS, 48), 4) = gimple.bytes_at(U5, int_add(FS, 48), 4) by mem(fsb, fsr)
+      have ts6 := rewrite(v6e, apply(sp.ts_keep, {U5}, {x86_64_linux.store_le(U5.bytes, int_add(FS, 40), 8, VAL)}, {FS}, ts5, leq2, fsb, arith(fsr), bi6))
       show by taut((ex V2. ((V2 in x86_64_linux.Vm && startup_specs.frame(s.vm, V2, s.objs, SSW)) && startup_specs.thread_set(V2, FS)) && K(fn_update(s, "vm", V2))
         by ex_intro({V}, taut(vV, fr, ts6, h3))))
     qed
@@ -400,7 +407,8 @@ proof
   have l2 := apply(x86.le8_nat, {s.vm}, {FS}, sb)
   have bq: gimple.bytes_at(U, FS, 8) = gimple.bytes_at(s.vm, FS, 8) by mem(ha, gdv, fsr, fsb)
   have leq: x86_64_linux.le(x86_64_linux.store_le(s.vm.bytes, a, 8, v), FS, 8) = x86_64_linux.le(s.vm.bytes, FS, 8) by simp(l1, l2, bq)
-  have ts := apply(sp.ts_keep, {s.vm}, {x86_64_linux.store_le(s.vm.bytes, a, 8, v)}, {FS}, hts, leq)
+  have bi: gimple.bytes_at(U, int_add(FS, 48), 4) = gimple.bytes_at(s.vm, int_add(FS, 48), 4) by mem(ha, gdv, fsr, fsb)
+  have ts := apply(sp.ts_keep, {s.vm}, {x86_64_linux.store_le(s.vm.bytes, a, 8, v)}, {FS}, hts, leq, fsb, arith(fsr), bi)
   show by taut(uV, ub, fr, ts)
 qed
 

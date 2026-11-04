@@ -21,8 +21,9 @@ proof
   show by defs(g0, g.det)
 qed
 
-// (set_tid_address: a number, the world as it was)
-theorem sp.tid_inv: all w a1 o. runs(gimple.sys_call1(218, a1), w, o) -> ex r. r in bits(64) && o = ok(w, r)
+// (set_tid_address: a thread id -- a number in (0, 2^22) --, the world as it
+// was)
+theorem sp.tid_inv: all w a1 o. runs(gimple.sys_call1(218, a1), w, o) -> ex r. (r in bits(64) && (int_lt(0, r) && int_lt(r, 4194304))) && o = ok(w, r)
 proof
   fix w a1 o
   assume h
@@ -65,11 +66,11 @@ proof
   show by ex_intro({pair(0, y)}, taut(hoy, (fst(pair(0, y)) = 0 by simp())))
 qed
 
-// __syscall1(218, a) (set_tid_address) at a call: a number returned, the
+// __syscall1(218, a) (set_tid_address) at a call: a thread id returned, the
 // world as it was
 theorem sp.s1t_q: all t a regs o2. t in abi.World -> t in univ(1) -> a in bits(64) ->
   gc.regs_ok(regs, seq_concat(seq_one(gimple.arg(64, 218)), seq_one(gimple.arg(64, a)))) -> runs(c_src_env___init_tls.__syscall1_fun()[regs], t, o2) ->
-  ex r. o2 = ok(t, r)
+  ex r. o2 = ok(t, r) && (fst(r) in bits(64) && (int_lt(0, fst(r)) && int_lt(fst(r), 4194304)))
 proof
   fix t a regs o2
   assume hw hu ha hro h
@@ -89,7 +90,7 @@ proof
       x6 x7. o2 = exc(x6, x7), x6. o2 = diverge(x6))), x3 x4. o2 = exc(x3, x4), x3. o2 = diverge(x3)) by taut(b, o2l)
   obtain o3, hs3 hk3 from expand(b2, bind_rel)
   step x2 x4 r, hrb e3 from hs3 with sp.tid_inv
-  obtain v, hv er from hrb
+  obtain v, hv hv0 hv1 er from hrb
   have o3e: o3 = ok(t, v) by simp(expand(rewrite(er, e3), letin))
   have k1: bind_rel(gimple.result(64, v), t, x6 x7. any_rel(x8. x8 in bits(64), x8. o2 = ok(x6, pair(x7, x8))), x6 x7. o2 = exc(x6, x7), x6. o2 = diverge(x6))
     by simp(expand(rewrite(o3e, hk3), letin), keep(bind_rel, gimple.result))
@@ -97,42 +98,45 @@ proof
   have ho4 := apply(g.result64_inv, hv, hr4)
   have k2: any_rel(x8. x8 in bits(64), x8. o2 = ok(t, pair(v, x8))) by simp(rewrite(ho4, hk4), keep(any_rel))
   obtain y, hy hoy from apply(g.any_e, (ex y. y in bits(64) by ex_intro({0}, simp())), k2)
-  show by ex_intro({pair(v, y)}, hoy)
+  show by ex_intro({pair(v, y)}, taut(hoy, (fst(pair(v, y)) in bits(64) && (int_lt(0, fst(pair(v, y))) && int_lt(fst(pair(v, y)), 4194304)) by simp(hv, hv0, hv1))))
 qed
 
 // (a call of a callee returning at the world it was called at: an overflow
 // there, or a return there)
-theorem sp.c10_same: all G args W o. W in abi.World -> (ex regs. gc.regs_ok(regs, args)) ->
-  (all regs o2. gc.regs_ok(regs, args) -> runs(G[regs], W, o2) -> ex r. o2 = ok(W, r)) ->
-  runs(gimple.call1_0(G, args), W, o) -> o = exc(W, exc_val("stack_overflow", empty)) || (ex r. o = ok(W, r))
+// (the callee's value with P: the call's)
+theorem sp.c10_same(v. P): all G args W o. W in abi.World -> (ex regs. gc.regs_ok(regs, args)) ->
+  (all regs o2. gc.regs_ok(regs, args) -> runs(G[regs], W, o2) -> ex r. o2 = ok(W, r) && P(fst(r))) ->
+  runs(gimple.call1_0(G, args), W, o) -> o = exc(W, exc_val("stack_overflow", empty)) || (ex r. o = ok(W, r) && P(r))
 proof
   fix G args W o
   assume hw rg hq h
   let OVF := exc_val("stack_overflow", empty)
   obtain o2, hc0 hrel from apply(sp.call1_0_e, h)
-  have ci := apply(gc.call0_inv[Q := o2. ex r. o2 = ok(W, r)], {G}, {args}, {W}, {o2}, rg, hq, hc0)
+  have ci := apply(gc.call0_inv[Q := o2. ex r. o2 = ok(W, r) && P(fst(r))], {G}, {args}, {W}, {o2}, rg, hq, hc0)
   have _ pf _ _ := apply(ms.world_parts, hw)
   have od: "objs" in dom(W) by simp(expand(hw, abi.World))
   have os := apply(gc.objs_same, hw)
   have bk: gc.back0(W, W) = W by simp(os, pf, od)
-  have ca: o2 = exc(W, OVF) -> o = exc(W, OVF) || (ex r. o = ok(W, r)) proof
+  have ca: o2 = exc(W, OVF) -> o = exc(W, OVF) || (ex r. o = ok(W, r) && P(r)) proof
     assume e
     have oe: o = exc(W, OVF) by simp(rewrite(e, hrel))
     show by taut(oe)
   qed
-  have cb: (ex w4 r. (ex r2. ok(w4, r) = ok(W, r2)) && (o2 = ok(gc.back0(w4, W), pair(fst(r), snd(r))) || o2 = exc(gc.back0(w4, W), OVF))) ->
-      o = exc(W, OVF) || (ex r. o = ok(W, r)) proof
+  have cb: (ex w4 r. (ex r2. ok(w4, r) = ok(W, r2) && P(fst(r2))) && (o2 = ok(gc.back0(w4, W), pair(fst(r), snd(r))) || o2 = exc(gc.back0(w4, W), OVF))) ->
+      o = exc(W, OVF) || (ex r. o = ok(W, r) && P(r)) proof
     assume q
     obtain w4 r, hq4 ho4 from q
-    obtain r2, e42 from hq4
+    obtain r2, e42 p42 from hq4
     have w4e: w4 = W by simp(e42)
-    have k1: o2 = ok(gc.back0(w4, W), pair(fst(r), snd(r))) -> o = exc(W, OVF) || (ex r3. o = ok(W, r3)) proof
+    have re: r = r2 by simp(e42)
+    have pr: P(fst(r)) := rewrite(sym(re), p42)
+    have k1: o2 = ok(gc.back0(w4, W), pair(fst(r), snd(r))) -> o = exc(W, OVF) || (ex r3. o = ok(W, r3) && P(r3)) proof
       assume e
       have oe0: o = ok(gc.back0(w4, W), fst(r)) by simp(rewrite(e, hrel))
       have oe := rewrite(bk, rewrite(w4e, oe0))
-      show by taut((ex r3. o = ok(W, r3) by ex_intro({fst(r)}, oe)))
+      show by taut((ex r3. o = ok(W, r3) && P(r3) by ex_intro({fst(r)}, taut(oe, pr))))
     qed
-    have k2: o2 = exc(gc.back0(w4, W), OVF) -> o = exc(W, OVF) || (ex r3. o = ok(W, r3)) proof
+    have k2: o2 = exc(gc.back0(w4, W), OVF) -> o = exc(W, OVF) || (ex r3. o = ok(W, r3) && P(r3)) proof
       assume e
       have oe0: o = exc(gc.back0(w4, W), OVF) by simp(rewrite(e, hrel))
       have oe := rewrite(bk, rewrite(w4e, oe0))
@@ -140,16 +144,16 @@ proof
     qed
     show by taut(ho4, k1, k2)
   qed
-  have cc: (ex x e. (ex r. exc(x, e) = ok(W, r)) && o2 = exc(x, e)) -> o = exc(W, OVF) || (ex r. o = ok(W, r)) proof
+  have cc: (ex x e. (ex r. exc(x, e) = ok(W, r) && P(fst(r))) && o2 = exc(x, e)) -> o = exc(W, OVF) || (ex r. o = ok(W, r) && P(r)) proof
     assume q
     obtain x e, hq2 _ from q
-    obtain r, hr2 from hq2
+    obtain r, hr2 _ from hq2
     show by defs(simp(hr2), ok, exc)
   qed
-  have cd: (ex t. (ex r. diverge(t) = ok(W, r)) && o2 = diverge(t)) -> o = exc(W, OVF) || (ex r. o = ok(W, r)) proof
+  have cd: (ex t. (ex r. diverge(t) = ok(W, r) && P(fst(r))) && o2 = diverge(t)) -> o = exc(W, OVF) || (ex r. o = ok(W, r) && P(r)) proof
     assume q
     obtain t, hq2 _ from q
-    obtain r, hr2 from hq2
+    obtain r, hr2 _ from hq2
     show by defs(simp(hr2), ok, diverge)
   qed
   show by taut(ci, ca, cb, cc, cd)
@@ -269,20 +273,20 @@ qed
 
 // its outcomes: an overflow (the thread pointer any), or the memory within
 // __init_tls's frame, the descriptor's first word its address, the thread
-// pointer td, 0 returned
+// pointer td, its id set (not 0), 0 returned
 abbrev sp.itp_out(g, s, td, o) := sp.ovf_any(s, o) ||
-  (ex V. ((V in x86_64_linux.Vm && startup_specs.frame(s.vm, V, s.objs, startup_specs.tls_writes(g))) && gimple.bytes_at(V, td, 8) = td) &&
-    o = ok(fn_update(fn_update(s, "vm", V), "fs_base", td), 0))
+  (ex V. (((V in x86_64_linux.Vm && startup_specs.frame(s.vm, V, s.objs, startup_specs.tls_writes(g))) && gimple.bytes_at(V, td, 8) = td) &&
+    !(gimple.bytes_at(V, int_add(td, 48), 4) = 0)) && o = ok(fn_update(fn_update(s, "vm", V), "fs_base", td), 0))
 
-// (the return: its memory b's bytes X, qst)
+// (the return: its memory b's bytes X, qst, the id)
 theorem sp.itp_close(g, s, td, o, U, X): o = ok(fn_update(fn_update(fn_update(s, "vm", U), "fs_base", td), "vm", fn_update(s.vm, "bytes", X)), 0) ->
-  sp.qst(s.vm, X, s.objs, startup_specs.tls_writes(g), td) -> sp.itp_out(g, s, td, o)
+  sp.qst(s.vm, X, s.objs, startup_specs.tls_writes(g), td) -> !(gimple.bytes_at(fn_update(s.vm, "bytes", X), int_add(td, 48), 4) = 0) -> sp.itp_out(g, s, td, o)
 proof
-  assume ho hq
+  assume ho hq hid
   have qv qf qb := expand(hq, sp.qst)
   have e: fn_update(fn_update(fn_update(s, "vm", U), "fs_base", td), "vm", fn_update(s.vm, "bytes", X)) = fn_update(fn_update(s, "vm", fn_update(s.vm, "bytes", X)), "fs_base", td) by simp()
-  have x: ex V. ((V in x86_64_linux.Vm && startup_specs.frame(s.vm, V, s.objs, startup_specs.tls_writes(g))) && gimple.bytes_at(V, td, 8) = td) &&
-    o = ok(fn_update(fn_update(s, "vm", V), "fs_base", td), 0) by ex_intro({fn_update(s.vm, "bytes", X)}, taut(qv, qf, qb, rewrite(e, ho)))
+  have x: ex V. (((V in x86_64_linux.Vm && startup_specs.frame(s.vm, V, s.objs, startup_specs.tls_writes(g))) && gimple.bytes_at(V, td, 8) = td) &&
+    !(gimple.bytes_at(V, int_add(td, 48), 4) = 0)) && o = ok(fn_update(fn_update(s, "vm", V), "fs_base", td), 0) by ex_intro({fn_update(s.vm, "bytes", X)}, taut(qv, qf, qb, hid, rewrite(e, ho)))
   show by taut(x)
 qed
 
@@ -476,7 +480,8 @@ proof
       have lkb: LOCK in bits(64) by defs(simp(), c_src_env___init_tls.__thread_list_lock)
       have e218: bits_of_int(64, 218) = 218 by simp()
       obtain oc2, hrc2 hdc2 from apply(g.bind_open, h2)
-      have hq2: all regs o2. gc.regs_ok(regs, ARGS2) -> runs(S1[regs], WB(B4), o2) -> ex r. o2 = ok(WB(B4), r) proof
+      let TID(v) := v in bits(64) && (int_lt(0, v) && int_lt(v, 4194304))
+      have hq2: all regs o2. gc.regs_ok(regs, ARGS2) -> runs(S1[regs], WB(B4), o2) -> ex r. o2 = ok(WB(B4), r) && TID(fst(r)) proof
         fix regs o2
         assume hro hg
         have rl rln _ := hro
@@ -486,16 +491,16 @@ proof
       qed
       have rg2 := apply(gc.regs_get, apply(gc.regs_cat, apply(gc.regs_one[w := 64, x := bits_of_int(64, 218)], simp(), simp(), simp()),
         apply(gc.regs_one[w := 64, x := LOCK], simp(), simp(), lkb)))
-      have cs := apply(sp.c10_same, {S1}, {ARGS2}, {WB(B4)}, {oc2}, w4W, rg2, hq2, hrc2)
+      have cs := apply(sp.c10_same[P := v. TID(v)], {S1}, {ARGS2}, {WB(B4)}, {oc2}, w4W, rg2, hq2, hrc2)
       have j1: oc2 = exc(WB(B4), OVF) -> sp.itp_out(g, s, td, o) proof
         assume e
         have x := apply(sp.exc_of, {oc2}, {WB(B4)}, {OVF}, hdc2, e)
         have we: fn_update(fn_update(s, "fs_base", td), "vm", fn_update(s.vm, "bytes", B4)) = WB(B4) by simp()
         show := mp(all_elim(ovA, {td}, {fn_update(s.vm, "bytes", B4)}), htd, u4V, rewrite(sym(we), x))
       qed
-      have j2: (ex r. oc2 = ok(WB(B4), r)) -> sp.itp_out(g, s, td, o) proof
+      have j2: (ex r. oc2 = ok(WB(B4), r) && TID(r)) -> sp.itp_out(g, s, td, o) proof
         assume e
-        obtain tid, er from e
+        obtain tid, er tb t0 t1 from e
         // (the descriptor's fields, sysinfo: defined)
         have m48: g.mem_defined(WB(B4), td, 48, 4, true) by taut(mp(all_elim(mdB, {B4}, {48}, {4}), simp(), simp(), simp()))
         have m168: g.mem_defined(WB(B4), td, 168, 8, true) by taut(mp(all_elim(mdB, {B4}, {168}, {8}), simp(), simp(), simp()))
@@ -589,7 +594,11 @@ proof
         have q9 := apply(sp.q_peel[b := s.vm, X := X8, objs := OBJ, W := TW, td := td, a := int_add(td, 24), n := 8,
           v := bits_of_int(64, gimple.bytes_at(fn_update(s.vm, "bytes", X8), int_add(td, 16), 8))], r24,
           (int_le(int_add(int_add(td, 24), 8), td) || int_le(int_add(td, 8), int_add(td, 24)) by arith(tdo)), htd, t8, q8)
-        show := apply(sp.itp_close[g := g, s := s, td := td, o := o, U := U1, X := X9], h3, q9)
+        // the thread's id: stored at td + 48, the later stores apart
+        have i9: gimple.bytes_at(fn_update(s.vm, "bytes", X9), int_add(td, 48), 4) = bits_of_int(32, tid) by mem(htd, tdo, hb2, btv, e136)
+        have i32: bits_of_int(32, tid) = tid by defs(arith(tb, t0, t1), bits_of_int, pow2)
+        have inz: !(gimple.bytes_at(fn_update(s.vm, "bytes", X9), int_add(td, 48), 4) = 0) by arith(i9, i32, t0)
+        show := apply(sp.itp_close[g := g, s := s, td := td, o := o, U := U1, X := X9], h3, q9, inz)
       qed
       show by taut(cs, j1, j2)
     qed
@@ -742,14 +751,18 @@ proof
   show by ex_intro({V}, {pair(int_add(BT, 24), y)}, taut(hV, hfr, hoy, (fst(pair(int_add(BT, 24), y)) = int_add(BT, 24) by simp())))
 qed
 
+// (__init_tp's outcomes at a call: an overflow, or itp_out's memory, 0
+// returned)
+abbrev sp.itq_out(g, t, td, o2) := sp.ovf_any(t, o2) ||
+  (ex V r. ((((V in x86_64_linux.Vm && startup_specs.frame(t.vm, V, t.objs, startup_specs.tls_writes(g))) && gimple.bytes_at(V, td, 8) = td) &&
+    !(gimple.bytes_at(V, int_add(td, 48), 4) = 0)) && o2 = ok(fn_update(fn_update(t, "vm", V), "fs_base", td), r)) && bits_of_int(32, fst(r)) = 0)
+
 theorem sp.itp_q: all g td SA S1 t regs o2. t in abi.World -> t in univ(1) -> td in bits(64) -> gc.regs_ok(regs, seq_one(gimple.arg(64, td))) ->
   runs(c_src_env___init_tls.__init_tp_fun(SA, S1)[regs], t, o2) ->
   g.libc = c_src_env___init_tls.__libc -> g.builtin_tls = c_src_env___init_tls.builtin_tls -> g.sysinfo = c_src_env___init_tls.__sysinfo ->
   mp.calls(SA, musl_asm.__set_thread_area_fun()) -> mp.calls(S1, c_src_env___init_tls.__syscall1_fun()) ->
   startup_specs.globals_ok(t.vm, t.objs, g) -> int_le(c_src_env___init_tls.builtin_tls, td) -> int_le(int_add(td, 200), int_add(c_src_env___init_tls.builtin_tls, 336)) ->
-  sp.ovf_any(t, o2) ||
-  (ex V r. (((V in x86_64_linux.Vm && startup_specs.frame(t.vm, V, t.objs, startup_specs.tls_writes(g))) && gimple.bytes_at(V, td, 8) = td) &&
-    o2 = ok(fn_update(fn_update(t, "vm", V), "fs_base", td), r)) && bits_of_int(32, fst(r)) = 0)
+  sp.itq_out(g, t, td, o2)
 proof
   fix g td SA S1 t regs o2
   assume hw hu htd hro h hgL hgB hgS hSA hS1 hglob hb1 hb2
@@ -768,18 +781,16 @@ proof
       x6 x7. o2 = exc(x6, x7), x6. o2 = diverge(x6))), x3 x4. o2 = exc(x3, x4), x3. o2 = diverge(x3)) by taut(b, o1l)
   obtain o3, hs3 hk3 from expand(b2, bind_rel)
   have go := apply(sp.itp_run, {g}, {td}, {SA}, {S1}, {t}, {o3}, hw, hs3, htd, hgL, hgB, hgS, hSA, hS1, hglob, hb1, hb2)
-  have c1: sp.ovf_any(t, o3) -> sp.ovf_any(t, o2) || (ex V r. (((V in x86_64_linux.Vm && startup_specs.frame(t.vm, V, t.objs, startup_specs.tls_writes(g))) &&
-      gimple.bytes_at(V, td, 8) = td) && o2 = ok(fn_update(fn_update(t, "vm", V), "fs_base", td), r)) && bits_of_int(32, fst(r)) = 0) proof
+  have c1: sp.ovf_any(t, o3) -> sp.itq_out(g, t, td, o2) proof
     assume e
     obtain f v ob, hf hv hob e3 from expand(e, sp.ovf_any)
     have oe: o2 = exc(fn_update(fn_update(fn_update(t, "fs_base", f), "vm", v), "objs", ob), exc_val("stack_overflow", empty)) by simp(rewrite(e3, hk3))
     show by taut((sp.ovf_any(t, o2) by defs(ex_intro({f}, {v}, {ob}, taut(hf, hv, hob, oe)), sp.ovf_any)))
   qed
-  have c2: (ex V. ((V in x86_64_linux.Vm && startup_specs.frame(t.vm, V, t.objs, startup_specs.tls_writes(g))) && gimple.bytes_at(V, td, 8) = td) &&
-      o3 = ok(fn_update(fn_update(t, "vm", V), "fs_base", td), 0)) -> sp.ovf_any(t, o2) || (ex V r. (((V in x86_64_linux.Vm && startup_specs.frame(t.vm, V, t.objs, startup_specs.tls_writes(g))) &&
-      gimple.bytes_at(V, td, 8) = td) && o2 = ok(fn_update(fn_update(t, "vm", V), "fs_base", td), r)) && bits_of_int(32, fst(r)) = 0) proof
+  have c2: (ex V. (((V in x86_64_linux.Vm && startup_specs.frame(t.vm, V, t.objs, startup_specs.tls_writes(g))) && gimple.bytes_at(V, td, 8) = td) &&
+      !(gimple.bytes_at(V, int_add(td, 48), 4) = 0)) && o3 = ok(fn_update(fn_update(t, "vm", V), "fs_base", td), 0)) -> sp.itq_out(g, t, td, o2) proof
     assume e
-    obtain V, hV hfr hbt e3 from e
+    obtain V, hV hfr hbt hid e3 from e
     let TV := fn_update(fn_update(t, "vm", V), "fs_base", td)
     have k1: bind_rel(gimple.result(32, 0), TV, x6 x7. any_rel(x8. x8 in bits(64), x8. o2 = ok(x6, pair(x7, x8))), x6 x7. o2 = exc(x6, x7), x6. o2 = diverge(x6))
       by simp(expand(rewrite(e3, hk3), letin), keep(bind_rel, gimple.result))
@@ -787,9 +798,9 @@ proof
     obtain u, hub hu0 ho4 from apply(g.result32_inv, (0 in bits(32) by simp()), hr4)
     have k2: any_rel(x8. x8 in bits(64), x8. o2 = ok(TV, pair(u, x8))) by simp(rewrite(ho4, hk4), keep(any_rel))
     obtain y, hy hoy from apply(g.any_e, (ex y. y in bits(64) by ex_intro({0}, simp())), k2)
-    have x: ex V2 r. (((V2 in x86_64_linux.Vm && startup_specs.frame(t.vm, V2, t.objs, startup_specs.tls_writes(g))) && gimple.bytes_at(V2, td, 8) = td) &&
-      o2 = ok(fn_update(fn_update(t, "vm", V2), "fs_base", td), r)) && bits_of_int(32, fst(r)) = 0
-      by ex_intro({V}, {pair(u, y)}, taut(hV, hfr, hbt, hoy, (bits_of_int(32, fst(pair(u, y))) = 0 by simp(hu0))))
+    have x: ex V2 r. ((((V2 in x86_64_linux.Vm && startup_specs.frame(t.vm, V2, t.objs, startup_specs.tls_writes(g))) && gimple.bytes_at(V2, td, 8) = td) &&
+      !(gimple.bytes_at(V2, int_add(td, 48), 4) = 0)) && o2 = ok(fn_update(fn_update(t, "vm", V2), "fs_base", td), r)) && bits_of_int(32, fst(r)) = 0
+      by ex_intro({V}, {pair(u, y)}, taut(hV, hfr, hbt, hid, hoy, (bits_of_int(32, fst(pair(u, y))) = 0 by simp(hu0))))
     show by taut(x)
   qed
   show by taut(go, c1, c2)
@@ -838,15 +849,18 @@ proof
   show by taut(z2, z5, z7)
 qed
 
-// (a descriptor in the static TLS area, its first word its address: the
-// thread set up -- its pages startup's data pages)
+// (a descriptor in the static TLS area, its first word its address, its
+// id set: the thread set up -- its pages startup's data pages)
 theorem sp.ts_from: all g vm V objs fs. startup_specs.globals_ok(vm, objs, g) -> fn_update(V, "bytes", vm.bytes) = vm -> V.bytes in fn_space(bits(64), bits(8)) ->
-  startup_specs.in_tls(g, fs) -> g.builtin_tls in bits(64) -> fs in bits(64) -> !(fs = 0) -> gimple.bytes_at(V, fs, 8) = fs -> startup_specs.thread_set(V, fs)
+  startup_specs.in_tls(g, fs) -> g.builtin_tls in bits(64) -> fs in bits(64) -> !(fs = 0) -> gimple.bytes_at(V, fs, 8) = fs ->
+  !(gimple.bytes_at(V, int_add(fs, 48), 4) = 0) -> startup_specs.thread_set(V, fs)
 proof
   fix g vm V objs fs
-  assume hg hvb hvt hit hb hfs hnz hbt
-  have hall _ _ _ := expand(hg, startup_specs.globals_ok)
+  assume hg hvb hvt hit hb hfs hnz hbt hid
+  have hall _ _ hbl := expand(hg, startup_specs.globals_ok)
   have it1 it2 := expand(hit, startup_specs.in_tls)
+  have e48: bits_add(64, fs, 48) = int_add(fs, 48) by defs(arith(hfs, hb, it2, hbl), bits_add, bits_of_int, pow2)
+  have hid2: !(gimple.bytes_at(V, bits_add(64, fs, 48), 4) = 0) by simp(e48, hid)
   have e2 := mp(app_update_other[f := V, k := "bytes", v := vm.bytes, x := "pages"], (!("pages" = "bytes") by simp()))
   have vp: V.pages = vm.pages := sym(rewrite(hvb, e2))
   have rd: all k. k in omega -> int_le(int_add(k, 8), 200) -> x86_64_linux.readable(V, int_add(fs, k), 8) &&
@@ -898,7 +912,7 @@ proof
     show by defs(taut(rewrite(z0, r0), st, trans(le0, hbt), hnz), abi.thread_ok)
   qed
   have cok: abi.canary_ok(V, fs) by defs(taut(r40, r40w), abi.canary_ok)
-  show by defs(taut(tok, cok), startup_specs.thread_set)
+  show by defs(taut(tok, cok, hid2), startup_specs.thread_set)
 qed
 
 // (a memory's bytes stored: a memory)
@@ -1340,8 +1354,7 @@ proof
       have glob8: startup_specs.globals_ok(fn_update(s, "vm", V8).vm, fn_update(s, "vm", V8).objs, g) by simp(rewrite(os, gk8))
       have tdb: TD in bits(64) by simp(btv)
       let ARGI := seq_one(gimple.arg(64, TD))
-      let QI(o2) := sp.ovf_any(fn_update(s, "vm", V8), o2) || (ex V r. (((V in x86_64_linux.Vm && startup_specs.frame(fn_update(s, "vm", V8).vm, V, fn_update(s, "vm", V8).objs, TW)) &&
-        gimple.bytes_at(V, TD, 8) = TD) && o2 = ok(fn_update(fn_update(fn_update(s, "vm", V8), "vm", V), "fs_base", TD), r)) && bits_of_int(32, fst(r)) = 0)
+      let QI(o2) := sp.itq_out(g, fn_update(s, "vm", V8), TD, o2)
       obtain oc2, hrc2 hdc2 from apply(g.bind_open, h8)
       obtain o3c, hc02 hrel2 from apply(sp.call1_0_e, hrc2)
       have hq2: all regs o2. gc.regs_ok(regs, ARGI) -> runs(ITP[regs], fn_update(s, "vm", V8), o2) -> QI(o2) proof
@@ -1370,8 +1383,8 @@ proof
       have dC: (ex x e. QI(exc(x, e)) && o3c = exc(x, e)) -> sp.sit_out(g, s, o) proof
         assume q
         obtain x e, hq3 he3 from q
-        have nk: !(ex V r. (((V in x86_64_linux.Vm && startup_specs.frame(fn_update(s, "vm", V8).vm, V, fn_update(s, "vm", V8).objs, TW)) && gimple.bytes_at(V, TD, 8) = TD) &&
-          exc(x, e) = ok(fn_update(fn_update(fn_update(s, "vm", V8), "vm", V), "fs_base", TD), r)) && bits_of_int(32, fst(r)) = 0) by defs(simp(), ok, exc)
+        have nk: !(ex V r. ((((V in x86_64_linux.Vm && startup_specs.frame(fn_update(s, "vm", V8).vm, V, fn_update(s, "vm", V8).objs, TW)) && gimple.bytes_at(V, TD, 8) = TD) &&
+          !(gimple.bytes_at(V, int_add(TD, 48), 4) = 0)) && exc(x, e) = ok(fn_update(fn_update(fn_update(s, "vm", V8), "vm", V), "fs_base", TD), r)) && bits_of_int(32, fst(r)) = 0) by defs(simp(), ok, exc)
         have ov: sp.ovf_any(fn_update(s, "vm", V8), exc(x, e)) by taut(hq3, nk)
         obtain f v ob, hf hv hob hxe from expand(ov, sp.ovf_any)
         have oe2: oc2 = exc(x, e) by simp(rewrite(he3, hrel2))
@@ -1389,9 +1402,9 @@ proof
         assume q
         obtain w4 r, hq4 ho4 from q
         have no: !sp.ovf_any(fn_update(s, "vm", V8), ok(w4, r)) by defs(simp(), sp.ovf_any, ok, exc)
-        have q5: ex V r2. (((V in x86_64_linux.Vm && startup_specs.frame(fn_update(s, "vm", V8).vm, V, fn_update(s, "vm", V8).objs, TW)) && gimple.bytes_at(V, TD, 8) = TD) &&
-          ok(w4, r) = ok(fn_update(fn_update(fn_update(s, "vm", V8), "vm", V), "fs_base", TD), r2)) && bits_of_int(32, fst(r2)) = 0 by taut(hq4, no)
-        obtain V9 r2, hV9 hfr9 hbt9 e49 hz9 from q5
+        have q5: ex V r2. ((((V in x86_64_linux.Vm && startup_specs.frame(fn_update(s, "vm", V8).vm, V, fn_update(s, "vm", V8).objs, TW)) && gimple.bytes_at(V, TD, 8) = TD) &&
+          !(gimple.bytes_at(V, int_add(TD, 48), 4) = 0)) && ok(w4, r) = ok(fn_update(fn_update(fn_update(s, "vm", V8), "vm", V), "fs_base", TD), r2)) && bits_of_int(32, fst(r2)) = 0 by taut(hq4, no)
+        obtain V9 r2, hV9 hfr9 hbt9 hid9 e49 hz9 from q5
         let W9 := fn_update(fn_update(s, "vm", V9), "fs_base", TD)
         have bk2: gc.back0(w4, fn_update(s, "vm", V8)) = W9 by simp(e49, os, pf, od)
         have rz: bits_of_int(32, fst(r)) = 0 by simp(e49, hz9)
@@ -1456,7 +1469,7 @@ proof
           have _ _ _ v9t := apply(ms.world_parts, w9W)
           have v9b: V9.bytes in fn_space(bits(64), bits(8)) by simp(v9t)
           have tsS := apply(sp.ts_from, {g}, {s.vm}, {V9}, {s.objs}, {TD}, hglob, vb9, v9b, (startup_specs.in_tls(g, TD) by defs(arith(hgB, btv), startup_specs.in_tls)),
-            simp(hgB, btb), tdb, (!(TD = 0) by arith(btv)), hbt9)
+            simp(hgB, btb), tdb, (!(TD = 0) by arith(btv)), hbt9, hid9)
           have it: startup_specs.in_tls(g, TD) by defs(arith(hgB, btv), startup_specs.in_tls)
           have x: ex V fs. ((V in x86_64_linux.Vm && startup_specs.frame(s.vm, V, s.objs, TW)) && fs in bits(64) && startup_specs.thread_set(V, fs) && startup_specs.in_tls(g, fs)) &&
             o = ok(fn_update(fn_update(s, "vm", V), "fs_base", fs), empty) by ex_intro({V9}, {TD}, taut(hV9, F89, tdb, tsS, it, h9))

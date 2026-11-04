@@ -30,12 +30,13 @@ proof
   fix g t
   assume hw hb hg
   let FS := g.builtin_tls
-  let V := fn_update(t.vm, "bytes", x86_64_linux.store_le(t.vm.bytes, FS, 8, FS))
+  let X1 := x86_64_linux.store_le(t.vm.bytes, FS, 8, FS)
+  let V1 := fn_update(t.vm, "bytes", X1)
+  let V := fn_update(t.vm, "bytes", x86_64_linux.store_le(X1, int_add(FS, 48), 4, 1))
   have hall _ hnz hbd := expand(hg, startup_specs.globals_ok)
   have tv _ _ tb := apply(ms.world_parts, hw)
-  have su := apply(g.store_univ, {t.vm}, {FS}, {8}, {FS}, tv)
-  have vu: V in univ(1) by simp(apply(x86.vm_univ, tv), su)
-  have vV := apply(x86.store_vm, {t.vm}, {FS}, {8}, {FS}, tv, vu)
+  have v1V := apply(ms.wr_any, {t.vm}, {FS}, {8}, {FS}, tv)
+  have vV: V in x86_64_linux.Vm by simp(apply(ms.wr_any, {V1}, {int_add(FS, 48)}, {4}, {1}, v1V))
   // (the bytes of the area: data pages)
   have pg: all i. i in omega -> int_lt(i, 336) -> x86_64_linux.mapped(t.vm, int_div(int_add(FS, i), x86_64_linux.PAGE)) &&
       snd(t.vm.pages[int_div(int_add(FS, i), x86_64_linux.PAGE)]).prot.r && snd(t.vm.pages[int_div(int_add(FS, i), x86_64_linux.PAGE)]).prot.w &&
@@ -48,7 +49,7 @@ proof
   let W := startup_specs.tls_writes(g)
   // (the frame: only the descriptor's first word written, in the area)
   have vf: is_fun(t.vm) && "bytes" in dom(t.vm) by simp(tv)
-  have f1: fn_update(V, "bytes", t.vm.bytes) = t.vm := trans(fn_update_twice[f := t.vm, k := "bytes", a := x86_64_linux.store_le(t.vm.bytes, FS, 8, FS), b := t.vm.bytes],
+  have f1: fn_update(V, "bytes", t.vm.bytes) = t.vm := trans(fn_update_twice[f := t.vm, k := "bytes", a := x86_64_linux.store_le(X1, int_add(FS, 48), 4, 1), b := t.vm.bytes],
     mp(fn_update_same[f := t.vm, k := "bytes"], taut(vf), taut(vf)))
   have f2: all x. x in bits(64) -> !(x in W) -> !abi.stack_free(t.vm, t.objs, x) -> V.bytes[x] = t.vm.bytes[x] proof
     fix x
@@ -64,8 +65,21 @@ proof
       qed
       show by taut(c)
     qed
+    have ne48: all i. i in omega -> int_lt(i, 4) -> !(bits_add(64, int_add(FS, 48), bits_of_int(64, i)) = x) proof
+      fix i
+      assume hi hil
+      have ea := apply(ms.add_i, {int_add(FS, 48)}, {i}, arith(hb), hi, arith(hb, hi, hil, hbd))
+      have iw := apply(sp.tls_w2, {g}, {int_add(48, i)}, hb, arith(hi), arith(hi, hil))
+      have e2: int_add(FS, int_add(48, i)) = int_add(int_add(FS, 48), i) by arith(hb, hi)
+      have c: bits_add(64, int_add(FS, 48), bits_of_int(64, i)) = x -> false proof
+        assume e
+        show by taut(hn, rewrite(trans(sym(ea), e), rewrite(e2, iw)))
+      qed
+      show by taut(c)
+    qed
     have so := apply(x86.store_outside, {t.vm.bytes}, {FS}, {8}, {FS}, {x}, hx, ne)
-    show by simp(so)
+    have so2 := apply(x86.store_outside, {X1}, {int_add(FS, 48)}, {4}, {1}, {x}, hx, ne48)
+    show by simp(so2, so)
   qed
   have fr: startup_specs.frame(t.vm, V, t.objs, W) by defs(taut(f1, f2), startup_specs.frame)
   // (the descriptor at FS: its own address in its first word, the canary's
@@ -105,9 +119,10 @@ proof
   have r0 r0w := mp(all_elim(rd, {0}), simp(), simp())
   have r40 r40w := mp(all_elim(rd, {40}), simp(), simp())
   have z0: int_add(FS, 0) = FS by arith(hb)
-  have vb: V.bytes in fn_space(bits(64), bits(8)) by simp(apply(x86.store_typed, {t.vm.bytes}, {FS}, {8}, {FS}, tb))
+  have vb: V.bytes in fn_space(bits(64), bits(8)) by simp(apply(x86.store_typed, {X1}, {int_add(FS, 48)}, {4}, {1}, apply(x86.store_typed, {t.vm.bytes}, {FS}, {8}, {FS}, tb)))
   have le0: x86_64_linux.le(V.bytes, FS, 8) = gimple.bytes_at(V, FS, 8) := apply(x86.le8_nat, {V}, {FS}, vb)
   have b8: gimple.bytes_at(V, FS, 8) = FS by mem(hb, hbd)
+  have b48: gimple.bytes_at(V, int_add(FS, 48), 4) = 1 by mem(hb, hbd)
   have tok: abi.thread_ok(V, FS) proof
     have st: all i. i in omega -> int_lt(i, 8) -> !abi.stack_page(V, int_div(int_add(FS, i), x86_64_linux.PAGE)) proof
       fix i
@@ -119,7 +134,8 @@ proof
   qed
   have cok: abi.canary_ok(V, FS) by defs(taut(r40, r40w), abi.canary_ok)
   have it: startup_specs.in_tls(g, FS) by defs(arith(hb), startup_specs.in_tls)
-  have ts: startup_specs.thread_set(V, FS) by defs(taut(tok, cok), startup_specs.thread_set)
+  have e48: bits_add(64, FS, 48) = int_add(FS, 48) by defs(arith(hb, hbd), bits_add, bits_of_int, pow2)
+  have ts: startup_specs.thread_set(V, FS) by defs(taut(tok, cok, (!(gimple.bytes_at(V, bits_add(64, FS, 48), 4) = 0) by simp(e48, b48))), startup_specs.thread_set)
   have efs: ex fs. fs in bits(64) && (startup_specs.thread_set(V, fs) && startup_specs.in_tls(g, fs)) by ex_intro({FS}, taut(hb, ts, it))
   show by ex_intro({V}, taut(vV, fr, efs))
 qed
