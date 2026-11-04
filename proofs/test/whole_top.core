@@ -105,3 +105,88 @@ proof
   qed
   show by taut(g, c1, c2)
 qed
+
+// ----------------------------------------------------------------------
+//  The contract's outcomes, the spec ending
+
+// the machine's outcomes the whole run's contract allows when its spec
+// ends (pw.END): a divergence, a stack overflow below the entry's sp, a
+// stack fault, an exit with 0 or 1
+abbrev pw.XO(s, o) := (ex t. o = diverge(t)) ||
+  (ex m1 a k. (o = exc(m1, exc_val("segv", pair(a, k))) && (k = 0 || k = 1 || k = 3)) && a in bits(64) && abi.overflow_at(m1.vm, m1.gpr[4], abi.sp(s), a)) ||
+  (ex m1. o = exc(m1, exc_val("stack_fault", empty))) || (ex m1 st. o = exc(m1, exc_val("exit", st)) && (st = 0 || st = 1))
+
+theorem pw.mtv_end: all s V P W o. (all x. runs(P, W, x) -> pw.END(x)) -> tr.mtv(false, s, V, P, W, o, false) -> pw.XO(s, o)
+proof
+  fix s V P W o
+  assume he hm
+  have c1: tr.ub(s, V, P, W) -> pw.XO(s, o) proof
+    assume h
+    obtain e x, _ ne ns _ hr from expand(h, tr.ub)
+    have q := mp(all_elim(he, {exc(x, e)}), hr)
+    have k1: (ex y. exc(x, e) = exc(y, pw.OVF)) -> false proof
+      assume h1
+      obtain y, ey from h1
+      have _ ee := apply(ui.exc_inj, ey)
+      show by taut(ne, ee)
+    qed
+    have k2: (ex y c. exc(x, e) = exc(y, exc_val("exit", c)) && (c = 0 || c = 1)) -> false proof
+      assume h2
+      obtain y c, ey _ from h2
+      have _ ee := apply(ui.exc_inj, ey)
+      have nx: ex st. e = exc_val("exit", st) by ex_intro({c}, ee)
+      show by taut(expand(ns, abi.nstop), nx)
+    qed
+    show by taut(q, k1, k2)
+  qed
+  have c2: tr.crash(s, P, W, o) -> pw.XO(s, o) proof
+    assume h
+    obtain m1 a k, oe _ ab _ _ _ from expand(h, tr.crash)
+    have d1: (o = exc(m1, exc_val("segv", pair(a, k))) && (k = 0 || k = 1 || k = 3)) && abi.overflow_at(m1.vm, m1.gpr[4], abi.sp(s), a) -> pw.XO(s, o) proof
+      assume h1
+      have x: ex m2 a2 k2. (o = exc(m2, exc_val("segv", pair(a2, k2))) && (k2 = 0 || k2 = 1 || k2 = 3)) && a2 in bits(64) &&
+        abi.overflow_at(m2.vm, m2.gpr[4], abi.sp(s), a2) by ex_intro({m1}, {a}, {k}, taut(h1, ab))
+      show by taut(x)
+    qed
+    have d2: o = exc(m1, exc_val("stack_fault", empty)) -> pw.XO(s, o) proof
+      assume h2
+      show by taut((ex m2. o = exc(m2, exc_val("stack_fault", empty)) by ex_intro({m1}, h2)))
+    qed
+    show by taut(oe, d1, d2)
+  qed
+  have c3: tr.div(P, W, o) -> pw.XO(s, o) proof
+    assume h
+    have d _ := expand(h, tr.div)
+    show by taut(d)
+  qed
+  have c4: (ex m1. o = ok(m1, empty) && tr.rtv(false, s, V, P, W, m1)) -> pw.XO(s, o) proof
+    assume h
+    obtain m1, _ hr from h
+    have _ _ ew .. := expand(hr, tr.rtv)
+    obtain w2, hp .. from ew
+    have q := mp(all_elim(he, {ok(w2, pair(m1.gpr[0], m1.gpr[2]))}), hp)
+    show by taut(q, all_elim(pw.end_ok, {w2}, {pair(m1.gpr[0], m1.gpr[2])}))
+  qed
+  have c5: tr.xo(P, W, o) -> pw.XO(s, o) proof
+    assume h
+    obtain m1 st x, _ oe _ hr from expand(h, tr.xo)
+    have q := mp(all_elim(he, {exc(x, exc_val("exit", st))}), hr)
+    have k1: (ex y. exc(x, exc_val("exit", st)) = exc(y, pw.OVF)) -> false proof
+      assume h1
+      obtain y, ey from h1
+      have _ ee := apply(ui.exc_inj, ey)
+      have q2 _ := apply(pair_inj[a := "exit", b := st, c := "stack_overflow", d := empty], (pair("exit", st) = pair("stack_overflow", empty) by defs(ee, exc_val)))
+      show by taut(q2, (!("exit" = "stack_overflow") by eval()))
+    qed
+    have k2: (ex y c. exc(x, exc_val("exit", st)) = exc(y, exc_val("exit", c)) && (c = 0 || c = 1)) -> pw.XO(s, o) proof
+      assume h2
+      obtain y c, ey hc from h2
+      have _ ee := apply(ui.exc_inj, ey)
+      have _ sc := apply(pair_inj[a := "exit", b := st, c := "exit", d := c], (pair("exit", st) = pair("exit", c) by defs(ee, exc_val)))
+      have x: ex m2 st2. o = exc(m2, exc_val("exit", st2)) && (st2 = 0 || st2 = 1) by ex_intro({m1}, {st}, taut(oe, rewrite(sym(sc), hc)))
+      show by taut(x)
+    qed
+    show by taut(q, k1, k2)
+  qed
+  show by taut(expand(hm, tr.mtv), c1, c2, c3, c4, c5)
+qed
