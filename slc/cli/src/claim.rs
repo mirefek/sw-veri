@@ -227,8 +227,8 @@ fn summary(
         let l: Vec<String> = x.iter().map(|v| v.to_string()).collect();
         s.push_str("CLAIM musl_program\n==================\n\n");
         s.push_str(&format!("  program_ok(FILE, {{{}}})                              -- layers/claim_program.sl\n", l.join(", ")));
-        s.push_str("    every run from an unprivileged exec state that ends exits with one of these statuses,\n");
-        s.push_str("    or dies of a stack overflow; no other crash (runs that never end allowed)\n\n");
+        s.push_str("    every run from an unprivileged exec state ends: it exits with one of these statuses,\n");
+        s.push_str("    or dies of a stack overflow; no other crash, no run that never ends\n\n");
     }
     s.push_str(&format!("Binary: {}\n  size {} bytes, sha256 {}\n  entry {:#x}\n", elf_path, bytes.len(), sha256::hex(bytes), elf.entry));
     s.push_str(&format!(

@@ -3,6 +3,20 @@
 What the verification of musl's allocator has reached, by area. Each
 item is a short summary of finished work; details are in the files named.
 
+This is a detailed record, written for someone working on the proofs.
+For a first reading, docs/overview.md is the better start. The sections:
+- **The model and the claim**: the x86-64 and Linux model, its testing
+  against the CPU, the malloc layer's specs.
+- **Logic and proof language**: the kernel's extensions and the proof
+  language's features.
+- **The levels**: the C world and readable GIMPLE.
+- **Top of the claim and the invariant**: `musl_malloc` assembled;
+  mallocng's invariant and its laws.
+- **Functions**: C1 (the engine and its rules), then C2, function by
+  function. This is the longest part.
+- **Init, the test program and the program claim**: startup to `main`,
+  the test's `main`, the exit path, and `musl_program` with termination.
+
 ## The model and the claim
 
 - **x86-64 and Linux in SL** (`spec/`). The instruction table and
@@ -1331,7 +1345,7 @@ item is a short summary of finished work; details are in the files named.
   `thread_ok`), each with its contract. step names why a call's contract
   matching the call did not apply.
 
-## Init (startup to main)
+## Init, the test program and the program claim
 
 - **Readable GIMPLE of the startup units** (crt1.c, __libc_start_main.c,
   __init_tls.c, __stack_chk_fail.c): string literals, function addresses

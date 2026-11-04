@@ -8,7 +8,9 @@ Two languages are used together:
   proof is written in the proof language and checked by `slc
   kernel-check`.
 
-Part I is SL; Part II is core files and proofs.
+Part I is SL; Part II is core files and proofs. This file is a
+reference. For a first look at both languages in use, see the example
+function in docs/overview.md ("One function, from C to the claim").
 
 # Part I: SL
 

@@ -35,6 +35,9 @@ musl 1.2.6 built with `-O0`, statically linked with the test program
   There is no other crash and no run that never ends. The program's
   pattern check, which would exit with 42, never fails.
 
+Both are proven down to the binary's bytes, from the model of the CPU and
+the OS. No lemma is left open.
+
 The background logic (`core/prelude.core`) is classical second-order logic
 with Hilbert choice and set theory with a hierarchy of Grothendieck
 universes. Everything after its axioms is a conservative definition.
@@ -46,10 +49,49 @@ universes. Everything after its axioms is a conservative definition.
 - The model of the machine and the OS (`spec/`): x86-64 and Linux written
   in SL, assumed to describe the real machine. It is differentially tested
   against the real CPU (`slc cputest`, gaps in `tests/cputest-limits.txt`).
+- The statements: `layers/claim_malloc.sl`, `layers/claim_program.sl` and
+  the layers they use (`layers/malloc.sl`, `layers/abi.sl`) say what is
+  claimed, so a reader has to check that they mean what is wanted.
 
-The front ends are not trusted: the elaborator, the proof language and the
-generators of GIMPLE and decode facts. A mistake there makes a proof fail,
-never a false theorem. See `docs/overview.md` for the details.
+The front ends are not trusted: the elaborator, the proof language, the C1
+engine and the generators of GIMPLE and decode facts. A mistake there
+makes a proof fail, never a false theorem. See `docs/overview.md` for the
+details.
+
+## Start here
+
+1. **This README**: what is proven and how to check it.
+2. **[docs/overview.md](docs/overview.md)**: the approach. It starts with
+   the big picture and follows one small function (`get_slot_index`) from
+   its C source through machine code, GIMPLE, its spec and its proofs up
+   to the claim. It ends with a glossary of the project's terms.
+3. **The statements**, in SL, a language close to C:
+   - `layers/claim_malloc.sl` and `layers/claim_program.sl`: the two
+     claims;
+   - `layers/malloc.sl`: what `malloc` and `free` promise a client.
+4. **Then any of the following**, depending on interest:
+   - [docs/language.md](docs/language.md): the specification language SL
+     and the proof language, as a reference;
+   - [docs/done.md](docs/done.md): a detailed record of what is done, by
+     area;
+   - [docs/todo.md](docs/todo.md): what comes next;
+   - [goal.md](goal.md): the project's original brief.
+
+### Where to find things
+
+| question | where |
+| --- | --- |
+| What exactly is claimed? | `layers/claim_malloc.sl`, `layers/claim_program.sl`; after setup, `build/chain/claim.summary.txt` lists the binary's addresses and the trusted base |
+| What may a client of `malloc` and `free` rely on? | `layers/malloc.sl` (specs and laws), `proofs/malloc_client.core` (consequences) |
+| How are the CPU and Linux modelled? | `spec/x86_64/`, `spec/linux/` |
+| What does a C function see, and what is the ABI? | `layers/abi.sl` |
+| What is readable GIMPLE? | `layers/gimple.sl`; the generated code in `build/gimple-O0/sl/` after setup |
+| What is mallocng's invariant? | `layers/mallocng.sl` (its design is in the comment at the top) |
+| What is each mallocng function for? | `layers/mallocng_specs.sl` |
+| Where is the proof for function F? | C2: `proofs/mallocng/fun/`, one file per function or family (`get_slot_index.core`, `lists.core` for queue and dequeue); the test program's in `proofs/test/`. C1: F's `c1` line in `proofs/mallocng/machine/` |
+| How do the pieces join into the claims? | `proofs/mallocng/top.core`, `top_free.core`, `init.core`, `claim.core`; `proofs/test/whole_top.core` |
+| How are machine code and GIMPLE related? | the rules in `proofs/translate*.core`, the engine in `slc/cli/src/c1/` |
+| What does the proof language look like? | `docs/language.md` §13; any file in `proofs/mallocng/fun/` |
 
 ## The layers
 
@@ -68,6 +110,16 @@ Machine code is related to GIMPLE automatically: the C1 engine in `slc/cli`
 checks each function's code against its GIMPLE. GIMPLE is related to the
 specs by hand-written proofs (C2, `proofs/`).
 
+## Size
+
+- About 100 functions' machine code is checked against their GIMPLE: the
+  allocator, musl's startup and exit code, and the test program.
+- The model (`spec/`) is about 1,500 lines of SL, and the layers about
+  5,000.
+- The proofs are about 170,000 lines.
+- The tool (`slc/`) is about 61,000 lines of Rust, of which the kernel
+  with its trusted extensions is about 13,500.
+
 ## Layout
 
 - `core/`: the background theory and its libraries.
@@ -78,11 +130,7 @@ specs by hand-written proofs (C2, `proofs/`).
   interpreter, CLI (claims, GIMPLE and C1 generators, the checker).
 - `scripts/`: building musl, generating files, checking the chain.
 - `tests/`: the test programs and the CPU test's known limits.
-- `docs/`:
-  - `overview.md`: the approach and what is trusted;
-  - `language.md`: the languages;
-  - `done.md`: what is done;
-  - `todo.md`: what comes next.
+- `docs/`: the documentation (see "Start here").
 - `goal.md`: the project's original goal.
 
 ## Checking it
@@ -105,13 +153,24 @@ program, dumps GCC's GIMPLE of the translation units the proofs read, and
 generates the decode facts, readable GIMPLE and the locals' location map.
 `scripts/check.sh` keeps caches in `build/`. A check without them takes
 about 25 minutes and about 2.5 GB of memory; the script limits memory to
-6 GB.
+6 GB. It ends with:
+
+```
+status:
+  claim musl_malloc: proven
+  claim musl_program: proven
+ok: all declarations well-formed, definitions conservative, proofs checked, claims closed
+```
+
+`scripts/check.sh FILE` checks the chain up to FILE. With the caches, an
+edited proof is checked again on its own, in about a second.
 
 ## Status
 
-Both claims are proven, with no open lemma. Next steps are in
-`docs/todo.md`: a witness that some run reaches `main`, shared libraries
-and the dynamic linker, and usability of the proof language.
+Both claims are proven. Next steps are in `docs/todo.md`:
+- a witness that some run reaches `main`;
+- shared libraries and the dynamic linker;
+- usability of the proof language.
 
 ## License
 

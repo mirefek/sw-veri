@@ -2,15 +2,162 @@
 
 The project verifies basic software down to machine code (goal.md). The
 first target is musl's allocator (mallocng `malloc` and `free`; `calloc`
-and `realloc` later). The
-statement to prove is that, as machine code in a static binary, these
-functions implement the malloc layer's specs, and that the allocator's
-invariant holds when `main` starts.
+and `realloc` later). The statement to prove is that, as machine code in
+a static binary, these functions implement the malloc layer's specs, and
+that the allocator's invariant holds when `main` starts. A second
+statement is about a whole test program using them.
 
-Related files:
+This file explains the approach. Its first part is an introduction:
+- the big picture;
+- one small function followed from its C source to the claim;
+- a glossary at the end, for the project's terms.
+
+The sections after the introduction are the reference: what is trusted,
+each level, how a function is proven, and the repository.
+
+The other documents:
 - docs/language.md: the specification language SL and the proof language;
-- docs/todo.md: what comes next;
-- docs/done.md: what is done.
+- docs/done.md: what is done, by area;
+- docs/todo.md: what comes next.
+
+## The big picture
+
+```
+  layers/claim_malloc.sl, claim_program.sl   the claims: closed statements
+        ^                                    over the binary's bytes
+        | proofs/mallocng/top*.core, claim.core, proofs/test/
+  layers/malloc.sl                           what a client may rely on
+        ^
+        | proofs/mallocng/top.core (from mallocng's invariant)
+  layers/mallocng.sl, mallocng_specs.sl      mallocng's invariant; each
+        ^                                    function's purpose
+        | C2: hand-written proofs, proofs/mallocng/fun/
+  readable GIMPLE (generated)                GCC's GIMPLE as SL procedures
+        ^
+        | C1: automatic, the checker's engine (`c1` lines)
+  machine code, in the binary                the bytes the claim contains
+        |
+        | its meaning
+  spec/x86_64, spec/linux                    the model of the CPU and OS
+```
+
+Each arrow is a theorem checked by the kernel. The model at the bottom
+and the claims at the top are what a reader has to trust and read. The
+layers between are definitions, and the proofs connect them.
+
+C1 is a compiler-correctness check: it knows nothing about the
+allocator. C2 is about what the code means: there the invariant and the
+purposes are proven. They meet at readable GIMPLE, the last compiler
+stage that is still close to the C source.
+
+## One function, from C to the claim
+
+`get_slot_index` (musl's src/malloc/mallocng/meta.h) is a good first
+example. It reads the 5-bit index of a slot from the slot's header byte:
+
+```c
+static inline int get_slot_index(const unsigned char *p)
+{
+	return p[-3] & 31;
+}
+```
+
+**1. The machine code.** The binary (`build/test_malloc_O0`, built by
+`scripts/setup.sh`) has two copies, one per translation unit. malloc.c's
+is at 0x40318e:
+
+```
+mov  QWORD PTR [rsp-0x8], rdi
+mov  rax, QWORD PTR [rsp-0x8]
+sub  rax, 0x3
+movzx eax, BYTE PTR [rax]
+movzx eax, al
+and  eax, 0x1f
+ret
+```
+
+What each instruction does is the model's (`spec/x86_64`). The checker
+decodes these bytes itself (the `steps` line, build/chain/steps.core).
+
+**2. Readable GIMPLE.** `slc gimple --readable` turns GCC's dump into an
+SL procedure (build/gimple-O0/sl/c_mallocng_malloc.sl after setup):
+
+```
+proc[World] get_slot_index(p: bits[64]) -> bits[32] {
+  var t6: bits[32] = any bits[32]
+  let t1 = padd(p, -3)
+  let t2 = ld8(t1, 0)
+  let t3 = zext[32](t2)
+  t6 := t3 & 31
+  return t6
+}
+```
+
+Its operations (`padd`, `ld8`, ...) are defined in layers/gimple.sl. A
+load outside the memory the function may see is undefined there, so
+whatever the machine does then is allowed.
+
+**3. C1: the machine code ⊑ the GIMPLE.** One line in
+proofs/mallocng/machine/c1.core does it:
+
+```
+c1 get_slot_index c_src_malloc_mallocng_malloc_cfg.get_slot_index_fun gsitc
+```
+
+The engine walks the instructions and the GIMPLE side by side. Each
+step is an instance of a proven rule (proofs/translate*.core), so no
+proof text is written. The result is the theorem `gsitc.implements`: the
+code at its address implements the GIMPLE as an ABI function. The ABI
+covers arguments in registers, the stack frame, the return address and
+the stack overflowing. The walk is on GIMPLE's control-flow graph form
+(`_cfg`). One more line, in proofs/mallocng/machine/cfg.core, relates
+that form to the structured form above (`refines get_slot_index_ref
+...`).
+
+**4. The purpose.** layers/mallocng_specs.sl says what the function is
+for, on mallocng's abstract state (`A`, a ghost of the allocator's
+memory):
+
+```
+proc[MallocAbs] get_slot_index_spec(c: Cfg, p: bits[64]) -> bits[32] {
+  require holds_in(c, A, vm, objs, blocks) && (ex g: nat, i: nat. starts_at(A, g, i, uint(p)) && clear_below(A, g, uint(p)))
+  either { overflow() } or {
+    return any i: bits[32] where ex g: nat. starts_at(A, g, uint(i), uint(p))
+  }
+}
+```
+
+Read: if the invariant holds and `p` starts a block in slot `i` of
+group `g`, the result is `i`. A call may also overflow the stack.
+
+**5. C2: the GIMPLE ⊑ the purpose.** This one is a hand-written proof,
+proofs/mallocng/fun/get_slot_index.core:
+- `mp.gsi_run` runs the GIMPLE (`step`) and shows that the byte it reads
+  is the slot header, whose low 5 bits are the index (`mp.slot_hdr`, a
+  fact about the invariant);
+- `mp.gsi` is the refinement;
+- `mp.gsi_implements` composes it with C1 (`tr.implements_refine`,
+  `tr.implements_abi_g`): the machine code at 0x40318e implements the
+  purpose spec.
+
+**6. Up to the claim.** Callers use `get_slot_index` only through that
+theorem: get_meta's proof takes the contract and never looks at the
+code. The functions are composed in this way up the call graph, to
+`malloc` and `free`. Then:
+- proofs/mallocng/top.core and top_free.core show that the purpose specs
+  of `malloc` and `free` give layers/malloc.sl's client specs, under
+  mallocng's invariant (layers/mallocng.sl);
+- proofs/mallocng/init.core and the startup functions' proofs show that
+  the invariant holds when `main` starts;
+- proofs/mallocng/claim.core supplies the invariant as the witness and
+  proves `musl_malloc`;
+- proofs/test/ proves `musl_program`. It uses `malloc` and `free` only
+  through their client specs, plus the proofs of the startup code and of
+  the test program's own functions.
+
+Larger functions look the same. They have more code, loops (an
+invariant at the loop's head) and calls (the callee's contract). For
+example, proofs/mallocng/fun/alloc_slot.core or try_avail.core.
 
 ## What is trusted
 
@@ -126,8 +273,8 @@ outcome.
     for every world and the block's live locals in their homes, each
     block walked once to the cut point it goes on at, gathered by one
     theorem (`tr.cfg_lvk`, from the loop rule over a set of cut points).
-    The labels' addresses are found as the walks arrive. C1 is moving to
-    it (docs/todo.md 1.0); the C2 proofs are about the structured form.
+    The labels' addresses are found as the walks arrive. C1 uses this
+    form; the C2 proofs are about the structured form.
 
   The two meet by a GIMPLE-level refinement, the CFG form ⊑ the
   structured form per function (`refines NAME LOW HIGH`,
@@ -278,3 +425,64 @@ second. `scripts/check.sh gen` first makes its generated files
 including the C1 engine on every function. The tests that need
 the musl build (`scripts/build-musl.sh -O0`) skip without it; with
 `SLC_REQUIRE_BUILD=1` they fail instead.
+
+## Glossary
+
+- **SL**: the specification language of `*.sl` files (models, layers,
+  specs), elaborated into definitions of the logic (docs/language.md
+  Part I).
+- **core file**: a `*.core` file, with declarations and theorems of the
+  logic and proofs in the proof language (docs/language.md Part II).
+- **slc**: the tool (`slc/`): kernel, elaborator, proof checker,
+  generators and the C1 engine.
+- **the kernel**: the small trusted checker every theorem goes through
+  (`slc/kernel`).
+- **the chain**: all core files in checking order (`proofs/chain`),
+  checked by `scripts/check.sh`. Its last theorems are the claims.
+- **claim**: a closed statement about the binary, made by `slc claim`
+  (build/chain/claim.core, explained in build/chain/claim.summary.txt).
+- **level / layer**: a view of the state and of programs, defined in
+  `layers/` on top of the one below it.
+- **world**: the state as one level sees it. GIMPLE's world (`World`,
+  layers/abi.sl) is the C world: memory without the stack, the thread
+  pointer, the I/O.
+- **readable GIMPLE**: GCC's GIMPLE (its intermediate language) printed
+  as SL procedures over the C world (`slc gimple --readable`). It comes in
+  a structured form and a control-flow graph form (`_cfg`).
+- **C1**: machine code ⊑ readable GIMPLE, per function, checked
+  automatically by the engine from a `c1` line.
+- **C2**: readable GIMPLE ⊑ a spec, per function, by a hand-written
+  proof.
+- **⊑ (refines)**: every outcome of the lower program is allowed by the
+  higher one, where the higher one's precondition holds.
+- **outcome**: `ok(state, value)`, `exc(state, e)` (an exception, such as
+  an exit or a fault) or `diverge(trace)` (a run that never ends).
+- **undefined**: every outcome allowed. It is used where C or the model
+  leaves behaviour open, so that a spec over-approximates.
+- **contract**: a function's spec in the shape "pre ⇒ overflow ∨ post".
+  A caller is proven against its callees' contracts, not their code.
+- **purpose spec**: a mallocng function's contract, stating what it is
+  for on the abstract state (layers/mallocng_specs.sl).
+- **abstract state (`A`, `MallocAbs`)**: mallocng's state as data: the
+  groups, slots, metas and lists. It is a ghost: never in memory, but
+  determined by it (`mallocng.abs_unique`).
+- **invariant**: `alloc_inv`, a parameter of layers/malloc.sl. mallocng's
+  (`mallocng.inv`) is the witness in the claim.
+- **owned memory**: `alloc_owned`, the bytes the allocator may use and
+  a client must leave alone.
+- **laws**: what any invariant and owned memory must satisfy for a client
+  to rely on them, such as the frame law (layers/malloc.sl).
+- **overflow**: a stack overflow, the one machine-level failure a C
+  function may show (`overflow()`, layers/abi.sl).
+- **decode facts / `steps` line**: the theorems that the binary's bytes
+  at an address are a given instruction, proven by the checker
+  (build/chain/steps.core).
+- **cut point**: the first instruction of a basic block. The C1 claim
+  is stated there and each block is walked once.
+- **location map**: where each GIMPLE local lives in the -O0 frame (from
+  DWARF, build/locmap_O0.core). It guides the engine and is not trusted.
+- **normal form (N)**: the one form values are written in during C1
+  (`slc/cli/src/c1/nf.rs`), so that comparing two values is a match.
+- **`step`, `mem`, `rsimp`, `arith`**: proof-language tactics: run a
+  program, read memory through stores, rewrite, linear arithmetic
+  (docs/language.md §13).
