@@ -1,12 +1,12 @@
 # Software verification
 
-The long-term goal of this project is to software-verify basic software up to machine code level. Starting with tools such as glibc (~/basic-sw/musl-1.2.6), and busybox (~/basic-sw/busybox-0.60.3).
+The long-term goal of this project is to software-verify basic software up to machine code level. Starting with tools such as libc ([musl](https://git.musl-libc.org/cgit/musl) 1.2.6), and [busybox](https://git.busybox.net/busybox) (0.60.3).
 
 For that, we first need a convenient formal language for stating properties about code, starting from CPU specification, and building abstraction layers above.
 
 ## Ideas
 
-As of theoretical foundations, base the background logical theory on a second-order system, such as ~/ai-code/ji-trust/logic.c.
+As of theoretical foundations, base the background logical theory on a second-order system, such as logic.c of [ji-trust](https://git.olsak.net/mirek/Vibe-ITP).
 
 A program would be a "stateful non-deterministic function", so something that gets a state, and an input, and returns either an exception, or a possibly modified state, with an output.
 * Except standard exception, also "infinite calculation" is logically an "exception"
@@ -25,6 +25,6 @@ Mathematically, (possibly mutually) recursive function is a fixpoint of the prog
 
 ## x86_64 spec
 
-We aim at a language that can precisely, and confortably describe the important parts of x86_64 spec (for start at least those that are covered by mmc: ~/ai-code/mm0, and ji-trust: ~/ai-code/ji-trust). The language should probably mostly resemble imperative code but with undeterminism where the behavior is not fully specified.
+We aim at a language that can precisely, and confortably describe the important parts of x86_64 spec (for start at least those that are covered by mmc of [Metamath Zero](https://github.com/digama0/mm0), and [ji-trust](https://git.olsak.net/mirek/Vibe-ITP)). The language should probably mostly resemble imperative code but with undeterminism where the behavior is not fully specified.
 The state should store how the system allocates memory for the code, so mmap / munmap / mprotect can be implemented accordingly.
 As an exception, distinguish crashing on stack overflow, and crashing on segfault. Note that the stack can dynamically grow, be precise in that (exceptionally, a code could detect if a memory which was not stack became stack).
