@@ -59,3 +59,144 @@ proof
   have l2: malloc.live_rw(S2) by defs(rewrite(sym(hv), rewrite(sym(hb), expand(l, malloc.live_rw))), malloc.live_rw)
   show by defs(taut(rewrite(sym(hv), rewrite(sym(hb), m)), u, t, l2, rewrite(sym(hf), tl), rewrite(sym(hf), er), rewrite(sym(hf), ca), hx), mallocng.rep)
 qed
+
+// ----------------------------------------------------------------------
+//  world_ok at main's call (docs/todo.md 1(c0))
+
+// (_start_c's entry: exec's stack's fields)
+theorem pw.s_fields: all m0 s lo top. ui.ctx(m0, s, lo, top) ->
+  s.vm.stack_top = m0.vm.stack_top && s.vm.stack_limit = m0.vm.stack_limit && s.vm.brk_start = m0.vm.brk_start
+proof
+  fix m0 s lo top
+  assume hc
+  have _ _ _ _ _ _ _ h5 := expand(hc, ui.ctx)
+  have _ _ _ _ _ _ _ _ _ _ hx := expand(h5, ui.s5)
+  obtain v1, _ _ hf _ hsv _ from hx
+  have f1 f2 f3 _ := expand(hf, x86.vm_fields)
+  show by simp(hsv, f1, f2, f3)
+qed
+
+// the startup's memory V at _start_c's entry machine s (its view's, but
+// for startup's writes), the thread at fs: world_ok of a heap with V, the
+// canary's bytes hidden, the initial stack live
+theorem pw.wok: all m0 s lo top argv envp V fs H. x86_64_linux.exec_state(musl_malloc.file, argv, envp, m0) -> ui.ctx(m0, s, lo, top) -> int_lt(1032, lo) ->
+  tr.eok(false, false, s, seq_one(m0.gpr[4])) -> abi.code_at(s.vm, 4198400, text.code) -> V in x86_64_linux.Vm ->
+  startup_specs.frame(ui.wvm(s.vm), V, abi.wob(ui.iobjs(m0.gpr[4], top), abi.cball), startup_specs.start_writes(ui.G)) ->
+  fs in bits(64) -> startup_specs.thread_at(ui.G, V, fs) ->
+  H.vm = V -> H.fs_base = fs -> H.objs.c_bytes = set_select(omega, x. !(x in abi.canary(fs))) -> H.objs.live = ui.iobjs(m0.gpr[4], top) ->
+  malloc.world_ok(pw.PB, pw.PC, pw.PS, H)
+proof
+  fix m0 s lo top argv envp V fs H
+  assume he hc hlo heo hca hv hfr hfb hta hHv hHf hHc hHl
+  let W := ui.wvm(s.vm)
+  let D := set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)))
+  have fb fo := expand(hfr, startup_specs.frame)
+  have ve := apply(pw.v_bytes, {W}, {V}, hv, fb)
+  have vp: V.pages = W.pages by simp(apply(ui.app_eq[k := "pages"], ve))
+  have vtop: V.stack_top = s.vm.stack_top by simp(apply(ui.app_eq[k := "stack_top"], ve))
+  have vlim: V.stack_limit = s.vm.stack_limit by simp(apply(ui.app_eq[k := "stack_limit"], ve))
+  have vbs: V.brk_start = s.vm.brk_start by simp(apply(ui.app_eq[k := "brk_start"], ve))
+  have st sl sb := apply(pw.s_fields, hc)
+  have hM _ _ hsp h1 h2 h16 _ := expand(hc, ui.ctx)
+  have sp1 sp2 sp3 sp4 _ _ sp7 sp8 := expand(hsp, x86_64_linux.stack_pages)
+  have _ _ ers _ _ _ ebk _ _ := expand(heo, tr.eok)
+  have _ _ _ rmap := expand(ers, abi.stack_reserve)
+  have fl: x86_64_linux.stack_floor(V) = x86_64_linux.stack_floor(m0.vm) by defs(simp(vtop, vlim, st, sl), x86_64_linux.stack_floor)
+  // (a page of V: s's, not the stack's)
+  have pg: all p. p in D -> !(V.pages[p] = none) -> V.pages[p] = s.vm.pages[p] && x86_64_linux.mapped(s.vm, p) && !abi.stack_page(s.vm, p) proof
+    fix p
+    assume hp hn
+    have _ lt := unsel(hp)
+    have a1 a2 := apply(ui.wvm_at[vm := s.vm, p := p], hp)
+    have ns: !abi.stack_page(s.vm, p) proof
+      assume hs
+      show by taut(hn, rewrite(sym(vp), mp(a1, hs)))
+    qed
+    have e: V.pages[p] = s.vm.pages[p] := trans(apply(ui.app_eq[k := p], vp), mp(a2, ns))
+    have mv: x86_64_linux.mapped(s.vm, p) by defs(taut(lt, rewrite(e, hn)), x86_64_linux.mapped)
+    show by taut(e, mv, ns)
+  qed
+  // the pages: none the stack's, all off its space
+  have c1: all p. p in D -> !(V.pages[p] = none) -> !(snd(V.pages[p]).kind = 2) proof
+    fix p
+    assume hp hn
+    have e mv ns := mp(all_elim(pg, {p}), hp, hn)
+    have nk: !(snd(s.vm.pages[p]).kind = 2) proof
+      assume hk
+      show by taut(ns, (abi.stack_page(s.vm, p) by defs(taut(mv, hk), abi.stack_page)))
+    qed
+    show := rewrite(sym(e), nk)
+  qed
+  have c7: all p. p in D -> !(V.pages[p] = none) -> x86_64_linux.off_stack_space(V, p, 1) proof
+    fix p
+    assume hp hn
+    have po _ := unsel(hp)
+    have e mv ns := mp(all_elim(pg, {p}), hp, hn)
+    have o := mp(all_elim(rmap, {p}), po, conj(mv, ns))
+    have sfl: x86_64_linux.stack_floor(V) = x86_64_linux.stack_floor(s.vm) by defs(simp(vtop, vlim), x86_64_linux.stack_floor)
+    show by defs(rewrite(sym(sfl), rewrite(sym(vtop), o)), x86_64_linux.off_stack_space)
+  qed
+  // the thread
+  have ts _ := expand(hta, startup_specs.thread_at)
+  have tok cok _ := expand(ts, startup_specs.thread_set)
+  // the break's start
+  have c4: abi.brk_start_ok(V) by defs(simp(vbs, expand(ebk, abi.brk_start_ok)), abi.brk_start_ok)
+  // the program's code: s's pages and bytes (not startup's writes)
+  have cd: abi.code_at(V, 4198400, text.code) proof
+    unfold abi.code_at
+    fix i
+    assume hi hil
+    let A := bits_of_int(64, int_add(4198400, i))
+    have q1 q2 q3 q4 := mp(all_elim(expand(hca, abi.code_at), {i}), hi, hil)
+    have tl _ := ui.text_bytes
+    have av: A = int_add(4198400, i) := apply(nf.boi_in, {64}, {int_add(4198400, i)}, simp(), (int_add(4198400, i) in bits(64) by arith(hi, hil, tl)))
+    have pD: x86_64_linux.page_of(A) in D by defs(sel(taut((int_div(A, x86_64_linux.PAGE) in omega by defs(arith(av, hi), x86_64_linux.PAGE)),
+      (int_lt(int_div(A, x86_64_linux.PAGE), int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) by defs(arith(av, hi, hil, tl), x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)))),
+      x86_64_linux.page_of)
+    have a1 a2 := apply(ui.wvm_at[vm := s.vm, p := x86_64_linux.page_of(A)], pD)
+    have pe: V.pages[x86_64_linux.page_of(A)] = s.vm.pages[x86_64_linux.page_of(A)] := trans(apply(ui.app_eq[k := x86_64_linux.page_of(A)], vp), mp(a2, q3))
+    have m1 _ := expand(q1, x86_64_linux.fetchable)
+    have nsf: !abi.stack_free(W, abi.wob(ui.iobjs(m0.gpr[4], top), abi.cball), A) proof
+      assume hsf
+      have k: !(snd(s.vm.pages[x86_64_linux.page_of(A)]).kind = 2) proof
+        assume hk
+        show by taut(q3, (abi.stack_page(s.vm, x86_64_linux.page_of(A)) by defs(taut(m1, hk), abi.stack_page)))
+      qed
+      have wm: x86_64_linux.mapped(W, x86_64_linux.page_of(A)) && !(snd(W.pages[x86_64_linux.page_of(A)]).kind = 2) by defs(simp(mp(a2, q3), expand(m1, x86_64_linux.mapped), k), x86_64_linux.mapped)
+      show by taut(expand(wm, x86_64_linux.page_of), expand(hsf, abi.stack_free))
+    qed
+    have nw: !(A in startup_specs.start_writes(ui.G)) proof
+      assume hw
+      have _ l1 _ := apply(ui.sw_range, hw)
+      show by arith(l1, av, hil, tl)
+    qed
+    have be: V.bytes[A] = s.vm.bytes[A] by simp(mp(all_elim(fo, {A}), simp(), nw, nsf))
+    have r1: x86_64_linux.fetchable(V, A) by defs(simp(pe, expand(q1, x86_64_linux.fetchable, x86_64_linux.mapped)), x86_64_linux.fetchable, x86_64_linux.mapped)
+    have r2: !x86_64_linux.can_access(V, A, 1) by defs(simp(pe, expand(q2, x86_64_linux.can_access, x86_64_linux.mapped)), x86_64_linux.can_access, x86_64_linux.mapped)
+    have r3: !abi.stack_page(V, x86_64_linux.page_of(A)) by defs(simp(pe, expand(q3, abi.stack_page, x86_64_linux.mapped)), abi.stack_page, x86_64_linux.mapped)
+    show by taut(r1, r2, r3, trans(be, q4))
+  qed
+  // the statics: below the image's last page, under the stack's floor
+  have m32: x86_64_linux.mapped(m0.vm, 1032) by defs(simp(apply(ui.pg_img[argv := argv, envp := envp, m0 := m0, p := 1032], he, simp())), x86_64_linux.mapped)
+  have f32 := mp(all_elim(sp8, {1032}), simp(), conj(hlo, m32))
+  have cs: all a. a in omega -> a in app(musl_malloc.prog_statics, empty) -> x86_64_linux.off_stack_space(V, int_div(a, x86_64_linux.PAGE), 1) proof
+    fix a
+    assume ha hs
+    have se := apply(musl.unit_app, unfold(musl_malloc.prog_statics))
+    have al: int_lt(a, 4228688) by simp(expand(rewrite(se, hs), int_range), ha)
+    show by defs(arith(f32, fl, al, ha), x86_64_linux.off_stack_space)
+  qed
+  // the live objects: exec's stack data, rsp to the stack's top
+  have c6: all a. a in omega -> a in H.objs.live -> (int_le(x86_64_linux.stack_floor(H.vm), a) && int_lt(a, H.vm.stack_top)) && int_lt(a, x86_64_linux.TASK_SIZE) proof
+    fix a
+    assume ha hl
+    have i1 i2 := unsel(rewrite(hHl, hl))
+    have g: (int_le(x86_64_linux.stack_floor(V), a) && int_lt(a, V.stack_top)) && int_lt(a, x86_64_linux.TASK_SIZE)
+      by defs(arith(vtop, vlim, st, sl, sp3, sp4, sp2, h1, i1, i2, ha), x86_64_linux.stack_floor, x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)
+    show := rewrite(sym(hHv), g)
+  qed
+  have c8v: int_le(V.stack_top, x86_64_linux.TASK_SIZE) by defs(arith(vtop, st, sp3, sp2), x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)
+  have c8: int_le(H.vm.stack_top, x86_64_linux.TASK_SIZE) := rewrite(sym(hHv), c8v)
+  have he2 hb2 hcd2 := musl.prog
+  show by defs(simp(hHv, hHf, hHc, c1, tok, cok, c4, cd, cs, c6, c7, c8, hb2, hcd2, keep(abi.loaded, abi.code_at, x86_64_linux.off_stack_space)), malloc.world_ok, abi.loaded)
+qed
