@@ -110,9 +110,9 @@ qed
 //  The contract's outcomes, the spec ending
 
 // the machine's outcomes the whole run's contract allows when its spec
-// ends (pw.END): a divergence, a stack overflow below the entry's sp, a
-// stack fault, an exit with 0 or 1
-abbrev pw.XO(s, o) := (ex t. o = diverge(t)) ||
+// ends (pw.END; it never diverges, so neither does the machine): a stack
+// overflow below the entry's sp, a stack fault, an exit with 0 or 1
+abbrev pw.XO(s, o) :=
   (ex m1 a k. (o = exc(m1, exc_val("segv", pair(a, k))) && (k = 0 || k = 1 || k = 3)) && a in bits(64) && abi.overflow_at(m1.vm, m1.gpr[4], abi.sp(s), a)) ||
   (ex m1. o = exc(m1, exc_val("stack_fault", empty))) || (ex m1 st. o = exc(m1, exc_val("exit", st)) && (st = 0 || st = 1))
 
@@ -156,8 +156,10 @@ proof
   qed
   have c3: tr.div(P, W, o) -> pw.XO(s, o) proof
     assume h
-    have d _ := expand(h, tr.div)
-    show by taut(d)
+    have _ d := expand(h, tr.div)
+    obtain t2, hr from d
+    have q := mp(all_elim(he, {diverge(t2)}), hr)
+    show by taut(q, all_elim(pw.end_div, {t2}))
   qed
   have c4: (ex m1. o = ok(m1, empty) && tr.rtv(false, s, V, P, W, m1)) -> pw.XO(s, o) proof
     assume h
@@ -249,6 +251,27 @@ proof
     show by simp(et)
   qed
   show by taut(a1, a2, a3, a4)
+qed
+
+theorem pw.xo_div: all s t. !pw.XO(s, diverge(t))
+proof
+  fix s t
+  have a2: (ex m1 a k. (diverge(t) = exc(m1, exc_val("segv", pair(a, k))) && (k = 0 || k = 1 || k = 3)) && a in bits(64) && abi.overflow_at(m1.vm, m1.gpr[4], abi.sp(s), a)) -> false proof
+    assume e
+    obtain m1 a k, et .. from e
+    show := rsimp(et)
+  qed
+  have a3: (ex m1. diverge(t) = exc(m1, exc_val("stack_fault", empty))) -> false proof
+    assume e
+    obtain m1, et from e
+    show := rsimp(et)
+  qed
+  have a4: (ex m1 st. diverge(t) = exc(m1, exc_val("exit", st)) && (st = 0 || st = 1)) -> false proof
+    assume e
+    obtain m1 st, et _ from e
+    show := rsimp(et)
+  qed
+  show by taut(a2, a3, a4)
 qed
 
 // ----------------------------------------------------------------------
@@ -445,6 +468,107 @@ proof
   show by taut(u, c2, c3)
 qed
 
+// a diverging run's first step: no exception, its ok outcome a diverging
+// run on
+theorem pw.proc_step_div: all m t. pw.PR(m, diverge(t)) ->
+  ex o1. runs(x86_64_linux.step(), m, o1) && (all m1 v. o1 = ok(m1, v) -> (ex t2. pw.PR(m1, diverge(t2)))) && (all y e. o1 = exc(y, e) -> false)
+proof
+  fix m t
+  assume hp
+  obtain r, hw hm from expand(hp, pw.PR)
+  have f2 _ := rsimp(expand(hm, tr.rmap))
+  let GOAL := ex o1. runs(x86_64_linux.step(), m, o1) && (all m1 v. o1 = ok(m1, v) -> (ex t2. pw.PR(m1, diverge(t2)))) && (all y e. o1 = exc(y, e) -> false)
+  have u := apply(while_unroll[l0 := pair(m, empty), c := l. true, b := l o2. pw.PSB(l, o2), tr := l. pw.TRE(l), r := r], hw)
+  have fp: fst(pair(m, empty)) = m by simp()
+  // (the first pass leaving: none -- the run diverges)
+  have c2: pw.PSB(pair(m, empty), r) -> !is_ok(r) -> GOAL proof
+    assume hb nr
+    obtain o1, hs1 hk from expand(hb, bind_rel)
+    have ok1: all m1 v. o1 = ok(m1, v) -> (ex t2. pw.PR(m1, diverge(t2))) proof
+      fix m1 v
+      assume e
+      have k1: (ex s1 v1. o1 = ok(s1, v1) && r = ok(pair(s1, empty), empty)) -> false proof
+        assume h1
+        obtain s1 v1, _ er from h1
+        show by taut(nr, (is_ok(r) by defs(ex_intro({pair(s1, empty)}, {empty}, er), is_ok)))
+      qed
+      have k2: (ex s1 x. o1 = exc(s1, x) && r = exc(pair(s1, empty), pair("raise", x))) -> false proof
+        assume h2
+        obtain s1 x, eo _ from h2
+        show := rsimp(trans(sym(e), eo))
+      qed
+      have k3: (ex d. o1 = diverge(d) && r = diverge(d)) -> false proof
+        assume h3
+        obtain d, eo _ from h3
+        show := rsimp(trans(sym(e), eo))
+      qed
+      show by taut(hk, k1, k2, k3)
+    qed
+    have ex1: all y e. o1 = exc(y, e) -> false proof
+      fix y e
+      assume eo
+      have k1: (ex s1 v1. o1 = ok(s1, v1) && r = ok(pair(s1, empty), empty)) -> false proof
+        assume h1
+        obtain s1 v1, e1 _ from h1
+        show := rsimp(trans(sym(eo), e1))
+      qed
+      have k2: (ex s1 x. o1 = exc(s1, x) && r = exc(pair(s1, empty), pair("raise", x))) -> false proof
+        assume h2
+        obtain s1 x, _ er from h2
+        show := rsimp(rewrite(er, f2))
+      qed
+      have k3: (ex d. o1 = diverge(d) && r = diverge(d)) -> false proof
+        assume h3
+        obtain d, e1 _ from h3
+        show := rsimp(trans(sym(eo), e1))
+      qed
+      show by taut(hk, k1, k2, k3)
+    qed
+    show by ex_intro({o1}, taut(rewrite(fp, hs1), ok1, ex1))
+  qed
+  // (a first step going on: a diverging run from its state)
+  have c3: (ex l1. pw.PSB(pair(m, empty), ok(l1, empty)) && (ex r1. while_rel(l1, l. true, l o2. pw.PSB(l, o2), l. pw.TRE(l), r1) &&
+      fst(r1) = fst(r) && (!(fst(r) = 2) -> r1 = r))) -> GOAL proof
+    assume h
+    obtain l1, hb ex1 from h
+    obtain r1, w1 fr1 _ from ex1
+    have r2: fst(r1) = 2 := trans(fr1, f2)
+    have rm: tr.rmap(r1, diverge(snd(r1))) by defs(taut(r2, refl({diverge(snd(r1))})), tr.rmap)
+    obtain o1, hs1 hk from expand(hb, bind_rel)
+    have k1: (ex s1 v1. o1 = ok(s1, v1) && ok(l1, empty) = ok(pair(s1, empty), empty)) -> GOAL proof
+      assume h1
+      obtain s1 v1, eo el from h1
+      have l1e _ := apply(ui.ok_inj, el)
+      have okc: all m2 v2. o1 = ok(m2, v2) -> (ex t2. pw.PR(m2, diverge(t2))) proof
+        fix m2 v2
+        assume e2
+        have me _ := apply(ui.ok_inj, trans(sym(e2), eo))
+        have w2 := rewrite(l1e, w1)
+        have pr: pw.PR(m2, diverge(snd(r1))) by defs(ex_intro({r1}, taut(rewrite(sym(me), w2), rm)), pw.PR)
+        show by ex_intro({snd(r1)}, pr)
+      qed
+      have exc1: all y e. o1 = exc(y, e) -> false proof
+        fix y e
+        assume e2
+        show := rsimp(trans(sym(e2), eo))
+      qed
+      show by ex_intro({o1}, taut(rewrite(fp, hs1), okc, exc1))
+    qed
+    have k2: (ex s1 x. o1 = exc(s1, x) && ok(l1, empty) = exc(pair(s1, empty), pair("raise", x))) -> GOAL proof
+      assume h2
+      obtain s1 x, _ el from h2
+      show by taut(rsimp(el))
+    qed
+    have k3: (ex d. o1 = diverge(d) && ok(l1, empty) = diverge(d)) -> GOAL proof
+      assume h3
+      obtain d, _ el from h3
+      show by taut(rsimp(el))
+    qed
+    show by taut(hk, k1, k2, k3)
+  qed
+  show by taut(u, c2, c3)
+qed
+
 // _start's call pushing the return address, faulting: a stack overflow --
 // below exec's rsp, the pages up to it the stack's or none
 theorem pw.push_fault: all m0 lo top m4 y e. m0 in x86_64_linux.Machine -> lo in omega -> top in omega -> x86_64_linux.stack_pages(m0.vm, lo, top) ->
@@ -546,15 +670,67 @@ abbrev pw.XE(m0, m, e) := (ex s8. s8 in bits(8) && (e = exc_val("exit", s8) && s
   (ex a c. (a in bits(64) && c in x86_64_linux.SegvCode) && (e = exc_val("segv", pair(a, c)) && abi.overflow_at(m.vm, m.gpr[4], m0.gpr[4], a))) ||
   e = exc_val("stack_fault", empty)
 
-// every run of the process from exec: a divergence, or an end the claim
-// allows
+// no run of the process from exec diverges: _start's steps, then the
+// whole run's contract, whose spec never diverges
+theorem pw.top_div: all argv envp m0 t. argv in list_type(list_type(bits(8))) -> envp in list_type(list_type(bits(8))) -> m0 in x86_64_linux.Machine ->
+  x86_64_linux.exec_state(musl_malloc.file, argv, envp, m0) -> claim_malloc.unprivileged(m0.os) -> pw.PR(m0, diverge(t)) -> false
+proof
+  fix argv envp m0 t
+  assume hav hev hM he hu hp
+  have mu := apply(ui.m_univ, hM)
+  have tc := apply(ui.text_code[argv := argv, envp := envp, m0 := m0], he)
+  have _ _ ex _ _ bpg _ _ hrip hal _ _ hfl _ _ _ := expand(he, x86_64_linux.exec_state)
+  obtain lo top auxv, hlo htop hax hspp _ hbelow _ hl1 hl2 h31 _ hsl hao hsd from ex
+  have s1 s2 .. := expand(hspp, x86_64_linux.stack_pages)
+  have g0 := apply(x86i.rsp_typed, hM)
+  have l32 := apply(ui.lo_img[lo := lo], hbelow)
+  have h16: int_le(16, m0.gpr[4]) by arith(hl1, l32)
+  have hhi: int_lt(m0.gpr[4], 140737488355328) by arith(hl2, s2)
+  have en := apply(ui.le_val[F := musl_malloc.file, off := 24, n := 8, v := 4198543], unfold(musl_malloc.file), eval(), eval(), eval(), eval(), eval())
+  have rip: m0.rip = 4198543 := trans(hrip, (x86_64_linux.entry_of(musl_malloc.file) = 4198543 by defs(en, x86_64_linux.entry_of)))
+  have ndf: !m0.flags.df by rsimp(hfl)
+  // (a diverging run: a step from each state, no exception)
+  have rs: all x. (ex t2. pw.PR(x, diverge(t2))) -> !(x.rip = 4199122) -> ex o1. runs(x86_64_linux.step(), x, o1) &&
+      (all m1 v. o1 = ok(m1, v) -> (ex t2. pw.PR(m1, diverge(t2)))) && (all y e. o1 = exc(y, e) -> false) proof
+    fix x
+    assume hx _
+    obtain t2, h2 from hx
+    show := apply(pw.proc_step_div, h2)
+  qed
+  have p0: ex t2. pw.PR(m0, diverge(t2)) by ex_intro({t}, hp)
+  obtain m4, h4 u4 from apply(ui.start4[R := x. ex t2. pw.PR(x, diverge(t2)), X := y e. false], {m0}, hM, mu, tc, rip, rs, p0)
+  have sc5 := apply(ui.start_call[R := x. ex t2. pw.PR(x, diverge(t2)), X := y e. false], {m0}, {m4}, hM, h4, hal, h16, hhi, tc, rs, u4)
+  have nf: !(ex y e. false && runs(x86_64_linux.touch_range(bits_sub(64, m4.gpr[4], 8), 8, 1), fn_update(m4, "rip", bits_add(64, m4.rip, bits_of_int(64, 5))), exc(y, e))) proof
+    assume h
+    obtain y e, hf _ from h
+    show := hf
+  qed
+  obtain s, h5 hs from (ex s. ui.s5(m0, s) && (ex t2. pw.PR(s, diverge(t2))) by taut(sc5, nf))
+  obtain t3, hps from hs
+  have hc: ui.ctx(m0, s, lo, top) by defs(taut(hM, hlo, htop, hspp, hl1, hl2, h16, h5), ui.ctx)
+  have na: seq_len(argv) in omega by defs(simp(expand(hav, list_type)), seq_len)
+  have ne: seq_len(envp) in omega by defs(simp(expand(hev, list_type)), seq_len)
+  have el: all i. i in omega -> int_lt(i, seq_len(argv)) -> seq_len(argv[i]) in omega proof
+    fix i
+    assume hi hil
+    have t1 := mp(at_type[l := argv, t := list_type(bits(8)), i := i], hav, hi, hil)
+    show by defs(simp(expand(t1, list_type)), seq_len)
+  qed
+  have a31: int_lt(seq_len(argv), 2147483648) := rewrite((int_pow(2, 31) = 2147483648 by eval()), mp(nat_mem_lt[k := int_pow(2, 31), i := seq_len(argv)], eval(), expand(h31, ord_lt)))
+  have hx: ui.SX(m0, s, lo, top, argv, envp, auxv) by defs(taut(hc, l32, na, ne, el, hax, hsl, hao, hsd, he, hu, a31), ui.SX)
+  have eo := apply(ui.entry_eok[m0 := m0, s := s, lo := lo, top := top], hM, hlo, htop, hspp, hl1, hl2, hal, h16, ndf, bpg, h5)
+  have xo := apply(pw.from_entry[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, o := diverge(t3)], hx, eo, hps)
+  show by taut(xo, all_elim(pw.xo_div, {s}, {t3}))
+qed
+
+// every run of the process from exec: an end the claim allows
 theorem pw.top: all argv envp m0 o. argv in list_type(list_type(bits(8))) -> envp in list_type(list_type(bits(8))) -> m0 in x86_64_linux.Machine ->
   x86_64_linux.exec_state(musl_malloc.file, argv, envp, m0) -> claim_malloc.unprivileged(m0.os) -> pw.PR(m0, o) ->
-  (ex t. o = diverge(t)) || (ex m e. o = exc(m, e) && pw.XE(m0, m, e))
+  ex m e. o = exc(m, e) && pw.XE(m0, m, e)
 proof
   fix argv envp m0 o
   assume hav hev hM he hu hp
-  let GOAL := (ex t. o = diverge(t)) || (ex m e. o = exc(m, e) && pw.XE(m0, m, e))
+  let GOAL := ex m e. o = exc(m, e) && pw.XE(m0, m, e)
   have nd: !(ex t. o = diverge(t)) -> GOAL proof
     assume hnd
     have mu := apply(ui.m_univ, hM)
@@ -635,7 +811,12 @@ proof
     qed
     show by taut(sc5, k1, k2)
   qed
-  show by taut(nd)
+  have dv: (ex t. o = diverge(t)) -> false proof
+    assume h
+    obtain t, ot from h
+    show := apply(pw.top_div, {argv}, {envp}, {m0}, {t}, hav, hev, hM, he, hu, rewrite(ot, hp))
+  qed
+  show by taut(nd, dv)
 qed
 
 theorem musl_program
@@ -646,22 +827,9 @@ proof
   have hav hev hM _ := ht
   have he hu hr := hp
   have q := apply(pw.top, {argv}, {envp}, {m0}, {o}, hav, hev, hM, he, hu, apply(pw.proc_parts, hr))
-  have c1: (ex t. o = diverge(t)) -> ite(fst(o) = 0, true, ite(fst(o) = 1, ((ex x4. x4 in bits(8) && (snd(snd(o)) = exc_val("exit", x4) && x4 in musl_malloc.exits)) ||
-      (ex x4 x5. (x4 in bits(64) && x5 in x86_64_linux.SegvCode) && (snd(snd(o)) = exc_val("segv", pair(x4, x5)) &&
-        abi.overflow_at(fst(snd(o)).vm, fst(snd(o)).gpr[4], m0.gpr[4], x4)))) || snd(snd(o)) = exc_val("stack_fault", empty), true)) proof
-    assume h
-    obtain t, ot from h
-    show by defs(simp(ot), diverge)
-  qed
-  have c2: (ex m e. o = exc(m, e) && pw.XE(m0, m, e)) -> ite(fst(o) = 0, true, ite(fst(o) = 1, ((ex x4. x4 in bits(8) && (snd(snd(o)) = exc_val("exit", x4) && x4 in musl_malloc.exits)) ||
-      (ex x4 x5. (x4 in bits(64) && x5 in x86_64_linux.SegvCode) && (snd(snd(o)) = exc_val("segv", pair(x4, x5)) &&
-        abi.overflow_at(fst(snd(o)).vm, fst(snd(o)).gpr[4], m0.gpr[4], x4)))) || snd(snd(o)) = exc_val("stack_fault", empty), true)) proof
-    assume h
-    obtain m e, oe xe from h
-    have f1: fst(o) = 1 by defs(simp(oe), exc)
-    have f2: snd(snd(o)) = e by defs(simp(oe), exc)
-    have f3: fst(snd(o)) = m by defs(simp(oe), exc)
-    show by simp(f1, f2, f3, xe, keep(abi.overflow_at))
-  qed
-  show by taut(q, c1, c2)
+  obtain m e, oe xe from q
+  have f1: fst(o) = 1 by defs(simp(oe), exc)
+  have f2: snd(snd(o)) = e by defs(simp(oe), exc)
+  have f3: fst(snd(o)) = m by defs(simp(oe), exc)
+  show by simp(f1, f2, f3, xe, keep(abi.overflow_at))
 qed
