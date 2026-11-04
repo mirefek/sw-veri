@@ -573,3 +573,87 @@ proof
   have mp2: x86_64_linux.mapped(pw.MS(W).vm, int_div(x, x86_64_linux.PAGE)) by defs(simp(mv, hWv, vp, expand(wm, x86_64_linux.mapped)), x86_64_linux.mapped)
   show by taut(no, ne, mp2)
 qed
+
+// the world stage2 calls main from (startup's effect from _start_c's
+// entry, the initial stack live): pw.MR -- main's precondition, the
+// thread, exit's precondition, exit's and the thread's words not the
+// allocator's
+theorem pw.mr_w1: all m0 s lo top argv envp auxv V fs W. ui.SX(m0, s, lo, top, argv, envp, auxv) ->
+  ui.at_main(s, ui.iobjs(m0.gpr[4], top), pw.MM(s, V, fs), m0.gpr[4], V, fs) -> tr.eok(false, false, s, seq_one(m0.gpr[4])) -> abi.code_at(s.vm, 4198400, text.code) ->
+  W in abi.World -> W in univ(1) -> W.vm = V -> W.fs_base = fs -> W.objs.live = ui.iobjs(m0.gpr[4], top) -> pw.MR(W)
+proof
+  fix m0 s lo top argv envp auxv V fs W
+  assume hx hat heo hca hw wu hWv hWf hWl
+  let OBJ := ui.iobjs(m0.gpr[4], top)
+  have hms mv mf mo mb := apply(pw.ms_fields, hw, wu)
+  have hc hlo _ _ _ _ _ _ _ hex _ _ := expand(hx, ui.SX)
+  have hv hfr _ hfb hta _ _ _ := expand(hat, ui.at_main)
+  have ts it := expand(hta, startup_specs.thread_at)
+  have tok cok _ := expand(ts, startup_specs.thread_set)
+  have it1 it2 := expand(it, startup_specs.in_tls)
+  have fr: int_le(4228288, fs) && int_le(int_add(fs, 200), 4228624) by arith(it1, it2, (ui.G.builtin_tls = 4228288 by eval()), hfb)
+  have fb _ := expand(hfr, startup_specs.frame)
+  have ve := apply(pw.v_bytes, {ui.wvm(s.vm)}, {V}, hv, fb)
+  have vp: V.pages = ui.wvm(s.vm).pages by simp(apply(ui.app_eq[k := "pages"], ve))
+  have msv: pw.MS(W).vm = V := trans(mv, hWv)
+  have msf: pw.MS(W).fs_base = fs := trans(mf, hWf)
+  have msl: pw.MS(W).objs.live = OBJ by simp(mo, hWl)
+  // the thread and its canary
+  have tc: tr.tc_ok(W) by defs(simp(hWv, hWf, tok, cok), tr.tc_ok)
+  // main's precondition: the invariant, errno's bytes, the world, no blocks
+  have inv := apply(pw.inv_w1[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, V := V, fs := fs, H := pw.MS(W)], hx, hat, hms, msv, mb, msf, msl)
+  have eok: malloc.errno_ok(pw.EO, pw.MS(W)) proof
+    unfold malloc.errno_ok
+    fix x
+    assume hxo hxe
+    have he2 _ _ := musl.prog
+    have e52: bits_add(64, fs, bits_of_int(64, 52)) = int_add(fs, 52) by defs(arith(hfb, fr), bits_add, bits_of_int, pow2)
+    have _ b1 b2 := unsel(expand(rewrite(e52, rewrite(msf, rewrite(he2, expand(hxe, malloc.errno_bytes)))), malloc.range))
+    have wi := apply(ui.w_img[argv := argv, envp := envp, m0 := m0, s := s, lo := lo, top := top, p := int_div(x, x86_64_linux.PAGE), w := true], hex, hc, hlo,
+      (int_div(x, x86_64_linux.PAGE) in omega by defs(arith(hxo), x86_64_linux.PAGE)), (ui.img_page(int_div(x, x86_64_linux.PAGE), true) by defs(arith(b1, b2, fr, hxo), x86_64_linux.PAGE)))
+    have wm _ wr ww _ := wi
+    show by defs(simp(msv, vp, expand(wm, x86_64_linux.mapped), wr, mp(ww, (true by simp()))), malloc.rw_mapped, x86_64_linux.mapped)
+  qed
+  have hcb: pw.MS(W).objs.c_bytes = set_select(omega, x. !(x in abi.canary(fs))) by simp(mo, hWf)
+  have wok := apply(pw.wok[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, V := V, fs := fs, H := pw.MS(W)], hex, hc, hlo, heo, hca, hv, hfr, hfb, hta,
+    msv, msf, hcb, msl)
+  have bl: all p. p in bits(64) -> pw.MS(W).blocks[p] = none proof
+    fix p
+    assume hp
+    show by simp(mb, hp)
+  qed
+  have pre: pw.PRE(W) by taut(inv, eok, wok, bl)
+  // exit's precondition
+  have xp := apply(pw.xpre_w1[argv := argv, envp := envp, m0 := m0, s := s, lo := lo, top := top, V := V, fs := fs], hex, hc, hlo, hv, hfr, hfb, hta)
+  have ho: tr.hide(W).objs = abi.wob(OBJ, abi.cbytes0(fs)) by simp(hWl, hWf)
+  have xpw: startup_specs.exit_pre(W.vm, tr.hide(W).objs, xt.XP, W.fs_base) by simp(hWv, hWf, ho, xp, keep(startup_specs.exit_pre))
+  have f52: int_lt(int_add(W.fs_base, 52), 18446744073709551616) by arith(hWf, fr)
+  // exit's words and the thread's: not the allocator's
+  have NKG: all a n. a in omega -> n in omega -> int_le(4222976, a) -> int_le(int_add(a, n), 4231168) -> int_le(int_add(a, n), 4227136) || int_le(4228256, a) ->
+      int_le(int_add(a, n), int_add(fs, 52)) || int_le(int_add(fs, 56), a) -> pw.NK(W, a, n) proof
+    fix a n
+    assume ha hn h1 h2 h3 h4
+    show := apply(pw.nk_w1, {m0}, {s}, {lo}, {top}, {argv}, {envp}, {auxv}, {V}, {fs}, {W}, {a}, {n}, hx, hat, hw, wu, hWv, hWf, hWl, ha, hn, h1, h2, h3, h4)
+  qed
+  have lk: pw.LK = 4227120 && pw.FA = 4227024 && pw.CP = 4227104 && pw.GT = 4227040 by eval()
+  have k0 := apply(NKG, {W.fs_base}, {8},(W.fs_base in omega by arith(hWf, hfb)), simp(), (int_le(4222976, W.fs_base) by arith(hWf, fr)),
+    (int_le(int_add(W.fs_base, 8), 4231168) by arith(hWf, fr)), (int_le(int_add(W.fs_base, 8), 4227136) || int_le(4228256, W.fs_base) by arith(hWf, fr)),
+    (int_le(int_add(W.fs_base, 8), int_add(fs, 52)) || int_le(int_add(fs, 56), W.fs_base) by arith(hWf, fr)))
+  have k40 := apply(NKG, {int_add(W.fs_base, 40)}, {8},(int_add(W.fs_base, 40) in omega by arith(hWf, hfb)), simp(),
+    (int_le(4222976, int_add(W.fs_base, 40)) by arith(hWf, fr)), (int_le(int_add(int_add(W.fs_base, 40), 8), 4231168) by arith(hWf, fr)),
+    (int_le(int_add(int_add(W.fs_base, 40), 8), 4227136) || int_le(4228256, int_add(W.fs_base, 40)) by arith(hWf, fr)),
+    (int_le(int_add(int_add(W.fs_base, 40), 8), int_add(fs, 52)) || int_le(int_add(fs, 56), int_add(W.fs_base, 40)) by arith(hWf, fr)))
+  have k48 := apply(NKG, {int_add(W.fs_base, 48)}, {4},(int_add(W.fs_base, 48) in omega by arith(hWf, hfb)), simp(),
+    (int_le(4222976, int_add(W.fs_base, 48)) by arith(hWf, fr)), (int_le(int_add(int_add(W.fs_base, 48), 4), 4231168) by arith(hWf, fr)),
+    (int_le(int_add(int_add(W.fs_base, 48), 4), 4227136) || int_le(4228256, int_add(W.fs_base, 48)) by arith(hWf, fr)),
+    (int_le(int_add(int_add(W.fs_base, 48), 4), int_add(fs, 52)) || int_le(int_add(fs, 56), int_add(W.fs_base, 48)) by arith(hWf, fr)))
+  have kl := apply(NKG, {pw.LK}, {4},eval(), simp(), eval(), eval(), eval(),
+    (int_le(int_add(pw.LK, 4), int_add(fs, 52)) || int_le(int_add(fs, 56), pw.LK) by arith(lk, fr)))
+  have kf := apply(NKG, {pw.FA}, {8},eval(), simp(), eval(), eval(), eval(),
+    (int_le(int_add(pw.FA, 8), int_add(fs, 52)) || int_le(int_add(fs, 56), pw.FA) by arith(lk, fr)))
+  have kc := apply(NKG, {pw.CP}, {1},eval(), simp(), eval(), eval(), eval(),
+    (int_le(int_add(pw.CP, 1), int_add(fs, 52)) || int_le(int_add(fs, 56), pw.CP) by arith(lk, fr)))
+  have kg := apply(NKG, {pw.GT}, {8},eval(), simp(), eval(), eval(), eval(),
+    (int_le(int_add(pw.GT, 8), int_add(fs, 52)) || int_le(int_add(fs, 56), pw.GT) by arith(lk, fr)))
+  show by taut(tc, pre, xpw, f52, k0, k40, k48, kl, kf, kc, kg)
+qed
