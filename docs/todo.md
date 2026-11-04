@@ -31,18 +31,22 @@ other crash, never exit 42. Runs that never end are allowed (§2).
   (link_whole.core, proofs/test/main_whole.core: `tm.whole_link`, the
   machine code from _start_c's entry implementing the linked GIMPLE --
   __libc_start_init by its purpose, main's and exit's linked code wrapped).
-  Next, C2 of that linked GIMPLE (GIMPLE spec proving): from _start_c's
-  precondition, an exit 0 or 1 or an overflow --
-  - at main's call: main's spec's precondition (`tm.PRE` on the world with
-    the canary hidden and no blocks): the invariant there at GIMPLE level
-    (the machine-level Init proof, `ui.rep_main` / `ui.owned_main`, works
-    on a machine at main; reuse it on a machine built from the GIMPLE
-    world, or restate it on a world's memory); main's outcomes then by
-    `tm.main_out` (its CFG to its structured form by `main_ref`);
-  - at exit's call: `exit_pre` -- the tid set by __init_tp; exit_lock 0,
-    the fini_array word, completed.0, the `__cxa_finalize` GOT word kept
-    (binary statics outside the allocator's at main's entry, which main's
-    frame keeps); exit's outcome by `xt.exit_calls`.
+  C2 of that linked GIMPLE (GIMPLE spec proving), from _start_c's
+  precondition to an exit 0 or 1 or an overflow: done for stage2 given
+  `pw.MR` at main's call (`pw.s2_main`, proofs/test/whole_exit.core: main's
+  outcomes, exit's precondition kept by main's frame, exit's end; the
+  thread's id now in startup_specs' `thread_set`), and generically for
+  __libc_start_main and _start_c (`pw.lsm_fun`, `pw.stc_fun`). Next,
+  `pw.MR` at stage2's call from startup's post (`sp.TMV`, `thread_at`) and
+  exec's image:
+  - main's precondition (`tm.PRE` on the world with the canary hidden and
+    no blocks): the invariant at GIMPLE level -- `ui.rep_main` works on a
+    machine at main and the heap `empty_heap(m, auxv bytes)`; the world
+    here has the whole initial stack live (rep reads objs only in
+    `aux_live`). The words exit reads not the allocator's (`pw.NK`) by
+    `ui.owned_main` likewise.
+  - exit's words at exec (`ui.img_read`, `ui.us_img`; .bss zero), kept by
+    startup's frame (outside `start_writes`).
 - (e) The whole run: from exec, `_start`'s code to _start_c's contract,
   `program_ok` from its spec; the claim proven.
 
