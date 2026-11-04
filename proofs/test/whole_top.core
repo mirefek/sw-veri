@@ -1,0 +1,107 @@
+// The program's claim (docs/todo.md 1(e)): the process from exec runs
+// _start's steps to _start_c's entry, from there as the contract of the
+// linked whole run (tm.whole_link) and its spec's ends (pw.stc_end) say --
+// an exit with 0 or 1, or a stack overflow.
+
+// ----------------------------------------------------------------------
+//  The process's run, and the bridge's disciplined run
+
+// (the process's loop body: a step)
+abbrev pw.PSB(l, o) := bind_rel(x86_64_linux.step, fst(l), x7 x8. o = ok(pair(x7, empty), empty), x7 x8. o = exc(pair(x7, empty), pair("raise", x8)), x7. o = diverge(x7))
+abbrev pw.TRE(l) := fn_update(empty, "os.events", fst(l).os.events)
+
+// the process's run from m with the outcome o, unfolded
+def pw.PR(m, o) := ex r. while_rel(pair(m, empty), l. true, l o2. pw.PSB(l, o2), l. pw.TRE(l), r) && tr.rmap(r, o)
+
+theorem pw.proc_parts: all m o. runs(claim_program.run_process, m, o) -> pw.PR(m, o)
+proof
+  fix m o
+  assume hr
+  let B1(l, o2) := pw.PSB(l, o2) || (!true && o2 = exc(pair(fst(l), empty), pair("brk", empty)))
+  have e: ex x2. while_rel(pair(m, empty), l. true, l o2. B1(l, o2), l. pw.TRE(l), x2) && tr.rmap(x2, o)
+    by defs(simp(expand(hr, claim_program.run_process)), tr.rmap)
+  obtain x2, hw hm from e
+  have bb: all l o2. B1(l, o2) -> pw.PSB(l, o2) proof
+    fix l o2
+    assume h
+    show by taut(h)
+  qed
+  have hw2 := apply(while_mono[l0 := pair(m, empty), c := l. true, b1 := l o2. B1(l, o2), b2 := l o2. pw.PSB(l, o2), tr := l. pw.TRE(l), r := x2], bb, hw)
+  show by defs(ex_intro({x2}, taut(hw2, hm)), pw.PR)
+qed
+
+// (the run with the return's stop: the disciplined run, or that run
+// leaving with disc)
+theorem pw.rw_rd: all s r o. tr.rw(s, pair(s, empty), r) -> tr.rmap(r, o) -> tr.run_d(s, s, o) || (ex x. tr.run_d(s, s, exc(x, exc_val("disc", empty))))
+proof
+  fix s r o
+  assume hw hm
+  have ne: all l. !is_ok(exc(l, pair("raise", exc_val("disc", empty)))) proof
+    fix l
+    have n: is_ok(exc(l, pair("raise", exc_val("disc", empty)))) -> false proof
+      assume h
+      obtain a b, h2 from expand(h, is_ok)
+      show by simp(h2)
+    qed
+    show by taut(n)
+  qed
+  have g := mp(mp(while_guard[l0 := pair(s, empty), b := l o. tr.rb(s, l, o), tr := l. fn_update(empty, "os.events", fst(l).os.events),
+    p := l. tr.disc_ok(s, fst(l)), e := l. exc(l, pair("raise", exc_val("disc", empty))), r := r], ne), expand(hw, tr.rw))
+  have kept: while_rel(pair(s, empty), l. true, l o. (tr.disc_ok(s, fst(l)) && tr.rb(s, l, o)) || (!tr.disc_ok(s, fst(l)) && o = exc(l, pair("raise", exc_val("disc", empty)))),
+      l. fn_update(empty, "os.events", fst(l).os.events), r) -> tr.run_d(s, s, o) proof
+    assume w
+    have wd: tr.rwd(s, pair(s, empty), r) by defs(w, tr.rwd, tr.rbd)
+    show by defs(ex_intro({r}, taut(wd, hm)), tr.run_d)
+  qed
+  have left: (ex l. while_rel(pair(s, empty), l. true, l o. (tr.disc_ok(s, fst(l)) && tr.rb(s, l, o)) || (!tr.disc_ok(s, fst(l)) && o = exc(l, pair("raise", exc_val("disc", empty)))),
+      l. fn_update(empty, "os.events", fst(l).os.events), exc(l, pair("raise", exc_val("disc", empty))))) -> (ex x. tr.run_d(s, s, exc(x, exc_val("disc", empty)))) proof
+    assume e
+    obtain l, w from e
+    have wd: tr.rwd(s, pair(s, empty), exc(l, pair("raise", exc_val("disc", empty)))) by defs(w, tr.rwd, tr.rbd)
+    have rm: tr.rmap(exc(l, pair("raise", exc_val("disc", empty))), exc(fst(l), exc_val("disc", empty))) by defs(simp(), tr.rmap)
+    have rd: tr.run_d(s, s, exc(fst(l), exc_val("disc", empty))) by defs(ex_intro({exc(l, pair("raise", exc_val("disc", empty)))}, taut(wd, rm)), tr.run_d)
+    show by ex_intro({fst(l)}, rd)
+  qed
+  show by taut(g, kept, left)
+qed
+
+// the process's run from s: the disciplined run from s, or that run
+// leaving early -- with disc, or at the entry's return
+theorem pw.proc_rd: all s o. pw.PR(s, o) ->
+  tr.run_d(s, s, o) || (ex x. tr.run_d(s, s, exc(x, exc_val("disc", empty)))) || (ex x. tr.run_d(s, s, ok(x, empty)))
+proof
+  fix s o
+  assume hp
+  obtain r, hw hm from expand(hp, pw.PR)
+  let E(l) := exc(pair(fst(l), empty), pair("brk", empty))
+  have ne: all l. !is_ok(E(l)) proof
+    fix l
+    have n: is_ok(E(l)) -> false proof
+      assume h
+      obtain a b, h2 from expand(h, is_ok)
+      show by simp(h2)
+    qed
+    show by taut(n)
+  qed
+  have g := mp(mp(while_guard[l0 := pair(s, empty), b := l o2. pw.PSB(l, o2), tr := l. pw.TRE(l), p := l. !tr.at_ret(s, fst(l)), e := l. E(l), r := r], ne), hw)
+  have c1: while_rel(pair(s, empty), l. true, l o2. (!tr.at_ret(s, fst(l)) && pw.PSB(l, o2)) || (!!tr.at_ret(s, fst(l)) && o2 = E(l)), l. pw.TRE(l), r) ->
+      tr.run_d(s, s, o) || (ex x. tr.run_d(s, s, exc(x, exc_val("disc", empty)))) || (ex x. tr.run_d(s, s, ok(x, empty))) proof
+    assume w
+    have rw: tr.rw(s, pair(s, empty), r) by defs(w, tr.rw, tr.rb)
+    show by taut(apply(pw.rw_rd, rw, hm))
+  qed
+  have c2: (ex l. while_rel(pair(s, empty), l. true, l o2. (!tr.at_ret(s, fst(l)) && pw.PSB(l, o2)) || (!!tr.at_ret(s, fst(l)) && o2 = E(l)), l. pw.TRE(l), E(l))) ->
+      tr.run_d(s, s, o) || (ex x. tr.run_d(s, s, exc(x, exc_val("disc", empty)))) || (ex x. tr.run_d(s, s, ok(x, empty))) proof
+    assume e
+    obtain l, w from e
+    have rw: tr.rw(s, pair(s, empty), E(l)) by defs(w, tr.rw, tr.rb)
+    have rm: tr.rmap(E(l), ok(fst(l), empty)) by defs(simp(), tr.rmap)
+    have q := apply(pw.rw_rd, rw, rm)
+    have c21: tr.run_d(s, s, ok(fst(l), empty)) -> ex x. tr.run_d(s, s, ok(x, empty)) proof
+      assume h
+      show by ex_intro({fst(l)}, h)
+    qed
+    show by taut(q, c21)
+  qed
+  show by taut(g, c1, c2)
+qed
