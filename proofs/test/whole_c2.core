@@ -532,3 +532,117 @@ proof
   qed
   show by taut(ci, kA, kB, kC, kD)
 qed
+
+// __libc_start_main's C function (its CFG form): so, with six arguments
+theorem pw.lsm_fun: all g P IL FP regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> ord_le(6, seq_len(regs)) -> s in abi.World ->
+  startup_specs.start_main_pre(s.vm, s.objs, g, P, pw.R1(regs), pw.R2(regs)) ->
+  mp.calls(IL, startup_specs.init_libc_spec_fun(g)) -> (ex V. sp.TMV(g, pw.ENVB(pw.R1(regs), pw.R2(regs)), s, V)) ->
+  (all V fs regs2 o2. sp.TMV(g, pw.ENVB(pw.R1(regs), pw.R2(regs)), s, V) -> fs in bits(64) -> startup_specs.thread_at(g, V, fs) ->
+    gc.regs_ok(regs2, pw.A3(pw.R0(regs), pw.R1(regs), pw.R2(regs))) ->
+    runs(FP[c_src_env___libc_start_main.libc_start_main_stage2_at][regs2], pw.W1(s, V, fs), o2) -> pw.END(o2)) ->
+  runs(c_src_env___libc_start_main_cfg.__libc_start_main_fun(IL, FP)[regs], s, o) -> pw.END(o)
+proof
+  fix g P IL FP regs s o
+  assume hr hl h6 hw hsm hIL hex hS2 h
+  have hs := mp(all_elim(start_main_ref, {IL}, {FP}, {regs}, {s}, {o}), hr, hl, hw, h)
+  have ra := mp(sp.regs_in[regs := regs], hr, hl)
+  have hs2 := expand(hs, c_src_env___libc_start_main.__libc_start_main_fun)
+  rsimp only, app_fn_build, ra in hs2
+  have b := apply(g.runs_elim, hs2)
+  have b2: bind_rel(c_src_env___libc_start_main.__libc_start_main(pw.R0(regs), pw.R1(regs), pw.R2(regs), bits_of_int(64, regs[3]), bits_of_int(64, regs[4]),
+      bits_of_int(64, regs[5]), IL, FP), s, x3 x4. sp.KC32(x3, x4, o), x3 x4. o = exc(x3, x4), x3. o = diverge(x3)) by taut(b, h6)
+  obtain o3, r3 k3 from expand(b2, bind_rel)
+  have e3 := mp(all_elim(pw.lsm_run, {g}, {P}, {pw.R0(regs)}, {pw.R1(regs)}, {pw.R2(regs)}, {bits_of_int(64, regs[3])}, {bits_of_int(64, regs[4])},
+      {bits_of_int(64, regs[5])}, {IL}, {FP}, {s}, {o3}), hw,
+    (pw.R0(regs) in bits(64) by simp()), (pw.R1(regs) in bits(32) by simp()), (pw.R2(regs) in bits(64) by simp()), hsm, hIL, hex, hS2, r3)
+  show := apply(pw.end_k[K := x3 x4 x2. sp.KC32(x3, x4, x2)], {o3}, {o}, e3, k3)
+qed
+
+// ----------------------------------------------------------------------
+//  _start_c(p): __libc_start_main called with main, argc (the word at p),
+//  argv (p + 8)
+
+abbrev pw.WC(s, p) := gimple.bytes_at(s.vm, p, 8)
+abbrev pw.A6(s, p) := seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(gimple.arg(64, c_crt_crt1.main_at)), seq_one(gimple.arg(32, pw.WC(s, p)))),
+  seq_one(gimple.arg(64, bits_add(64, p, 8)))), seq_one(gimple.arg(64, c_crt_crt1._init_at))), seq_one(gimple.arg(64, c_crt_crt1._fini_at))), seq_one(gimple.arg(64, bits_of_int(64, 0))))
+
+theorem pw.stc_run: all LSM p s o. s in abi.World -> p in bits(64) -> !(p = 0) -> int_lt(int_add(p, 16), int_pow(2, 63)) ->
+  gimple.usable(s.vm, s.objs, p, 8, false) -> int_lt(pw.WC(s, p), int_pow(2, 31)) ->
+  (all regs o2. gc.regs_ok(regs, pw.A6(s, p)) -> runs(LSM[regs], s, o2) -> pw.END(o2)) ->
+  runs(c_crt_crt1._start_c(p, LSM), s, o) -> pw.END(o)
+proof
+  fix LSM p s o
+  assume hw hp hp1 hp2 hus h31 hL h
+  have pu := apply(g.runs_univ, expand(h, c_crt_crt1._start_c))
+  have hu: s in univ(1) by simp(pu)
+  have b := apply(g.runs_elim, expand(h, c_crt_crt1._start_c))
+  have pl: int_lt(int_add(p, 0), pow2(64)) by arith(hp2, hp)
+  have p0: int_add(p, 0) = p by arith(hp)
+  have md: g.mem_defined(s, p, 0, 8, false) by simp(hp1, hus, pl, p0)
+  have sv8: g.sv64(8) = 8 by simp()
+  have pl8: int_lt(int_add(p, g.sv64(8)), pow2(64)) by arith(hp2, hp, sv8)
+  have pz8: int_le(0, int_add(p, g.sv64(8))) by arith(hp, sv8)
+  step a1, h0 from b
+  step a2, h1 from h0 with g.ld64_det, g.padd_det using conj(hu, hp, md, pl8, pz8)
+  let W := gimple.bytes_at(s.vm, p, 8)
+  let AV := bits_add(64, p, 8)
+  have _ _ _ sbt := apply(ms.world_parts, hw)
+  have wo _ := apply(g.bytes_bound, {s.vm}, {p}, {8}, sbt, simp())
+  have eA: bits_of_int(32, bits_of_int(64, W)) = W by defs(arith(wo, h31), bits_of_int)
+  have e8: gimple.sval(fn_update(fn_update(empty, "prec", 64), "signed", true), 8) = 8 by simp()
+  have bq: int_add(p, 8) = AV by defs(arith(hp, hp2), bits_add, bits_of_int)
+  have h2 := rewrite(bq, rewrite(e8, rewrite(eA, rewrite(p0, h1))))
+  obtain oc, hrc hdc from apply(g.bind_open, h2)
+  have mb: c_crt_crt1.main_at in bits(64) by defs(simp(), c_crt_crt1.main_at)
+  have ib: c_crt_crt1._init_at in bits(64) by defs(simp(), c_crt_crt1._init_at)
+  have fb: c_crt_crt1._fini_at in bits(64) by defs(simp(), c_crt_crt1._fini_at)
+  have w32: int_lt(W, pow2(32)) by arith(h31, wo)
+  have wb: W in bits(32) by defs(simp(wo, w32), bits)
+  have avb: AV in bits(64) by simp()
+  have rg := apply(gc.regs_get, apply(gc.regs_cat, apply(gc.regs_cat, apply(gc.regs_cat, apply(gc.regs_cat, apply(gc.regs_cat,
+    apply(gc.regs_one[w := 64, x := c_crt_crt1.main_at], simp(), simp(), mb), apply(gc.regs_one[w := 32, x := W], simp(), simp(), wb)),
+    apply(gc.regs_one[w := 64, x := AV], simp(), simp(), avb)), apply(gc.regs_one[w := 64, x := c_crt_crt1._init_at], simp(), simp(), ib)),
+    apply(gc.regs_one[w := 64, x := c_crt_crt1._fini_at], simp(), simp(), fb)), apply(gc.regs_one[w := 64, x := bits_of_int(64, 0)], simp(), simp(), simp())))
+  have ci := apply(gc.call0_inv[Q := o2. pw.END(o2)], {LSM}, {pw.A6(s, p)}, {s}, {oc}, rg, hL, hrc)
+  have kA: oc = exc(s, pw.OVF) -> pw.END(o) proof
+    assume e
+    have oe: o = exc(s, pw.OVF) by simp(rewrite(e, hdc))
+    show by taut((ex x2. o = exc(x2, pw.OVF) by ex_intro({s}, oe)))
+  qed
+  have kB: (ex w4 r. pw.END(ok(w4, r)) && (oc = ok(gc.back0(w4, s), pair(fst(r), snd(r))) || oc = exc(gc.back0(w4, s), pw.OVF))) -> pw.END(o) proof
+    assume q
+    obtain w4 r, f _ from q
+    show by taut(f, all_elim(pw.end_ok, {w4}, {r}))
+  qed
+  have kC: (ex x e. pw.END(exc(x, e)) && oc = exc(x, e)) -> pw.END(o) proof
+    assume q
+    obtain x e, en e4 from q
+    have oe: o = exc(x, e) by simp(rewrite(e4, hdc))
+    show := rewrite(sym(oe), en)
+  qed
+  have kD: (ex t. pw.END(diverge(t)) && oc = diverge(t)) -> pw.END(o) proof
+    assume q
+    obtain t, f _ from q
+    show by taut(f, all_elim(pw.end_div, {t}))
+  qed
+  show by taut(ci, kA, kB, kC, kD)
+qed
+
+// _start_c's C function (its CFG form): so, with an argument
+theorem pw.stc_fun: all LSM regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> ord_le(1, seq_len(regs)) -> s in abi.World ->
+  !(pw.R0(regs) = 0) -> int_lt(int_add(pw.R0(regs), 16), int_pow(2, 63)) -> gimple.usable(s.vm, s.objs, pw.R0(regs), 8, false) -> int_lt(pw.WC(s, pw.R0(regs)), int_pow(2, 31)) ->
+  (all regs2 o2. gc.regs_ok(regs2, pw.A6(s, pw.R0(regs))) -> runs(LSM[regs2], s, o2) -> pw.END(o2)) ->
+  runs(c_crt_crt1_cfg._start_c_fun(LSM)[regs], s, o) -> pw.END(o)
+proof
+  fix LSM regs s o
+  assume hr hl h1 hw hp1 hp2 hus h31 hL h
+  have hs := mp(all_elim(start_c_ref, {LSM}, {regs}, {s}, {o}), hr, hl, hw, h)
+  have ra := mp(sp.regs_in[regs := regs], hr, hl)
+  have hs2 := expand(hs, c_crt_crt1._start_c_fun)
+  rsimp only, app_fn_build, ra in hs2
+  have b := apply(g.runs_elim, hs2)
+  have b2: bind_rel(c_crt_crt1._start_c(pw.R0(regs), LSM), s, x3 x4. sp.anyv(x3, o), x3 x4. o = exc(x3, x4), x3. o = diverge(x3)) by taut(b, h1)
+  obtain o3, r3 k3 from expand(b2, bind_rel)
+  have e3 := mp(all_elim(pw.stc_run, {LSM}, {pw.R0(regs)}, {s}, {o3}), hw, (pw.R0(regs) in bits(64) by simp()), hp1, hp2, hus, h31, hL, r3)
+  show := apply(pw.end_k[K := x3 x4 x2. sp.anyv(x3, x2)], {o3}, {o}, e3, k3)
+qed
