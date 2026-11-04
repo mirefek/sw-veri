@@ -1554,8 +1554,11 @@ item is a short summary of finished work; details are in the files named.
   condition with no fact.
 - **The program's claim proven** (`musl_program`; proofs/test/whole_*.core,
   link_whole.core, translate_nobrk.core, translate_mode.core). Every
-  process run of tests/test_malloc.c from an unprivileged exec state that
-  ends exits with 0 or 1 or dies of a stack overflow.
+  process run of tests/test_malloc.c from an unprivileged exec state ends,
+  exiting with 0 or 1 or dying of a stack overflow.
+  - Termination: the whole run's spec never diverges (its ends, `pw.END`),
+    and the contract matches a machine divergence only by a spec one
+    (`pw.top_div`); claim change: `program_ok`'s divergence case false.
   - Contracts without a stop (`tr.impl_d`; engine `c1 .. startup`):
     the startup path's callers of main, which never stops.
   - A main-mode callee from a startup caller (`tr.as_su`, the canary

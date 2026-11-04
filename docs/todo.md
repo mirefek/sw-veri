@@ -3,24 +3,12 @@
 The current plans, in order. When an item is done it is deleted here and
 summarized in docs/done.md.
 
-## 1. Next: termination
+## 1. Next: a reached main
 
-Both claims are proven (`musl_malloc`, `musl_program`). The malloc
-claim's `Init` is about the runs that reach `main`, vacuous if none did
-(a witness that some exec state reaches main is a separate statement).
-
-The program claim allows runs that never end. To exclude them: every
-call of malloc and free returns (or overflows the stack), and the
-startup and exit paths end.
-- malloc.sl's specs and mallocng's: no divergence (the layer's specs may
-  diverge now -- check each); the loops' variants: alloc_group's, the
-  activation and span loops (try_avail), dequeue's, the free path's
-  recursion (nontrivial_free <-> free_group: depth-indexed already);
-  system calls returning (brk, mmap, munmap, mprotect in the model).
-- C1 keeps divergence (a diverging machine run only for a diverging
-  GIMPLE one): termination proven at GIMPLE level, carried down.
-- The startup's and exit's loops (auxv, the constructors, TLS copy).
-- The statement: every run ends -- exit 0/1 or a stack overflow.
+Both claims are proven (`musl_malloc`, `musl_program`), the program's
+with termination (every run ends). The malloc claim's `Init` is about
+the runs that reach `main`, vacuous if none did: a witness that some
+exec state reaches main is a separate statement, not yet made.
 
 ## 2. Shared libraries (planned)
 
