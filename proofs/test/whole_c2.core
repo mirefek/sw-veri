@@ -796,3 +796,155 @@ proof
   qed
   show by taut(sr, c1, c2)
 qed
+
+// ----------------------------------------------------------------------
+//  main at its call: from the startup's world W, the canary hidden and no
+//  blocks (pw.MS), main's precondition there (tm.PRE): an overflow, or a
+//  return of 0 or 1 with main's post
+
+abbrev pw.H0 := fn_update(empty, "blocks", fn_build(bits(64), x. none))
+abbrev pw.MS(W) := union2(tr.hide(W), pw.H0)
+abbrev pw.I := musl.inv
+abbrev pw.O := musl.owned
+abbrev pw.EO := musl_malloc.errno_offset
+abbrev pw.PB := musl_malloc.prog_base
+abbrev pw.PC := musl_malloc.prog_code
+abbrev pw.PS := musl_malloc.prog_statics
+abbrev pw.PRE(W) := tm.PRE(pw.I, pw.EO, pw.PB, pw.PC, pw.PS, pw.MS(W))
+
+theorem pw.h0_ghost: pw.H0 in malloc.Heap.ghost
+proof
+  let B := fn_build(bits(64), x. none)
+  let H := pw.H0
+  have nb: all x. x in bits(64) -> none in option(omega) proof
+    fix x
+    assume _
+    show by defs(simp(), option)
+  qed
+  have bs := apply(fn_build_space[d := bits(64), v := x. none, b := option(omega)], nb)
+  have smu: all x. x in omega -> some(x) in univ(1) proof
+    fix x
+    assume hx
+    have xu := mp(mp(univ_trans[u := 1, a := x, b := omega], omega_univ), hx)
+    show by defs(simp(xu), some)
+  qed
+  have imu := mp(mp(univ_image[u := 1, s := omega, f := x. some(x)], omega_univ), smu)
+  have nu: single(none) in univ(1) by defs(simp(), single, none)
+  have ou: option(omega) in univ(1) by defs(mp(mp(union2_univ[u := 1, a := single(none), b := set_image(omega, x. some(x))], nu), imu), option)
+  have bu := apply(fn_space_univ[u := 1, a := bits(64), b := option(omega), f := B], bits_univ[n := 64], ou, bs)
+  have f0 d0 := dom_empty
+  have hf := mp(fn_update_fun[f := empty, k := "blocks", v := B], f0)
+  have hd: dom(H) = insert("blocks", empty) := rewrite(d0, mp(dom_update[f := empty, k := "blocks", v := B], f0))
+  have hu: H in univ(1) by simp(bu)
+  have hb: H.blocks in fn_space(bits(64), option(omega)) by rsimp(bs)
+  show by defs(apply(rec_type_intro[u := 1, k := insert("blocks", empty), p := x. (is_fun(x) && dom(x) = insert("blocks", empty)) &&
+    x.blocks in fn_space(bits(64), option(omega)), r := H], hu, hf, hd, taut(hf, hd, hb)), malloc.Heap.ghost)
+qed
+
+// (the world with the canary hidden: a world)
+theorem pw.hide_world: all w. w in abi.World -> w in univ(1) -> tr.hide(w) in abi.World && tr.hide(w) in univ(1)
+proof
+  fix w
+  assume hw wu
+  have ol _ := apply(abi.objs_parts, (w.objs in abi.Objs by simp(expand(hw, abi.World))))
+  have ct cu := all_elim(tr.cbm_type, {true}, {w.fs_base})
+  have cte := all_elim(tr.cbm_t, {w.fs_base})
+  have ot _ := apply(abi.wob_typed, {w.objs.live}, {abi.cbytes0(w.fs_base)}, ol, rewrite(cte, ct), rewrite(cte, cu))
+  show := apply(sp.world_objs[s := w, ob := abi.wob(w.objs.live, abi.cbytes0(w.fs_base))], hw, wu, ot)
+qed
+
+abbrev pw.MPOST(W, V, g, r, u) := ((((V in x86_64_linux.Vm && g in malloc.Heap.ghost) && (r = 0 || r = 1)) && bits_of_int(32, u) = r) &&
+  malloc.world_ok(pw.PB, pw.PC, pw.PS, union2(fn_update(tr.hide(W), "vm", V), g))) &&
+  test_malloc.main_frame(pw.O, pw.EO, pw.MS(W), union2(fn_update(tr.hide(W), "vm", V), g))
+
+theorem pw.main_out: all G NF W regs o2. tr.callee_io(tm.MAL(G), 1) -> tm.mcall(pw.I, pw.O, pw.EO, pw.PB, pw.PC, pw.PS, tm.MAL(G)) ->
+  tr.callee_io(tm.FRE(NF), 1) -> tm.fcall(pw.I, pw.O, pw.EO, pw.PB, pw.PC, pw.PS, tm.FRE(NF)) ->
+  W in abi.World -> W in univ(1) -> tr.tc_ok(W) -> pw.PRE(W) -> regs in abi.ARGS -> runs(tr.as_su(tm.LOWC(G, NF))[regs], W, o2) ->
+  pw.END(o2) || (ex V g r u y. pw.MPOST(W, V, g, r, u) && o2 = ok(tr.rest(W, fn_update(tr.hide(W), "vm", V)), pair(u, y)))
+proof
+  fix G NF W regs o2
+  assume hmio hmc hfio hfc hw wu htc hpre hA hr
+  let GOAL := pw.END(o2) || (ex V g r u y. pw.MPOST(W, V, g, r, u) && o2 = ok(tr.rest(W, fn_update(tr.hide(W), "vm", V)), pair(u, y)))
+  have sr := apply(tr.su_elim, {tm.LOWC(G, NF)}, {regs}, {W}, {o2}, hA, hr)
+  have c1: !tr.tc_ok(W) -> GOAL by taut(htc)
+  have c2: (ex x3. runs(tm.LOWC(G, NF)[regs], tr.hide(W), x3) && tr.omap(W, x3, o2)) -> GOAL proof
+    assume e
+    obtain x3, rx om from e
+    have hwh hwu := apply(pw.hide_world, hw, wu)
+    have rl: regs in list_type(bits(64)) by simp(hA)
+    have lo: seq_len(regs) in omega by simp(rl)
+    have o6: ord_le(seq_len(regs), 6) by simp(hA)
+    have l6: int_le(seq_len(regs), 6) by arith(expand(o6, ord_le), lo)
+    // (main's CFG form: its structured form's runs)
+    have mr := mp(all_elim(main_ref, {tm.SZ}, {tm.MAL(G)}, {tm.FL}, {tm.FRE(NF)}, {tm.IN}), tsize.io, hmio,
+      mp(all_elim(tfill.io, {tm.PT}, {tm.SZ}), tpat.io, tsize.io), hfio, mp(all_elim(tintact.io, {tm.PT}, {tm.SZ}), tpat.io, tsize.io))
+    have rs := mp(all_elim(mr, {regs}, {tr.hide(W)}, {x3}), rl, l6, hwh, rx)
+    have hl: tm.laws(pw.I, pw.O, pw.EO) by taut(musl.frame, musl.owned_private, musl.owned_mapped, musl.inv_wf, musl.live_apart)
+    have he _ _ := musl.prog
+    have q := apply(tm.main_out[I := pw.I, O := pw.O, eo := pw.EO, b := pw.PB, cd := pw.PC, st := pw.PS, gsz := tm.SZ, gm := tm.MAL(G), gf := tm.FL,
+      gfr := tm.FRE(NF), gin := tm.IN, regs := regs, w := tr.hide(W), h := pw.H0, o := x3],
+      hl, he, musl.free_step, hmc, hfc, tm.size_c, tm.fill_c, tm.intact_c, hA, hwh, pw.h0_ghost, hpre, rs)
+    // (an overflow: o2 the same)
+    have d1: abi.ovf_out(tr.hide(W), x3) -> GOAL proof
+      assume ov
+      obtain v ob, _ _ ex from ov
+      let X := fn_update(fn_update(tr.hide(W), "vm", v), "objs", ob)
+      have m2: (ex x e. x3 = exc(x, e) && o2 = exc(x, e)) -> GOAL proof
+        assume q2
+        obtain x e, e3 e4 from q2
+        have ee: o2 = exc(X, pw.OVF) by simp(rewrite(ex, e3), e4)
+        show by taut((ex x5. o2 = exc(x5, pw.OVF) by ex_intro({X}, ee)))
+      qed
+      have m1: (ex w2 r. x3 = ok(w2, r) && o2 = ok(tr.rest(W, w2), r)) -> GOAL proof
+        assume q2
+        obtain w2 r, e3 _ from q2
+        have f: false by simp(rewrite(ex, e3))
+        show by taut(f)
+      qed
+      have m3: (ex t. x3 = diverge(t) && o2 = diverge(t)) -> GOAL proof
+        assume q2
+        obtain t, e3 _ from q2
+        have f: false by simp(rewrite(ex, e3))
+        show by taut(f)
+      qed
+      show by taut(expand(om, tr.omap), m1, m2, m3)
+    qed
+    // (a return: main's post, o2 its world back)
+    have d2: (ex V g r u y. ((((V in x86_64_linux.Vm && g in malloc.Heap.ghost) && (r = 0 || r = 1)) && malloc.world_ok(pw.PB, pw.PC, pw.PS, union2(fn_update(tr.hide(W), "vm", V), g))) &&
+        test_malloc.main_frame(pw.O, pw.EO, pw.MS(W), union2(fn_update(tr.hide(W), "vm", V), g))) &&
+        ((runs(gimple.result(32, r), fn_update(tr.hide(W), "vm", V), ok(fn_update(tr.hide(W), "vm", V), u)) && u in bits(64)) && y in bits(64)) &&
+        x3 = ok(fn_update(tr.hide(W), "vm", V), pair(u, y))) -> GOAL proof
+      assume q2
+      obtain V g r u y, hv hg hr01 hwo hmf hres _ _ ex from q2
+      have rb: r in bits(32) by simp(hr01)
+      obtain u2, _ eu ou from apply(g.result32_inv, {fn_update(tr.hide(W), "vm", V)}, {r}, {ok(fn_update(tr.hide(W), "vm", V), u)}, rb, hres)
+      have ue: u = u2 by simp(ou)
+      have bu: bits_of_int(32, u) = r := rewrite(sym(ue), eu)
+      have mp1: pw.MPOST(W, V, g, r, u) by taut(hv, hg, hr01, bu, hwo, hmf)
+      have m1: (ex w2 r2. x3 = ok(w2, r2) && o2 = ok(tr.rest(W, w2), r2)) -> GOAL proof
+        assume q3
+        obtain w2 r2, e3 e4 from q3
+        have we: w2 = fn_update(tr.hide(W), "vm", V) by simp(rewrite(ex, e3))
+        have re: r2 = pair(u, y) by simp(rewrite(ex, e3))
+        have oe: o2 = ok(tr.rest(W, fn_update(tr.hide(W), "vm", V)), pair(u, y)) := rewrite(re, rewrite(we, e4))
+        show by taut((ex V5 g5 r5 u5 y5. pw.MPOST(W, V5, g5, r5, u5) && o2 = ok(tr.rest(W, fn_update(tr.hide(W), "vm", V5)), pair(u5, y5))
+          by ex_intro({V}, {g}, {r}, {u}, {y}, conj(mp1, oe))))
+      qed
+      have m2: (ex x e. x3 = exc(x, e) && o2 = exc(x, e)) -> GOAL proof
+        assume q3
+        obtain x e, e3 _ from q3
+        have f: false by simp(rewrite(ex, e3))
+        show by taut(f)
+      qed
+      have m3: (ex t. x3 = diverge(t) && o2 = diverge(t)) -> GOAL proof
+        assume q3
+        obtain t, e3 _ from q3
+        have f: false by simp(rewrite(ex, e3))
+        show by taut(f)
+      qed
+      show by taut(expand(om, tr.omap), m1, m2, m3)
+    qed
+    show by taut(q, d1, d2)
+  qed
+  show by taut(sr, c1, c2)
+qed
