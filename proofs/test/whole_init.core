@@ -1,0 +1,61 @@
+// The world at stage2's call (docs/todo.md 1(d)): main's precondition
+// there. The machine-level Init lemmas (ui.rep_main, ui.owned_main) at a
+// machine whose view is the startup world's memory -- _start_c's entry
+// machine with the world's bytes (pw.MM) --, carried to the world main is
+// called at (its objects the whole initial stack: rep reads objects only
+// in aux_live).
+
+// (_start_c's entry machine with V's bytes, the thread pointer fs)
+abbrev pw.MM(s, V, fs) := fn_update(fn_update(s, "vm", fn_update(s.vm, "bytes", V.bytes)), "fs_base", fs)
+
+// (the view of a memory with other bytes: the view with them)
+theorem pw.wvm_b: all vm B. ui.wvm(fn_update(vm, "bytes", B)) = fn_update(ui.wvm(vm), "bytes", B)
+proof
+  fix vm B
+  have wp: ui.wpages(fn_update(vm, "bytes", B)) = ui.wpages(vm) by defs(simp(), abi.stack_page, x86_64_linux.mapped)
+  have sw := mp(fn_update_swap[f := vm, k := "bytes", a := B, j := "pages", b := ui.wpages(vm)], (!("bytes" = "pages") by simp()))
+  show by simp(wp, sw)
+qed
+
+// (a memory as W but for its bytes: W with its bytes)
+theorem pw.v_bytes: all W V. V in x86_64_linux.Vm -> fn_update(V, "bytes", W.bytes) = W -> V = fn_update(W, "bytes", V.bytes)
+proof
+  fix W V
+  assume hv hf
+  have vf: is_fun(V) && "bytes" in dom(V) by simp(expand(hv, x86_64_linux.Vm))
+  have t := fn_update_twice[f := V, k := "bytes", a := W.bytes, b := V.bytes]
+  have s0 := mp(fn_update_same[f := V, k := "bytes"], taut(vf), taut(vf))
+  have e: fn_update(fn_update(V, "bytes", W.bytes), "bytes", V.bytes) = V := trans(t, s0)
+  show := sym(rewrite(hf, e))
+qed
+
+// startup's effect at _start_c's entry machine s (its view's memory V,
+// the thread at fs): main entered at pw.MM
+theorem pw.at_main: all s objs a V fs. V in x86_64_linux.Vm -> startup_specs.frame(ui.wvm(s.vm), V, abi.wob(objs, abi.cball), startup_specs.start_writes(ui.G)) ->
+  (all x4. x4 in omega -> startup_specs.env_at(ui.wvm(s.vm), abi.wob(objs, abi.cball), bits_add(64, a, int_mul(8, int_add(gimple.bytes_at(ui.wvm(s.vm), a, 8), 2))), x4) ->
+     gimple.bytes_at(V, int_add(ui.G.libc, 8), 8) = int_add(bits_add(64, a, int_mul(8, int_add(gimple.bytes_at(ui.wvm(s.vm), a, 8), 2))), int_mul(8, int_add(x4, 1)))) ->
+  fs in bits(64) -> startup_specs.thread_at(ui.G, V, fs) -> ui.at_main(s, objs, pw.MM(s, V, fs), a, V, fs)
+proof
+  fix s objs a V fs
+  assume hv hfr hen hfb hts
+  let M := pw.MM(s, V, fs)
+  have fb _ := expand(hfr, startup_specs.frame)
+  have ve := apply(pw.v_bytes, {ui.wvm(s.vm)}, {V}, hv, fb)
+  have mv: M.vm = fn_update(s.vm, "bytes", V.bytes) by simp()
+  have wm: ui.wvm(M.vm) = V := trans(rewrite(sym(mv), all_elim(pw.wvm_b, {s.vm}, {V.bytes})), sym(ve))
+  have vk := rewrite(wm, all_elim(ui.wvm_vok, {M}, {objs}))
+  have mf: M.fs_base = fs by simp()
+  have mo: M.os = s.os by simp()
+  show by defs(taut(hv, hfr, hen, hfb, hts, mf, mo, vk), ui.at_main)
+qed
+
+// (rep in a heap as S but for its objects, the auxiliary vector live)
+theorem pw.rep_xfer: all c A S S2. mallocng.rep(c, A, S) -> S2.vm = S.vm -> S2.blocks = S.blocks -> S2.fs_base = S.fs_base ->
+  mallocng.aux_live(A, S2.objs) -> mallocng.rep(c, A, S2)
+proof
+  fix c A S S2
+  assume h hv hb hf hx
+  have m u t l tl er ca _ := expand(h, mallocng.rep)
+  have l2: malloc.live_rw(S2) by defs(rewrite(sym(hv), rewrite(sym(hb), expand(l, malloc.live_rw))), malloc.live_rw)
+  show by defs(taut(rewrite(sym(hv), rewrite(sym(hb), m)), u, t, l2, rewrite(sym(hf), tl), rewrite(sym(hf), er), rewrite(sym(hf), ca), hx), mallocng.rep)
+qed
