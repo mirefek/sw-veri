@@ -11,10 +11,11 @@
 # SUFFIX is empty for -O2 (the original build) and _O0 / -O0 otherwise.
 #
 # usage: scripts/build-musl.sh [-O2|-O0|...]   (default -O2)
+# The musl 1.2.6 source tree: $MUSL_SRC (default ~/basic-sw/musl-1.2.6).
 set -e
 opt=${1:--O2}
 root=$(cd "$(dirname "$0")/.." && pwd)
-src=/home/mirek/basic-sw/musl-1.2.6
+src=${MUSL_SRC:-$HOME/basic-sw/musl-1.2.6}
 case "$opt" in
     -O2) sfx=""; dsfx="" ;;
     *) sfx="_${opt#-}"; dsfx="-${opt#-}" ;;
