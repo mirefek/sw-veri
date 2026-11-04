@@ -506,3 +506,70 @@ proof
   have xv: xt.XP.lock = 4227120 && xt.XP.fini_array = 4227024 && xt.XP.dtors = 4198784 && xt.XP.completed = 4227104 && xt.XP.cxa_got = 4227040 by eval()
   show by defs(simp(xv, tok, u48, tid, fr, ul, ulw, lv, uf, fv, uc, ucw, ug, gv, keep(gimple.usable, gimple.bytes_at, abi.thread_ok)), startup_specs.exit_pre)
 qed
+
+// ----------------------------------------------------------------------
+//  pw.MR at main's call
+
+// (main's heap at a world W: typed, its fields W's, the canary hidden, no
+// blocks)
+theorem pw.ms_fields: all W. W in abi.World -> W in univ(1) -> pw.MS(W) in rec_and(abi.World, malloc.Heap.ghost) && pw.MS(W).vm = W.vm &&
+  pw.MS(W).fs_base = W.fs_base && pw.MS(W).objs = abi.wob(W.objs.live, abi.cbytes0(W.fs_base)) && pw.MS(W).blocks = fn_build(bits(64), x. none)
+proof
+  fix W
+  assume hw wu
+  have hwh hwu := apply(pw.hide_world, hw, wu)
+  have ra := apply(rec_and_intro[a := abi.World, b := malloc.Heap.ghost, x := tr.hide(W), y := pw.H0], hwh, pw.h0_ghost)
+  have sd: dom(tr.hide(W)) = abi.WKEYS by simp(expand(hwh, abi.World))
+  have f0 d0 := dom_empty
+  have hd: dom(pw.H0) = insert("blocks", empty) := rewrite(d0, mp(dom_update[f := empty, k := "blocks", v := fn_build(bits(64), x. none)], f0))
+  have e1: pw.MS(W).vm = W.vm by simp(sd, hd)
+  have e2: pw.MS(W).fs_base = W.fs_base by simp(sd, hd)
+  have e3: pw.MS(W).objs = abi.wob(W.objs.live, abi.cbytes0(W.fs_base)) by simp(sd, hd)
+  have e4: pw.MS(W).blocks = fn_build(bits(64), x. none) by simp(sd, hd)
+  show by taut(ra, e1, e2, e3, e4)
+qed
+
+// (n bytes on the data pages, apart from the allocator's statics, from
+// errno, below the stack: not the allocator's, not errno's, mapped)
+theorem pw.nk_w1: all m0 s lo top argv envp auxv V fs W a n. ui.SX(m0, s, lo, top, argv, envp, auxv) ->
+  ui.at_main(s, ui.iobjs(m0.gpr[4], top), pw.MM(s, V, fs), m0.gpr[4], V, fs) -> W in abi.World -> W in univ(1) ->
+  W.vm = V -> W.fs_base = fs -> W.objs.live = ui.iobjs(m0.gpr[4], top) ->
+  a in omega -> n in omega -> int_le(4222976, a) -> int_le(int_add(a, n), 4231168) -> int_le(int_add(a, n), 4227136) || int_le(4228256, a) ->
+  int_le(int_add(a, n), int_add(fs, 52)) || int_le(int_add(fs, 56), a) -> pw.NK(W, a, n)
+proof
+  fix m0 s lo top argv envp auxv V fs W a n
+  assume hx hat hw wu hWv hWf hWl ha hn h1 h2 hd he
+  have hms mv mf mo mb := apply(pw.ms_fields, hw, wu)
+  have hc hlo _ _ _ _ _ _ _ hex _ _ := expand(hx, ui.SX)
+  have hM _ _ _ hl1 _ _ _ := expand(hc, ui.ctx)
+  have hv hfr _ hfb hta _ _ _ := expand(hat, ui.at_main)
+  have fb _ := expand(hfr, startup_specs.frame)
+  have ve := apply(pw.v_bytes, {ui.wvm(s.vm)}, {V}, hv, fb)
+  have vp: V.pages = ui.wvm(s.vm).pages by simp(apply(ui.app_eq[k := "pages"], ve))
+  have pg := apply(pw.img_rng, {a}, {n}, {true}, ha, hn, h1, h2)
+  have _ it := expand(hta, startup_specs.thread_at)
+  have it1 it2 := expand(it, startup_specs.in_tls)
+  have fr: int_le(4228288, fs) && int_le(int_add(fs, 200), 4228624) by arith(it1, it2, (ui.G.builtin_tls = 4228288 by eval()), hfb)
+  fix i
+  assume hi hil
+  let x := int_add(a, i)
+  have xo: x in omega by arith(ha, hi)
+  have no: !(x in pw.O[pw.MS(W)]) proof
+    assume ho
+    have q := apply(pw.owned_w1[m0 := m0, s := s, lo := lo, top := top, argv := argv, envp := envp, auxv := auxv, V := V, fs := fs, H := pw.MS(W), a := x], hx, hat, hms,
+      trans(mv, hWv), mb, trans(mf, hWf), (pw.MS(W).objs.live = ui.iobjs(m0.gpr[4], top) by simp(mo, hWl)), xo, ho)
+    show by arith(q, hd, h1, h2, hi, hil, ha, hl1, hlo)
+  qed
+  have ne: !(x in malloc.errno_bytes(pw.EO, pw.MS(W))) proof
+    assume hb
+    have he2 _ _ := musl.prog
+    have e52: bits_add(64, fs, bits_of_int(64, 52)) = int_add(fs, 52) by defs(arith(hfb, fr), bits_add, bits_of_int, pow2)
+    have _ b1 b2 := unsel(expand(rewrite(e52, rewrite(trans(mf, hWf), rewrite(he2, expand(hb, malloc.errno_bytes)))), malloc.range))
+    show by arith(b1, b2, he, hi, hil)
+  qed
+  have wi := apply(ui.w_img[argv := argv, envp := envp, m0 := m0, s := s, lo := lo, top := top, p := int_div(x, x86_64_linux.PAGE), w := true], hex, hc, hlo,
+    (int_div(x, x86_64_linux.PAGE) in omega by defs(arith(xo), x86_64_linux.PAGE)), mp(all_elim(pg, {i}), hi, hil))
+  have wm _ _ _ _ := wi
+  have mp2: x86_64_linux.mapped(pw.MS(W).vm, int_div(x, x86_64_linux.PAGE)) by defs(simp(mv, hWv, vp, expand(wm, x86_64_linux.mapped)), x86_64_linux.mapped)
+  show by taut(no, ne, mp2)
+qed
