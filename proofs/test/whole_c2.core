@@ -260,3 +260,55 @@ proof
   qed
   show by taut(ci, kA, kB, kC, kD)
 qed
+
+// (a run's end through a wrapper's continuation: the end itself)
+theorem pw.end_k(x3 x4 x2. K): all o3 o. pw.END(o3) ->
+  ((ex s1 v. o3 = ok(s1, v) && K(s1, v, o)) || (ex s1 e. o3 = exc(s1, e) && o = exc(s1, e))) || (ex t. o3 = diverge(t) && o = diverge(t)) -> pw.END(o)
+proof
+  fix o3 o
+  assume he hk
+  have c1: (ex s1 v. o3 = ok(s1, v) && K(s1, v, o)) -> pw.END(o) proof
+    assume q
+    obtain s1 v, e _ from q
+    show by taut(rewrite(e, he), all_elim(pw.end_ok, {s1}, {v}))
+  qed
+  have c2: (ex s1 e. o3 = exc(s1, e) && o = exc(s1, e)) -> pw.END(o) proof
+    assume q
+    obtain s1 e, e1 e2 from q
+    show := rewrite(sym(e2), rewrite(e1, he))
+  qed
+  have c3: (ex t. o3 = diverge(t) && o = diverge(t)) -> pw.END(o) proof
+    assume q
+    obtain t, e _ from q
+    show by taut(rewrite(e, he), all_elim(pw.end_div, {t}))
+  qed
+  show by taut(hk, c1, c2, c3)
+qed
+
+// stage2's C function (its CFG form): so, with three arguments
+abbrev pw.R0(regs) := bits_of_int(64, regs[0])
+abbrev pw.R1(regs) := bits_of_int(32, regs[1])
+abbrev pw.R2(regs) := bits_of_int(64, regs[2])
+
+theorem pw.s2_fun(w u. R): all P SI FP EX regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> ord_le(3, seq_len(regs)) -> s in abi.World ->
+  pw.R0(regs) = P.main -> int_lt(pw.R1(regs), int_pow(2, 31)) -> int_lt(pw.ENV(pw.R1(regs), pw.R2(regs)), int_pow(2, 63)) ->
+  startup_specs.ctors_ok(s.vm, s.objs, P, set_select(omega, x2. false)) ->
+  mp.calls(SI, startup_specs.start_init_spec_fun(P)) ->
+  (all regs2 o2. gc.regs_ok(regs2, pw.A2(pw.R1(regs), pw.R2(regs))) -> runs(FP[pw.R0(regs)][regs2], s, o2) -> pw.END(o2) || (ex w r. o2 = ok(w, r) && R(gc.back0(w, s), fst(r)))) ->
+  (all w u regs2 o2. R(w, u) -> gc.regs_ok(regs2, seq_one(gimple.arg(32, bits_of_int(32, u)))) -> runs(EX[regs2], w, o2) -> pw.END(o2)) ->
+  runs(c_src_env___libc_start_main_cfg.libc_start_main_stage2_fun(SI, FP, EX)[regs], s, o) -> pw.END(o)
+proof
+  fix P SI FP EX regs s o
+  assume hr hl h3 hw hm h31 hb63 hct hSI hM hX h
+  have hs := mp(all_elim(stage2_ref, {SI}, {FP}, {EX}, {regs}, {s}, {o}), hr, hl, hw, h)
+  have ra := mp(sp.regs_in[regs := regs], hr, hl)
+  have hs2 := expand(hs, c_src_env___libc_start_main.libc_start_main_stage2_fun)
+  rsimp only, app_fn_build, ra in hs2
+  have b := apply(g.runs_elim, hs2)
+  have b2: bind_rel(c_src_env___libc_start_main.libc_start_main_stage2(pw.R0(regs), pw.R1(regs), pw.R2(regs), SI, FP, EX), s,
+      x3 x4. sp.KC32(x3, x4, o), x3 x4. o = exc(x3, x4), x3. o = diverge(x3)) by taut(b, h3)
+  obtain o3, r3 k3 from expand(b2, bind_rel)
+  have e3 := apply(pw.s2_run[R := w u. R(w, u)], {P}, {pw.R0(regs)}, {pw.R1(regs)}, {pw.R2(regs)}, {SI}, {FP}, {EX}, {s}, {o3}, hw,
+    (pw.R0(regs) in bits(64) by simp()), (pw.R1(regs) in bits(32) by simp()), (pw.R2(regs) in bits(64) by simp()), hm, h31, hb63, hct, hSI, hM, hX, r3)
+  show := apply(pw.end_k[K := x3 x4 x2. sp.KC32(x3, x4, x2)], {o3}, {o}, e3, k3)
+qed
