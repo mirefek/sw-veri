@@ -1,0 +1,206 @@
+// After main (docs/todo.md 1(d)): exit's precondition and the thread kept
+// by a memory that keeps their words -- their bytes and pages.
+
+// (v2 keeps v1's n bytes at a and their pages)
+abbrev pw.KP(v1, v2, a, n) := all i. i in omega -> int_lt(i, n) ->
+  v2.bytes[bits_of_int(64, int_add(a, i))] = v1.bytes[bits_of_int(64, int_add(a, i))] &&
+  v2.pages[int_div(int_add(a, i), x86_64_linux.PAGE)] = v1.pages[int_div(int_add(a, i), x86_64_linux.PAGE)]
+
+theorem pw.kp_usable: all v1 v2 ob a n w. pw.KP(v1, v2, a, n) -> gimple.usable(v1, ob, a, n, w) -> gimple.usable(v2, ob, a, n, w)
+proof
+  fix v1 v2 ob a n w
+  assume h hu
+  have pe: all i. i in omega -> int_lt(i, n) -> v2.pages[int_div(int_add(a, i), x86_64_linux.PAGE)] = v1.pages[int_div(int_add(a, i), x86_64_linux.PAGE)] proof
+    fix i
+    assume hi hil
+    have _ p := mp(all_elim(h, {i}), hi, hil)
+    show := p
+  qed
+  show := apply(mp.usable_pg[vm := v1, vm2 := v2, objs := ob, a := a, n := n, w := w], pe, hu)
+qed
+
+theorem pw.kp_bytes: all v1 v2 a n. pw.KP(v1, v2, a, n) -> a in omega -> n in omega -> int_le(int_add(a, n), 18446744073709551616) ->
+  gimple.bytes_at(v2, a, n) = gimple.bytes_at(v1, a, n)
+proof
+  fix v1 v2 a n
+  assume h ha hn hl
+  have be: all i. i in omega -> int_lt(i, n) -> v2.bytes[bits_add(64, a, bits_of_int(64, i))] = v1.bytes[bits_add(64, a, bits_of_int(64, i))] proof
+    fix i
+    assume hi hil
+    have b _ := mp(all_elim(h, {i}), hi, hil)
+    have ea := apply(ms.add_i, {a}, {i}, ha, hi, arith(hl, hil, hi, ha, hn))
+    have eb := apply(nf.boi_in, {64}, {int_add(a, i)}, simp(), arith(hl, hil, hi, ha, hn))
+    show := rewrite(sym(ea), rewrite(eb, b))
+  qed
+  show := apply(mp.bytes_same[U := v2, vm := v1, a := a, n := n], hn, be)
+qed
+
+theorem pw.kp_read: all v1 v2 a n. pw.KP(v1, v2, a, n) -> x86_64_linux.readable(v1, a, n) -> x86_64_linux.readable(v2, a, n)
+proof
+  fix v1 v2 a n
+  assume h hr
+  have r: all i. i in omega -> int_lt(i, n) -> x86_64_linux.mapped(v2, int_div(int_add(a, i), x86_64_linux.PAGE)) &&
+      snd(v2.pages[int_div(int_add(a, i), x86_64_linux.PAGE)]).prot.r proof
+    fix i
+    assume hi hil
+    have _ pe := mp(all_elim(h, {i}), hi, hil)
+    have r1 := mp(all_elim(expand(hr, x86_64_linux.readable), {i}), hi, hil)
+    show by defs(simp(pe, expand(r1, x86_64_linux.mapped)), x86_64_linux.mapped)
+  qed
+  show by defs(r, x86_64_linux.readable)
+qed
+
+// (a page kept: kept off the stack, writable)
+theorem pw.kp_page: all v1 v2 p. v2.pages[p] = v1.pages[p] -> (!abi.stack_page(v1, p) -> !abi.stack_page(v2, p)) &&
+  (snd(v1.pages[p]).prot.w -> snd(v2.pages[p]).prot.w)
+proof
+  fix v1 v2 p
+  assume pe
+  have a: !abi.stack_page(v1, p) -> !abi.stack_page(v2, p) by defs(simp(pe), abi.stack_page, x86_64_linux.mapped)
+  have b: snd(v1.pages[p]).prot.w -> snd(v2.pages[p]).prot.w by simp(pe)
+  show by taut(a, b)
+qed
+
+// the thread and its canary's word kept
+theorem pw.kp_tc: all v1 v2 fs. v1 in x86_64_linux.Vm -> v2 in x86_64_linux.Vm -> fs in bits(64) -> int_lt(int_add(fs, 52), 18446744073709551616) ->
+  pw.KP(v1, v2, fs, 8) -> pw.KP(v1, v2, int_add(fs, 40), 8) -> abi.thread_ok(v1, fs) -> abi.canary_ok(v1, fs) -> abi.thread_ok(v2, fs) && abi.canary_ok(v2, fs)
+proof
+  fix v1 v2 fs
+  assume h1 h2 hf hl k0 k40 ht hc
+  have tr tn tle tnz := expand(ht, abi.thread_ok)
+  have cr cw := expand(hc, abi.canary_ok)
+  have b1: v1.bytes in fn_space(bits(64), bits(8)) by taut(unsel(expand(h1, x86_64_linux.Vm)))
+  have b2: v2.bytes in fn_space(bits(64), bits(8)) by taut(unsel(expand(h2, x86_64_linux.Vm)))
+  have bq := apply(pw.kp_bytes, {v1}, {v2}, {fs}, {8}, k0, arith(hf), simp(), arith(hl))
+  have le2: x86_64_linux.le(v2.bytes, fs, 8) = fs := trans(apply(x86.le8_nat, {v2}, {fs}, b2), trans(bq, trans(sym(apply(x86.le8_nat, {v1}, {fs}, b1)), tle)))
+  have tn2: all i. i in omega -> int_lt(i, 8) -> !abi.stack_page(v2, int_div(int_add(fs, i), x86_64_linux.PAGE)) proof
+    fix i
+    assume hi hil
+    have _ pe := mp(all_elim(k0, {i}), hi, hil)
+    have a _ := apply(pw.kp_page, {v1}, {v2}, {int_div(int_add(fs, i), x86_64_linux.PAGE)}, pe)
+    show := mp(a, mp(all_elim(tn, {i}), hi, hil))
+  qed
+  have t2: abi.thread_ok(v2, fs) by defs(taut(apply(pw.kp_read, {v1}, {v2}, {fs}, {8}, k0, tr), tn2, le2, tnz), abi.thread_ok)
+  have cw2: all i. i in omega -> int_lt(i, 8) -> snd(v2.pages[int_div(int_add(int_add(fs, 40), i), x86_64_linux.PAGE)]).prot.w &&
+      !abi.stack_page(v2, int_div(int_add(int_add(fs, 40), i), x86_64_linux.PAGE)) proof
+    fix i
+    assume hi hil
+    have _ pe := mp(all_elim(k40, {i}), hi, hil)
+    have a b := apply(pw.kp_page, {v1}, {v2}, {int_div(int_add(int_add(fs, 40), i), x86_64_linux.PAGE)}, pe)
+    have w1 s1 := mp(all_elim(cw, {i}), hi, hil)
+    show by taut(mp(a, s1), mp(b, w1))
+  qed
+  have c2: abi.canary_ok(v2, fs) by defs(taut(apply(pw.kp_read, {v1}, {v2}, {int_add(fs, 40)}, {8}, k40, cr), cw2), abi.canary_ok)
+  show by taut(t2, c2)
+qed
+
+// exit's precondition kept
+abbrev pw.LK := xt.XP.lock
+abbrev pw.FA := xt.XP.fini_array
+abbrev pw.CP := xt.XP.completed
+abbrev pw.GT := xt.XP.cxa_got
+abbrev pw.XKP(v1, v2, fs) := pw.KP(v1, v2, fs, 8) && pw.KP(v1, v2, int_add(fs, 40), 8) && pw.KP(v1, v2, int_add(fs, 48), 4) &&
+  pw.KP(v1, v2, pw.LK, 4) && pw.KP(v1, v2, pw.FA, 8) && pw.KP(v1, v2, pw.CP, 1) && pw.KP(v1, v2, pw.GT, 8)
+
+theorem pw.xpre_kp: all v1 v2 ob fs. v1 in x86_64_linux.Vm -> v2 in x86_64_linux.Vm -> fs in bits(64) -> int_lt(int_add(fs, 52), 18446744073709551616) ->
+  pw.XKP(v1, v2, fs) -> abi.canary_ok(v1, fs) -> startup_specs.exit_pre(v1, ob, xt.XP, fs) ->
+  startup_specs.exit_pre(v2, ob, xt.XP, fs) && abi.canary_ok(v2, fs)
+proof
+  fix v1 v2 ob fs
+  assume h1 h2 hf hl hk hc hx
+  have k0 k40 k48 kl kf kc kg := hk
+  have t u48 tid ap1 ap2 ul ulw lz uf fv uc ucw ug gz := expand(hx, startup_specs.exit_pre)
+  have t2 c2 := apply(pw.kp_tc, {v1}, {v2}, {fs}, h1, h2, hf, hl, k0, k40, t, hc)
+  have e48: bits_add(64, fs, 48) = int_add(fs, 48) by defs(arith(hf, hl), bits_add, bits_of_int, pow2)
+  have q48 := apply(pw.kp_bytes, {v1}, {v2}, {int_add(fs, 48)}, {4}, k48, arith(hf), simp(), arith(hl))
+  have tid2: !(gimple.bytes_at(v2, bits_add(64, fs, 48), 4) = 0) by simp(e48, q48, rewrite(e48, tid))
+  have ql := apply(pw.kp_bytes, {v1}, {v2}, {pw.LK}, {4}, kl, eval(), simp(), eval())
+  have qf := apply(pw.kp_bytes, {v1}, {v2}, {pw.FA}, {8}, kf, eval(), simp(), eval())
+  have qg := apply(pw.kp_bytes, {v1}, {v2}, {pw.GT}, {8}, kg, eval(), simp(), eval())
+  have x: startup_specs.exit_pre(v2, ob, xt.XP, fs) by defs(taut(t2, apply(pw.kp_usable, {v1}, {v2}, {ob}, {int_add(fs, 48)}, {4}, {false}, k48, u48), tid2, ap1, ap2,
+    apply(pw.kp_usable, {v1}, {v2}, {ob}, {pw.LK}, {4}, {false}, kl, ul), apply(pw.kp_usable, {v1}, {v2}, {ob}, {pw.LK}, {4}, {true}, kl, ulw), trans(ql, lz),
+    apply(pw.kp_usable, {v1}, {v2}, {ob}, {pw.FA}, {8}, {false}, kf, uf), trans(qf, fv),
+    apply(pw.kp_usable, {v1}, {v2}, {ob}, {pw.CP}, {1}, {false}, kc, uc), apply(pw.kp_usable, {v1}, {v2}, {ob}, {pw.CP}, {1}, {true}, kc, ucw),
+    apply(pw.kp_usable, {v1}, {v2}, {ob}, {pw.GT}, {8}, {false}, kg, ug), trans(qg, gz)), startup_specs.exit_pre)
+  show by taut(x, c2)
+qed
+
+// ----------------------------------------------------------------------
+//  main's return: its frame keeps the words outside the allocator's
+
+// (the world main returns to: W's, main's memory V, the canary W's)
+abbrev pw.R(W, V) := tr.rest(W, fn_update(tr.hide(W), "vm", V))
+// (n bytes at a: not the allocator's, not errno's, mapped at main's call)
+abbrev pw.NK(W, a, n) := all i. i in omega -> int_lt(i, n) -> (!(int_add(a, i) in pw.O[pw.MS(W)]) && !(int_add(a, i) in malloc.errno_bytes(pw.EO, pw.MS(W)))) &&
+  x86_64_linux.mapped(pw.MS(W).vm, int_div(int_add(a, i), x86_64_linux.PAGE))
+
+theorem pw.nk_kp: all W V g r u a n. W in abi.World -> pw.MPOST(W, V, g, r, u) -> a in omega -> pw.NK(W, a, n) -> pw.KP(W.vm, pw.R(W, V).vm, a, n)
+proof
+  fix W V g r u a n
+  assume hw hp ha hn
+  have hv hg _ _ _ hmf := hp
+  let T := union2(fn_update(tr.hide(W), "vm", V), g)
+  have tv: T.vm = V by simp(apply(tm.u2v[w := tr.hide(W), h := g, V := V], hg))
+  have _ pf pv _ := apply(ms.world_parts, hw)
+  have hf: is_fun(tr.hide(W)) := mp(fn_update_fun[f := W, k := "objs", v := abi.wob(W.objs.live, abi.cbytes0(W.fs_base))], pf)
+  have hd: "vm" in dom(tr.hide(W)) by simp(pv, mp(dom_update[f := W, k := "objs", v := abi.wob(W.objs.live, abi.cbytes0(W.fs_base))], pf))
+  have f0 d0 := dom_empty
+  have h0: !("vm" in dom(pw.H0)) by simp(rewrite(d0, mp(dom_update[f := empty, k := "blocks", v := fn_build(bits(64), x. none)], f0)))
+  have msv: pw.MS(W).vm = W.vm by simp(mp(app_union2_l[w := tr.hide(W), g := pw.H0, k := "vm"], hf, hd, h0))
+  fix i
+  assume hi hil
+  let x := int_add(a, i)
+  let b := bits_of_int(64, x)
+  have mb mpg := mp(all_elim(expand(hmf, test_malloc.main_frame), {x}), arith(ha, hi), mp(all_elim(hn, {i}), hi, hil))
+  have vb: V.bytes[b] = W.vm.bytes[b] by simp(rewrite(msv, rewrite(tv, mb)))
+  have vp: V.pages[int_div(x, x86_64_linux.PAGE)] = W.vm.pages[int_div(x, x86_64_linux.PAGE)] by simp(rewrite(msv, rewrite(tv, mpg)))
+  have bb: b in bits(64) by simp()
+  have rb: pw.R(W, V).vm.bytes[b] = ite(b in abi.canary(W.fs_base), W.vm.bytes[b], V.bytes[b]) by simp(bb)
+  have c1: b in abi.canary(W.fs_base) -> pw.R(W, V).vm.bytes[b] = W.vm.bytes[b] proof
+    assume e
+    show by simp(e, rb)
+  qed
+  have c2: !(b in abi.canary(W.fs_base)) -> pw.R(W, V).vm.bytes[b] = W.vm.bytes[b] proof
+    assume e
+    show by simp(e, rb, vb)
+  qed
+  have rp: pw.R(W, V).vm.pages[int_div(x, x86_64_linux.PAGE)] = W.vm.pages[int_div(x, x86_64_linux.PAGE)] by simp(vp)
+  show by taut(c1, c2, rp)
+qed
+
+// main returned with 0 or 1, exit's precondition and the thread sound at
+// its call, its words main's frame keeps: exit's call ready
+theorem pw.after_main: all W V g r u. W in abi.World -> W in univ(1) -> tr.tc_ok(W) -> startup_specs.exit_pre(W.vm, tr.hide(W).objs, xt.XP, W.fs_base) ->
+  int_lt(int_add(W.fs_base, 52), 18446744073709551616) ->
+  pw.NK(W, W.fs_base, 8) -> pw.NK(W, int_add(W.fs_base, 40), 8) -> pw.NK(W, int_add(W.fs_base, 48), 4) ->
+  pw.NK(W, pw.LK, 4) -> pw.NK(W, pw.FA, 8) -> pw.NK(W, pw.CP, 1) -> pw.NK(W, pw.GT, 8) ->
+  pw.MPOST(W, V, g, r, u) -> pw.XR(pw.R(W, V), u)
+proof
+  fix W V g r u
+  assume hw wu htc hx hl n0 n40 n48 nl nf nc ng hp
+  have hv _ hr01 hbu _ _ := hp
+  let R := pw.R(W, V)
+  have wv _ _ _ := apply(ms.world_parts, hw)
+  have fsb: W.fs_base in bits(64) by simp(expand(hw, abi.World))
+  have fso: W.fs_base in omega by arith(fsb)
+  have hwh hwu := apply(pw.hide_world, hw, wu)
+  have w2W w2u := apply(mp.am_world[s := tr.hide(W), V := V], hwh, hwu, hv)
+  have hR hRu := apply(tr.rest_typed, {W}, {fn_update(tr.hide(W), "vm", V)}, hw, w2W, w2u)
+  have rv _ _ _ := apply(ms.world_parts, hR)
+  have k0 := apply(pw.nk_kp, {W}, {V}, {g}, {r}, {u}, {W.fs_base}, {8}, hw, hp, fso, n0)
+  have k40 := apply(pw.nk_kp, {W}, {V}, {g}, {r}, {u}, {int_add(W.fs_base, 40)}, {8}, hw, hp, arith(fso), n40)
+  have k48 := apply(pw.nk_kp, {W}, {V}, {g}, {r}, {u}, {int_add(W.fs_base, 48)}, {4}, hw, hp, arith(fso), n48)
+  have kl := apply(pw.nk_kp, {W}, {V}, {g}, {r}, {u}, {pw.LK}, {4}, hw, hp, eval(), nl)
+  have kf := apply(pw.nk_kp, {W}, {V}, {g}, {r}, {u}, {pw.FA}, {8}, hw, hp, eval(), nf)
+  have kc := apply(pw.nk_kp, {W}, {V}, {g}, {r}, {u}, {pw.CP}, {1}, hw, hp, eval(), nc)
+  have kg := apply(pw.nk_kp, {W}, {V}, {g}, {r}, {u}, {pw.GT}, {8}, hw, hp, eval(), ng)
+  have _ hcw := expand(htc, tr.tc_ok)
+  have x2 c2 := apply(pw.xpre_kp, {W.vm}, {R.vm}, {tr.hide(W).objs}, {W.fs_base}, wv, rv, fsb, hl, conj(k0, k40, k48, kl, kf, kc, kg), hcw, hx)
+  have fe: R.fs_base = W.fs_base by simp()
+  have oe: tr.hide(R).objs = tr.hide(W).objs by simp()
+  have t2 _ _ _ _ _ _ _ _ _ _ _ _ _ := expand(x2, startup_specs.exit_pre)
+  have tc: tr.tc_ok(R) by defs(simp(fe, t2, c2), tr.tc_ok)
+  have xp: startup_specs.exit_pre(R.vm, tr.hide(R).objs, xt.XP, R.fs_base) by simp(fe, oe, x2)
+  have uu: bits_of_int(32, u) = 0 || bits_of_int(32, u) = 1 by simp(hbu, hr01)
+  show by taut(hR, hRu, tc, xp, uu)
+qed
