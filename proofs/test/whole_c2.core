@@ -1,0 +1,262 @@
+// The whole run's startup path at GIMPLE level (docs/todo.md 1(d)): from
+// _start_c's entry, every outcome an end -- a stack overflow, or an exit
+// with 0 or 1. Each function's run by its callees' outcomes given as
+// premises (main's and exit's, then stage2's, __libc_start_main's).
+
+abbrev pw.OVF := exc_val("stack_overflow", empty)
+abbrev pw.END(o) := (ex x. o = exc(x, pw.OVF)) || (ex x c. o = exc(x, exc_val("exit", c)) && (c = 0 || c = 1))
+
+// (an end is no return, no divergence)
+theorem pw.end_ok: all w v. !pw.END(ok(w, v))
+proof
+  fix w v
+  have n: pw.END(ok(w, v)) -> false proof
+    assume h
+    have a1: (ex x. ok(w, v) = exc(x, pw.OVF)) -> false proof
+      assume e
+      obtain x, ex from e
+      show by simp(ex)
+    qed
+    have a2: (ex x c. ok(w, v) = exc(x, exc_val("exit", c)) && (c = 0 || c = 1)) -> false proof
+      assume e
+      obtain x c, ex _ from e
+      show by simp(ex)
+    qed
+    show by taut(h, a1, a2)
+  qed
+  show by taut(n)
+qed
+
+theorem pw.end_div: all t. !pw.END(diverge(t))
+proof
+  fix t
+  have n: pw.END(diverge(t)) -> false proof
+    assume h
+    have a1: (ex x. diverge(t) = exc(x, pw.OVF)) -> false proof
+      assume e
+      obtain x, ex from e
+      show by simp(ex)
+    qed
+    have a2: (ex x c. diverge(t) = exc(x, exc_val("exit", c)) && (c = 0 || c = 1)) -> false proof
+      assume e
+      obtain x c, ex _ from e
+      show by simp(ex)
+    qed
+    show by taut(h, a1, a2)
+  qed
+  show by taut(n)
+qed
+
+// ----------------------------------------------------------------------
+//  stage2: __libc_start_init (its spec), main (an end, or a return R
+//  holds after), exit (an end from every such return)
+
+abbrev pw.ENV(argc, argv) := int_add(argv, int_mul(8, int_add(argc, 1)))
+abbrev pw.A2(argc, argv) := seq_concat(seq_concat(seq_one(gimple.arg(32, argc)), seq_one(gimple.arg(64, argv))), seq_one(gimple.arg(64, pw.ENV(argc, argv))))
+
+theorem pw.s2_run(w u. R): all P main argc argv SI FP EX s o. s in abi.World -> main in bits(64) -> argc in bits(32) -> argv in bits(64) ->
+  main = P.main -> int_lt(argc, int_pow(2, 31)) -> int_lt(pw.ENV(argc, argv), int_pow(2, 63)) ->
+  startup_specs.ctors_ok(s.vm, s.objs, P, set_select(omega, x2. false)) ->
+  mp.calls(SI, startup_specs.start_init_spec_fun(P)) ->
+  (all regs o2. gc.regs_ok(regs, pw.A2(argc, argv)) -> runs(FP[main][regs], s, o2) -> pw.END(o2) || (ex w r. o2 = ok(w, r) && R(gc.back0(w, s), fst(r)))) ->
+  (all w u regs o2. R(w, u) -> gc.regs_ok(regs, seq_one(gimple.arg(32, bits_of_int(32, u)))) -> runs(EX[regs], w, o2) -> pw.END(o2)) ->
+  runs(c_src_env___libc_start_main.libc_start_main_stage2(main, argc, argv, SI, FP, EX), s, o) -> pw.END(o)
+proof
+  fix P main argc argv SI FP EX s o
+  assume hw hmb hab hvb hm h31 hb63 hct hSI hM hX h
+  have pu := apply(g.runs_univ, expand(h, c_src_env___libc_start_main.libc_start_main_stage2))
+  have hu: s in univ(1) by simp(pu)
+  let OVF := exc_val("stack_overflow", empty)
+  let M := int_mul(8, int_add(argc, 1))
+  let TY := fn_update(fn_update(empty, "prec", 64), "signed", true)
+  have ao: argc in omega by simp(hab)
+  have vo: argv in omega by simp(hvb)
+  have m1: bits_of_int(32, argc) = argc by defs(arith(ao, h31), bits_of_int)
+  have m2: bits_of_int(64, argc) = argc by defs(arith(ao, h31), bits_of_int)
+  have p31: int_lt(argc, pow2(31)) by arith(h31)
+  have eS: bits_sext(32, 64, argc) = argc by defs(simp(m1, m2, p31), bits_sext, sint, letin)
+  have eA1: bits_add(64, argc, 1) = int_add(argc, 1) by defs(arith(ao, h31), bits_add)
+  have eM: bits_mul(64, int_add(argc, 1), 8) = M by defs(arith(ao, h31), bits_mul)
+  have p63: int_pow(2, int_sub(64, 1)) = 9223372036854775808 by simp()
+  have nlt: !int_le(int_pow(2, int_sub(64, 1)), M) by arith(ao, h31, p63)
+  have eV: gimple.sval(TY, M) = M by defs(simp(nlt), gimple.sval)
+  have ml: int_lt(M, pow2(64)) by arith(ao, h31)
+  have mb: M in bits(64) by defs(simp(ao, ml), bits)
+  have pz: int_le(0, int_add(argv, gimple.sval(TY, M))) by arith(eV, ao, vo)
+  have pl: int_lt(int_add(argv, gimple.sval(TY, M)), pow2(64)) by arith(eV, ao, vo, hb63)
+  have b := apply(g.runs_elim, expand(h, c_src_env___libc_start_main.libc_start_main_stage2))
+  step a1, h0 from b
+  have h0r := rewrite(eM, rewrite(eA1, rewrite(eS, h0)))
+  step h1 from h0r with g.padd_det using conj(hu, hvb, mb, pz, pl)
+  have h1r := rewrite(eV, h1)
+  let ENV := int_add(argv, M)
+  have sv wf wd _ := apply(ms.world_parts, hw)
+  have od: "objs" in dom(s) by simp(expand(hw, abi.World))
+  // __libc_start_init called: an overflow, or nothing
+  obtain oc, hrc hdc from apply(g.bind_open, h1r)
+  let QS(o2) := sp.ovf_any(s, o2) || (ex v. o2 = ok(s, v))
+  have rg0 := gc.regs0_ex
+  have hqs: all regs o2. gc.regs_ok(regs, empty) -> runs(SI[regs], s, o2) -> QS(o2) proof
+    fix regs o2
+    assume hro hg
+    have rl rn := apply(gc.regs0, hro)
+    have l6: int_le(seq_len(regs), 6) by arith(rn)
+    have ra := mp(sp.regs_in[regs := regs], rl, l6)
+    have hs := mp(all_elim(hSI, {regs}, {s}, {o2}), rl, l6, hw, hg)
+    have b2 := apply(sp.fun_out0[Q := a. startup_specs.start_init_spec(P)], {regs}, {s}, {o2}, ra, expand(hs, startup_specs.start_init_spec_fun))
+    show := apply(sp.si_call, hw, hct, b2)
+  qed
+  have ci := apply(gc.call0_inv[Q := o2. QS(o2)], {SI}, {empty}, {s}, {oc}, rg0, hqs, hrc)
+  have endo: all x. o = exc(x, OVF) -> pw.END(o) proof
+    fix x
+    assume e
+    show by taut((ex x2. o = exc(x2, OVF) by ex_intro({x}, e)))
+  qed
+  have kA: oc = exc(s, OVF) -> pw.END(o) proof
+    assume e
+    have oe: o = exc(s, OVF) by simp(rewrite(e, hdc))
+    show := mp(all_elim(endo, {s}), oe)
+  qed
+  have kC: (ex x e. QS(exc(x, e)) && oc = exc(x, e)) -> pw.END(o) proof
+    assume q
+    obtain x e, hq4 he from q
+    have nk: !(ex v. exc(x, e) = ok(s, v)) by defs(simp(), ok, exc)
+    have ov: sp.ovf_any(s, exc(x, e)) by taut(hq4, nk)
+    obtain f v ob, _ _ _ oe0 from expand(ov, sp.ovf_any)
+    have oe: o = exc(x, e) by simp(rewrite(he, hdc))
+    have ee: e = OVF by simp(oe0)
+    show := mp(all_elim(endo, {x}), rewrite(ee, oe))
+  qed
+  have kD: (ex t. QS(diverge(t)) && oc = diverge(t)) -> pw.END(o) proof
+    assume q
+    obtain t, hq4 _ from q
+    have f: false by defs(simp(expand(hq4, sp.ovf_any)), ok, exc, diverge)
+    show by taut(f)
+  qed
+  // ... nothing: main called at s
+  have kB: (ex w4 r. QS(ok(w4, r)) && (oc = ok(gc.back0(w4, s), pair(fst(r), snd(r))) || oc = exc(gc.back0(w4, s), OVF))) -> pw.END(o) proof
+    assume q
+    obtain w4 r, hq4 ho4 from q
+    have no: !sp.ovf_any(s, ok(w4, r)) by defs(simp(), sp.ovf_any, ok, exc)
+    obtain v, e4 from (ex v. ok(w4, r) = ok(s, v) by taut(hq4, no))
+    have w4e: w4 = s by simp(e4)
+    have os := apply(gc.objs_same, hw)
+    have bk: gc.back0(w4, s) = s by simp(w4e, os, wf, od)
+    have k2: oc = exc(gc.back0(w4, s), OVF) -> pw.END(o) proof
+      assume e
+      show := mp(kA, rewrite(bk, e))
+    qed
+    have k1: oc = ok(gc.back0(w4, s), pair(fst(r), snd(r))) -> pw.END(o) proof
+      assume e
+      step h2 from rewrite(bk, rewrite(e, hdc))
+      obtain oc2, hrc2 hdc2 from apply(g.bind_open, h2)
+      obtain o3, r3 rel3 from apply(sp.call1_0_e, hrc2)
+      have el: int_lt(ENV, pow2(64)) by arith(hb63, ao, vo)
+      have eo: ENV in omega by simp(ao, vo)
+      have envb: ENV in bits(64) by defs(simp(eo, el), bits)
+      have rg2 := apply(gc.regs_get, apply(gc.regs_cat, apply(gc.regs_cat, apply(gc.regs_one[w := 32, x := argc], simp(), simp(), hab),
+        apply(gc.regs_one[w := 64, x := argv], simp(), simp(), hvb)), apply(gc.regs_one[w := 64, x := ENV], simp(), simp(), envb)))
+      let QM(o2) := pw.END(o2) || (ex w r. o2 = ok(w, r) && R(gc.back0(w, s), fst(r)))
+      have hq2: all regs o2. gc.regs_ok(regs, pw.A2(argc, argv)) -> runs(FP[main][regs], s, o2) -> QM(o2) proof
+        fix regs o2
+        assume hro hg
+        show := mp(all_elim(hM, {regs}, {o2}), hro, hg)
+      qed
+      have ci2 := apply(gc.call0_inv[Q := o2. QM(o2)], {FP[main]}, {pw.A2(argc, argv)}, {s}, {o3}, rg2, hq2, r3)
+      // (the call's exception o3: o's)
+      have ox: all X E. o3 = exc(X, E) -> o = exc(X, E) proof
+        fix X E
+        assume e3
+        have e2: oc2 = exc(X, E) by simp(rewrite(e3, rel3))
+        show by simp(rewrite(e2, hdc2))
+      qed
+      have m1: o3 = exc(s, OVF) -> pw.END(o) proof
+        assume e3
+        show := mp(all_elim(endo, {s}), mp(all_elim(ox, {s}, {OVF}), e3))
+      qed
+      have m3: (ex x e. QM(exc(x, e)) && o3 = exc(x, e)) -> pw.END(o) proof
+        assume q2
+        obtain x e, hq e3 from q2
+        have oe := mp(all_elim(ox, {x}, {e}), e3)
+        have nr: !(ex w r. exc(x, e) = ok(w, r) && R(gc.back0(w, s), fst(r))) proof
+          assume q3
+          obtain w r, f _ from q3
+          show by simp(f)
+        qed
+        have en: pw.END(exc(x, e)) by taut(hq, nr)
+        show := rewrite(sym(oe), en)
+      qed
+      have m4: (ex t. QM(diverge(t)) && o3 = diverge(t)) -> pw.END(o) proof
+        assume q2
+        obtain t, hq _ from q2
+        have nr: !(ex w r. diverge(t) = ok(w, r) && R(gc.back0(w, s), fst(r))) proof
+          assume q3
+          obtain w r, f _ from q3
+          show by simp(f)
+        qed
+        have f: false by taut(hq, nr, all_elim(pw.end_div, {t}))
+        show by taut(f)
+      qed
+      // (main returned: exit called after)
+      have m2: (ex w5 r5. QM(ok(w5, r5)) && (o3 = ok(gc.back0(w5, s), pair(fst(r5), snd(r5))) || o3 = exc(gc.back0(w5, s), OVF))) -> pw.END(o) proof
+        assume q2
+        obtain w5 r5, hq ho3 from q2
+        have hr5: R(gc.back0(w5, s), fst(r5)) proof
+          have c1: (ex w r. ok(w5, r5) = ok(w, r) && R(gc.back0(w, s), fst(r))) -> R(gc.back0(w5, s), fst(r5)) proof
+            assume q3
+            obtain w r, f hr from q3
+            have we: w = w5 by simp(f)
+            have re: r = r5 by simp(f)
+            show := rewrite(re, rewrite(we, hr))
+          qed
+          show by taut(hq, c1, all_elim(pw.end_ok, {w5}, {r5}))
+        qed
+        have n2: o3 = exc(gc.back0(w5, s), OVF) -> pw.END(o) proof
+          assume e3
+          show := mp(all_elim(endo, {gc.back0(w5, s)}), mp(all_elim(ox, {gc.back0(w5, s)}, {OVF}), e3))
+        qed
+        have n1: o3 = ok(gc.back0(w5, s), pair(fst(r5), snd(r5))) -> pw.END(o) proof
+          assume e3
+          let W2 := gc.back0(w5, s)
+          let U := fst(r5)
+          have e2: oc2 = ok(W2, U) by simp(rewrite(e3, rel3))
+          step h3 from rewrite(e2, hdc2)
+          obtain oc3, hrc3 hdc3 from apply(g.bind_open, h3)
+          have rg3 := apply(gc.regs_get, apply(gc.regs_one[w := 32, x := bits_of_int(32, U)], simp(), simp(), (bits_of_int(32, U) in bits(32) by simp())))
+          have hq3: all regs o2. gc.regs_ok(regs, seq_one(gimple.arg(32, bits_of_int(32, U)))) -> runs(EX[regs], W2, o2) -> pw.END(o2) proof
+            fix regs o2
+            assume hro hg
+            show := mp(all_elim(hX, {W2}, {U}, {regs}, {o2}), hr5, hro, hg)
+          qed
+          have ci3 := apply(gc.call0_inv[Q := o2. pw.END(o2)], {EX}, {seq_one(gimple.arg(32, bits_of_int(32, U)))}, {W2}, {oc3}, rg3, hq3, hrc3)
+          have z1: oc3 = exc(W2, OVF) -> pw.END(o) proof
+            assume e4
+            have oe: o = exc(W2, OVF) by simp(rewrite(e4, hdc3))
+            show := mp(all_elim(endo, {W2}), oe)
+          qed
+          have z2: (ex w6 r6. pw.END(ok(w6, r6)) && (oc3 = ok(gc.back0(w6, W2), pair(fst(r6), snd(r6))) || oc3 = exc(gc.back0(w6, W2), OVF))) -> pw.END(o) proof
+            assume q4
+            obtain w6 r6, f _ from q4
+            show by taut(f, all_elim(pw.end_ok, {w6}, {r6}))
+          qed
+          have z3: (ex x e. pw.END(exc(x, e)) && oc3 = exc(x, e)) -> pw.END(o) proof
+            assume q4
+            obtain x e, en e4 from q4
+            have oe: o = exc(x, e) by simp(rewrite(e4, hdc3))
+            show := rewrite(sym(oe), en)
+          qed
+          have z4: (ex t. pw.END(diverge(t)) && oc3 = diverge(t)) -> pw.END(o) proof
+            assume q4
+            obtain t, f _ from q4
+            show by taut(f, all_elim(pw.end_div, {t}))
+          qed
+          show by taut(ci3, z1, z2, z3, z4)
+        qed
+        show by taut(ho3, n1, n2)
+      qed
+      show by taut(ci2, m1, m2, m3, m4)
+    qed
+    show by taut(ho4, k1, k2)
+  qed
+  show by taut(ci, kA, kB, kC, kD)
+qed
