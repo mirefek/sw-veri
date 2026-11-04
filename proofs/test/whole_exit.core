@@ -204,3 +204,67 @@ proof
   have uu: bits_of_int(32, u) = 0 || bits_of_int(32, u) = 1 by simp(hbu, hr01)
   show by taut(hR, hRu, tc, xp, uu)
 qed
+
+// ----------------------------------------------------------------------
+//  stage2 with the program's main and exit linked
+
+// exit's call ready at main's call: main's pre, the thread and exit's
+// precondition, the words exit reads not the allocator's
+abbrev pw.MR(s) := tr.tc_ok(s) && pw.PRE(s) && startup_specs.exit_pre(s.vm, tr.hide(s).objs, xt.XP, s.fs_base) &&
+  int_lt(int_add(s.fs_base, 52), 18446744073709551616) &&
+  pw.NK(s, s.fs_base, 8) && pw.NK(s, int_add(s.fs_base, 40), 8) && pw.NK(s, int_add(s.fs_base, 48), 4) &&
+  pw.NK(s, pw.LK, 4) && pw.NK(s, pw.FA, 8) && pw.NK(s, pw.CP, 1) && pw.NK(s, pw.GT, 8)
+
+// (a world back from a call with the caller's live objects: itself)
+theorem pw.back0_same: all w s. w in abi.World -> s.objs.live = w.objs.live -> gc.back0(w, s) = w
+proof
+  fix w s
+  assume hw hl
+  have ro: w.objs in abi.Objs by simp(expand(hw, abi.World))
+  have rf: is_fun(w.objs) && "live" in dom(w.objs) by simp(expand(ro, abi.Objs))
+  have wf: is_fun(w) && "objs" in dom(w) by simp(expand(hw, abi.World))
+  have e1 := mp(fn_update_same[f := w.objs, k := "live"], taut(rf), taut(rf))
+  have e2 := mp(fn_update_same[f := w, k := "objs"], taut(wf), taut(wf))
+  have e3: gc.back0(w, s) = fn_update(w, "objs", fn_update(w.objs, "live", w.objs.live)) := rewrite(hl, refl({gc.back0(w, s)}))
+  show := trans(e3, rewrite(sym(e1), e2))
+qed
+
+theorem pw.s2_main: all G NF regs s o. tr.callee_io(tm.MAL(G), 1) -> tm.mcall(pw.I, pw.O, pw.EO, pw.PB, pw.PC, pw.PS, tm.MAL(G)) ->
+  tr.callee_io(tm.FRE(NF), 1) -> tm.fcall(pw.I, pw.O, pw.EO, pw.PB, pw.PC, pw.PS, tm.FRE(NF)) ->
+  regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> ord_le(3, seq_len(regs)) -> s in abi.World -> s in univ(1) ->
+  pw.R0(regs) = ui.P.main -> int_lt(pw.R1(regs), int_pow(2, 31)) -> int_lt(pw.ENV(pw.R1(regs), pw.R2(regs)), int_pow(2, 63)) ->
+  startup_specs.ctors_ok(s.vm, s.objs, ui.P, set_select(omega, x2. false)) -> pw.MR(s) ->
+  runs(lwh.S2(tr.as_su(tm.LOWC(G, NF)), lwh.EXW)[regs], s, o) -> pw.END(o)
+proof
+  fix G NF regs s o
+  assume hmio hmc hfio hfc hr hl h3 hw wu h0 h31 h63 hct hmr h
+  let M := tr.as_su(tm.LOWC(G, NF))
+  have htc hpre hx hfl n0 n40 n48 nl nf nc ng := hmr
+  have pm: ui.P.main = 4199122 by defs(simp(), c_crt_crt1.main_at)
+  have fe: lwh.FP(4199122, M)[pw.R0(regs)] = M by simp(h0, pm)
+  // main's call: an end, or a return with exit's call ready
+  have hM: all regs2 o2. gc.regs_ok(regs2, pw.A2(pw.R1(regs), pw.R2(regs))) -> runs(lwh.FP(4199122, M)[pw.R0(regs)][regs2], s, o2) ->
+      pw.END(o2) || (ex w r. o2 = ok(w, r) && pw.XR(gc.back0(w, s), fst(r))) proof
+    fix regs2 o2
+    assume hro hr2
+    have rl rln _ := hro
+    have rn: seq_len(regs2) = 3 := trans(rln, (seq_len(pw.A2(pw.R1(regs), pw.R2(regs))) = 3 by simp()))
+    have ra := mp(sp.regs_in[regs := regs2], rl, arith(rn))
+    have hA: regs2 in abi.ARGS by simp(ra)
+    have q := apply(pw.main_out, {G}, {NF}, {s}, {regs2}, {o2}, hmio, hmc, hfio, hfc, hw, wu, htc, hpre, hA, rewrite(fe, hr2))
+    have c2: (ex V g r u y. pw.MPOST(s, V, g, r, u) && o2 = ok(pw.R(s, V), pair(u, y))) -> ex w r. o2 = ok(w, r) && pw.XR(gc.back0(w, s), fst(r)) proof
+      assume e
+      obtain V g r u y, p1 p2 p3 p4 p5 p6 oe from e
+      have hp: pw.MPOST(s, V, g, r, u) by taut(p1, p2, p3, p4, p5, p6)
+      have am := apply(pw.after_main, {s}, {V}, {g}, {r}, {u}, hw, wu, htc, hx, hfl, n0, n40, n48, nl, nf, nc, ng, hp)
+      have hRw _ _ _ _ := am
+      have bk := apply(pw.back0_same, {pw.R(s, V)}, {s}, hRw, (s.objs.live = pw.R(s, V).objs.live by simp()))
+      have fu: fst(pair(u, y)) = u by simp()
+      have xb: pw.XR(gc.back0(pw.R(s, V), s), fst(pair(u, y))) := rewrite(sym(fu), rewrite(sym(bk), am))
+      show by ex_intro({pw.R(s, V)}, {pair(u, y)}, taut(oe, xb))
+    qed
+    show by taut(q, c2)
+  qed
+  show := apply(pw.s2_fun[R := w u. pw.XR(w, u)], {ui.P}, {lwh.SI}, {lwh.FP(4199122, M)}, {lwh.EXW}, {regs}, {s}, {o}, hr, hl, h3, hw, h0, h31, h63, hct,
+    mp.calls_refl[F := lwh.SI], hM, pw.exit_end, h)
+qed
