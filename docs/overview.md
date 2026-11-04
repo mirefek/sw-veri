@@ -44,6 +44,13 @@ The chain checks the claim of the -O0 binary (`@claim`, first after the
 libraries; the elaborated layers after it leave out what it defines) and
 proves it in proofs/mallocng/claim.core, from no open lemma.
 
+The program claim, `slc claim --program-exits 0,1` (`musl_program`,
+layers/claim_program.sl), is about a whole client, tests/test_malloc.c:
+every run of its process from an unprivileged exec state that ends
+exits with 0 or 1, or dies of a stack overflow; no other crash, never
+the exit 42 its pattern check would give. The chain proves it in
+proofs/test/whole_top.core. Runs that never end are allowed.
+
 `Init` (`init_at_main` in layers/claim_malloc.sl) is about the runs that
 reach `main`:
 - of unprivileged processes only;
@@ -52,7 +59,7 @@ reach `main`:
   musl's data symbols), the thread descriptor up to errno (`fs_base ..
   +0x34`), and the auxiliary vector and AT_RANDOM bytes.
 If the model could not reach `main` at all, `Init` would hold vacuously;
-that some run does is still to show (docs/todo.md §1, §2).
+that some run does is still to show (docs/todo.md §1).
 
 ## The levels
 

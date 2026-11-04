@@ -1552,3 +1552,30 @@ item is a short summary of finished work; details are in the files named.
   decided in C1, rip-relative compares, the frame pointer pushed after a
   test, any-outcome rests (`tr.q_some_g`), `step` deciding a literal
   condition with no fact.
+- **The program's claim proven** (`musl_program`; proofs/test/whole_*.core,
+  link_whole.core, translate_nobrk.core, translate_mode.core). Every
+  process run of tests/test_malloc.c from an unprivileged exec state that
+  ends exits with 0 or 1 or dies of a stack overflow.
+  - Contracts without a stop (`tr.impl_d`; engine `c1 .. startup`):
+    the startup path's callers of main, which never stops.
+  - A main-mode callee from a startup caller (`tr.as_su`, the canary
+    hidden during the call).
+  - The whole run linked from `_start_c`'s entry (`tm.whole_link`).
+  - Its C2 (`pw.stc_end`): `_start_c`, `__libc_start_main` and stage2 by
+    their GIMPLE.
+  - At main's call (`pw.mr_w1`):
+    - the invariant from `ui.rep_main` at a machine with the startup
+      world's bytes (`pw.MM`), carried across objects (`pw.rep_xfer`);
+    - `world_ok` (`pw.wok`);
+    - exit's words from the image, kept by startup's frame
+      (`pw.xpre_w1`), and none of them the allocator's (`pw.nk_w1`).
+  - After main, exit's precondition kept by main's frame
+    (`pw.after_main`).
+  - Layer change: startup_specs' `thread_set` has the thread's id set,
+    from set_tid_address's value stored by `__init_tp`.
+  - The top (`pw.top`):
+    - `run_process` against the contract's disciplined run (`pw.proc_rd`);
+    - `_start`'s steps (`ui.start4` / `ui.start_call`, generalized over
+      the run's continuation; a faulting push is an overflow,
+      `pw.push_fault`);
+    - the contract's outcomes when the spec ends (`pw.mtv_end`).

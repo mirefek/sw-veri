@@ -3,63 +3,11 @@
 The current plans, in order. When an item is done it is deleted here and
 summarized in docs/done.md.
 
-## 1. Next: the program's claim (tests/test_malloc.c)
+## 1. Next: termination
 
-The claim's binary is a client of malloc and free only
-(tests/test_malloc.c: blocks filled with patterns, half freed and
-allocated again, all checked; exit 1 when malloc returns NULL, 42 when a
-pattern changed, else 0). The claim `musl_program` (stated, open:
-layers/claim_program.sl, `slc claim --program-exits 0,1`): every run of
-the process from an unprivileged exec state that ends exits with 0 or 1,
-or dies of a stack overflow as abi.sl's `abi_function` raises it; no
-other crash, never exit 42. Runs that never end are allowed (§2).
-- (c0) `world_ok` at main's first call: its page clauses and the stack
-  in the user space from the bridge (abi.sl's `stack_reserve`, the world
-  without the stack's pages); main's spec (`tm.main_top`) is undefined
-  where it fails.
-- (d) After main (the exit path done: `xt.exit_impl`, docs/done.md):
-  stage2 (`exit(main(..))`), __libc_start_main and _start_c with main and
-  exit as callees by their contracts. The startup contracts all stop at
-  main's entry (`tr.run_s` with t = main); main's and exit's are of the
-  runs without a stop (`tr.run_d`), and a contract of those says nothing of
-  a run's prefix -- so no stop address works for a caller of main (a stop
-  address no rip can be needs every reached state typed, which the x86
-  model does not give). Done: the startup mode without a stop
-  (`tr.impl_d`, proofs/translate_nobrk.core; engine: `c1 .. startup`
-  alone), a main-mode callee from a startup caller (`tr.as_su`,
-  proofs/translate_mode.core), the C1s (c1_whole.core) and the link
-  (link_whole.core, proofs/test/main_whole.core: `tm.whole_link`, the
-  machine code from _start_c's entry implementing the linked GIMPLE --
-  __libc_start_init by its purpose, main's and exit's linked code wrapped).
-  The C2 of that linked GIMPLE is done: from _start_c's precondition at
-  exec's view, an exit with 0 or 1 or an overflow (`pw.stc_end`,
-  proofs/test/whole_run.core; main's precondition at stage2's call from
-  startup's effect and exec's image, proofs/test/whole_init.core:
-  `pw.mr_w1`, world_ok `pw.wok` (item c0 done); stage2 `pw.s2_main`,
-  proofs/test/whole_exit.core; the thread's id now in startup_specs'
-  `thread_set`).
-- (e) The whole run's top, machine level: `program_ok` for
-  `claim_program.run_process` from exec.
-  - run_process unfolded (as `ui.UR` for run_until) and its first steps:
-    `ui.start4` / `ui.start_call` generalized over the run's continuation
-    (their run_until use is only `ui.until_step`); _start's call pushing
-    the return address may fault -- a stack overflow (`overflow_at` with
-    exec's rsp), to show.
-  - run_process from _start_c's entry against the contract's disciplined
-    run `tr.run_d` (`while_guard` twice: the return stop, the discipline
-    -- as `tr.run_disc`); the early stops (disc, a return) excluded by
-    the contract's `tr.mtv` and the spec's END (`abi.nstop` excludes exit).
-  - the contract (`tm.whole_link`) at _start_c's entry: `abi.loaded` with
-    the program's statics (under the stack's floor, as in `pw.wok`), the
-    entry facts (`ui.entry_eok`, `ui.entry_objs`, `ui.wvm_vok`); `tr.mtv`'s
-    crash (overflow_at from the entry's sp, exec's rsp), exit (0 or 1) and
-    divergence cases give `program_ok`; then the claim `musl_program`.
-
-The malloc claim's `Init` is about the runs that reach `main`, vacuous
-if none did; (e) shows nothing more of that (a witness that some exec
-state reaches main is a separate statement).
-
-## 2. Termination (planned)
+Both claims are proven (`musl_malloc`, `musl_program`). The malloc
+claim's `Init` is about the runs that reach `main`, vacuous if none did
+(a witness that some exec state reaches main is a separate statement).
 
 The program claim allows runs that never end. To exclude them: every
 call of malloc and free returns (or overflows the stack), and the
@@ -74,7 +22,7 @@ startup and exit paths end.
 - The startup's and exit's loops (auxv, the constructors, TLS copy).
 - The statement: every run ends -- exit 0/1 or a stack overflow.
 
-## 3. Shared libraries (planned)
+## 2. Shared libraries (planned)
 
 The standard setup: the program dynamically linked, musl's libc.so (also
 its dynamic linker, /lib/ld-musl-x86_64.so.1) loaded at a random base.
@@ -93,7 +41,7 @@ its dynamic linker, /lib/ld-musl-x86_64.so.1) loaded at a random base.
 - The program's claim then for a program and the library file: proven
   from the library's claim and the program's own proofs.
 
-## 4. The engine, when a function needs it
+## 3. The engine, when a function needs it
 
 - Frames with a frame pointer (`push rbp; mov rbp, rsp`, rbp-based
   slots): C1 knows rsp-based frames only (musl's -fomit-frame-pointer);
@@ -126,7 +74,7 @@ its dynamic linker, /lib/ld-musl-x86_64.so.1) loaded at a random base.
   the effective address a parameter, each form by its address equation
   (as tr.rsp_bd_ea), if cold checks need to be faster.
 
-## 5. The CFG path's remaining engineering
+## 4. The CFG path's remaining engineering
 
 - The structured form generated and checked in one run (`slc gimple`
   running the refinement); a callee's refinement a theorem of its own, not
@@ -152,7 +100,7 @@ its dynamic linker, /lib/ld-musl-x86_64.so.1) loaded at a random base.
   `steps` line's 90 s; only after the binary changes): the decoder's
   `members` and the `exec_insn` unfolding, per encoding.
 
-## 6. The invariant and the laws
+## 5. The invariant and the laws
 
 - The C world owning only its statics, heap and stack objects.
 - `slc heapcheck` on larger heaps: each byte's view membership (`held`)
@@ -161,7 +109,7 @@ its dynamic linker, /lib/ld-musl-x86_64.so.1) loaded at a random base.
   An interval form of the footprint per check would make it linear.
 
 
-## 7. Usability
+## 6. Usability
 
 - `rsimp` for the machine's semantics (proofs/linux_sys.core) instead of
   hand lemmas: a dispatch's live case is `rsimp(h, tag)` already; a
