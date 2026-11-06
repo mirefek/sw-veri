@@ -167,10 +167,14 @@ edited proof is checked again on its own, in about a second.
 
 ## Status
 
-Both claims are proven. Next steps are in `docs/todo.md`:
+Both claims are proven: the first milestone is reached. Next steps are
+in `docs/todo.md`:
+- next, usability and speed: `rsimp` replacing `simp`, faster checks
+  (trusted kernel extensions where they pay off), less bookkeeping in
+  proofs;
 - a witness that some run reaches `main`;
-- shared libraries and the dynamic linker;
-- usability of the proof language.
+- then the long-term directions, each designed first: shared libraries
+  and the dynamic linker, optimized code, multi-threading.
 
 ## License
 

@@ -3,193 +3,247 @@
 The current plans, in order. When an item is done it is deleted here and
 summarized in docs/done.md.
 
-## 1. Next: a reached main
+The first milestone is reached: both claims are proven (`musl_malloc`,
+`musl_program`), the program's with termination. Next comes the
+usability debt that the milestone left (§1). The long-term directions
+(§3) come after it, each designed in a principled way before it is
+built.
 
-Both claims are proven (`musl_malloc`, `musl_program`), the program's
-with termination (every run ends). The malloc claim's `Init` is about
-the runs that reach `main`, vacuous if none did: a witness that some
-exec state reaches main is a separate statement, not yet made.
+## 1. Next: usability and speed
 
-## 2. Shared libraries (planned)
+The aim: proofs that are short to write, read as ideas rather than
+bookkeeping, and check fast, cold as well as cached. Every change is
+timed (the uncached check is about 25 minutes and 2.5 GB now).
 
-The standard setup: the program dynamically linked, musl's libc.so (also
-its dynamic linker, /lib/ld-musl-x86_64.so.1) loaded at a random base.
-- The exec model (spec/linux/exec.sl, static non-PIE only now):
-  PT_INTERP -- the interpreter from the file system mapped at a random
-  base, auxv's AT_BASE / AT_PHDR / AT_ENTRY for it; a PIE program at a
-  random base.
-- The library's claim about libc.so alone: malloc and free correct
-  wherever it is loaded -- C1 proofs relative to the load base (code at
-  base + offset, RIP-relative data; `implements2_at` / `loaded` take a
-  base already, the engine and the generated steps do not).
-- Startup is the dynamic linker (ldso/dlstart.c, dynlink.c):
-  self-relocation, the program's and libc's relocations (GOT entries for
-  malloc and free), TLS, then the program's `_start`; calls through the
-  PLT.
-- The program's claim then for a program and the library file: proven
-  from the library's claim and the program's own proofs.
+### 1.1 `rsimp` as the default, `simp` retired
 
-## 3. The engine, when a function needs it
+`simp` is still called about 20,000 times in the proofs, `rsimp` about
+730 times. `simp`'s search makes check times unpredictable and a proof's
+step hard to read.
+- Find what the `simp` calls do, by kind: plain rewriting, unfolding a
+  definition, deciding a literal, executing a program path. Give each
+  kind a determined replacement: `rsimp`, `defs` / `unfold`, evaluation,
+  `step`.
+- The machine's semantics (proofs/linux_sys.core) by `rsimp` instead of
+  hand lemmas. A dispatch's live case is `rsimp(h, tag)` already. A
+  statement's known outcome through the elaborator's sequencing forms
+  (the outcomes' parts and their kinds' disequalities registered,
+  core/records.core) should be too. Then the hand lemmas `lx.top_*`,
+  `lx.blk_*`, `lx.ib_*`, `lx.istep_*`, `lx.tlp_*` and `lx.lp_brk` go.
+- eff.rs' last `simp`: a stack call's argument count (`seq_len(list) =
+  n`, `tr.eff_call1_s`), by the list lemmas or `rsimp` through the proof
+  API.
+- Record updates in another order (`fn_update` with distinct keys): simp
+  does not normalize them; `mp.clear_perm` swaps four times by hand.
+- Then the files with the most calls (translate.core, alloc_meta.core,
+  alloc_group.core, translate_store_loop.core, malloc.core: 450 to 900
+  each), and `simp` removed from the proof language.
 
-- Frames with a frame pointer (`push rbp; mov rbp, rsp`, rbp-based
-  slots): C1 knows rsp-based frames only (musl's -fomit-frame-pointer);
-  the test program is compiled so too (scripts/build-musl.sh).
-- Narrow return values (a char returned in al, the rest of eax any):
-  C1 wants the register to hold the value's width; the test's helper
-  returns an int.
+### 1.2 Speed
 
-- The entry variants entry_np, entry0p generic like tr.entry_n,
-  tr.entry0 (optional).
-- Stack objects read before their first store (none at -O0 yet); the
-  single object's older path (alloc_at, tr.astore_r: get_random_secret)
-  and the several objects' one unified (optional).
-- CFG -> loops: nested loops, a head reached at two structured loops, an
-  exit of two loops, a callee refined inside a walk with loops of its own.
-- The string instructions in general (layers/musl_asm.sl): `rep movs` /
-  `rep stos` of any element size (`x86i.rep_movsq`, `x86i.rep_stosq` are
-  for 8: their iterations and facts with the size a parameter); an
-  overlapping forward copy (s < d < s + n: each element read after
-  writes reached it -- memmove's) its exact bytes, not undefined: the
-  pointwise invariant of `x86.moved` with the source as it is then.
-- Flags kept across instructions (tr.ptf / tr.lvf,
-  proofs/translate_memset.core): `_f` forms exist for the rules memset
-  needs (mov r64, r64; the indexed 64-bit store; the spec's plain
-  reductions); others as a function needs them.
-- The x86 instruction lemmas each unfold the instruction's semantics by
-  simp for their own addressing form (proofs/x86_insn.core, ~30 s
-  uncached; `lock_or32_b` 5.5 s, `cas32_b` 3.6 s, the [rsp + d]
-  read-modify-writes ~1.5 s each): one lemma per instruction shape with
-  the effective address a parameter, each form by its address equation
-  (as tr.rsp_bd_ea), if cold checks need to be faster.
-
-## 4. The CFG path's remaining engineering
-
-- The structured form generated and checked in one run (`slc gimple`
-  running the refinement); a callee's refinement a theorem of its own, not
-  walked again in each caller.
-- User proofs on a CFG (an invariant per label) for functions with no
-  structured view.
-- The loops' label claims (`lab_all`) split over every label: each label's
-  claim the whole premise instantiated there, ~1.5 s per label in
-  alloc_group's 56 though only the heads' and exits' are not vacuous. Split
-  on the heads (and exits) alone, the rest vacuous at once.
-- Variables and terms owned by what uses them: a variable reference
-  counted (its name and arity freed with its last term, identity by
-  pointer, not a table index), terms hash-consed (equal terms one node,
-  equality a pointer compare, a weak table freeing them). Now a proof's
-  variables are dropped only at its end (`Env::begin_locals` ..
-  `end_locals`), each proof's still held until then, and equal terms built
-  apart are separate nodes.
+- Measure first: per-file and per-proof times of an uncached check, so
+  that the slowest steps are known rather than guessed.
+- Trusted kernel extensions where a derived procedure is slow. Each one
+  documents how it reduces to the kernel's rules, as the existing ones in
+  `slc/kernel/src/ext/` do, and its pinned symbols. Candidates, from the
+  times known now:
+  - the x86 instruction lemmas (proofs/x86_insn.core, about 30 s
+    uncached: `lock_or32_b` 5.5 s, `cas32_b` 3.6 s, the [rsp + d]
+    read-modify-writes about 1.5 s each). Each unfolds the instruction's
+    semantics by `simp` for its own addressing form. Instead: one lemma
+    per instruction shape with the effective address a parameter, each
+    form by its address equation (as `tr.rsp_bd_ea`);
+  - the step theorems (about 70 ms each, 1069 encodings: about 80 s of
+    the `steps` line's 90 s, after each change of the binary): the
+    decoder's `members` and the `exec_insn` unfolding, per encoding;
+  - the loops' label claims (`lab_all`): each label's claim is the whole
+    premise instantiated there, about 1.5 s per label in alloc_group's
+    56, though only the heads' and exits' are not vacuous. Split on the
+    heads (and exits) alone, so that the rest are vacuous at once.
+- Terms and variables in memory: variables reference counted (a name and
+  arity freed with its last term, identity by pointer, not a table
+  index), terms hash-consed (equal terms one node, equality a pointer
+  compare, a weak table freeing them). Now a proof's variables are
+  dropped only at its end (`Env::begin_locals` .. `end_locals`), and
+  equal terms built apart are separate nodes.
 - The elaborated layers (gimple.core, generated definitions) kept in
   memory, elaborated in the checker from the .sl files, as the `steps`
   and `text` lines make their facts. The readable GIMPLE (cfg*.sl) stays
   text: it is what a person reads.
-- The step theorems take ~70 ms each (1069 encodings, ~80 s of the
-  `steps` line's 90 s; only after the binary changes): the decoder's
-  `members` and the `exec_insn` unfolding, per encoding.
-
-## 5. The invariant and the laws
-
-- The C world owning only its statics, heap and stack objects.
+- The structured form generated and checked in one run (`slc gimple`
+  running the refinement); a callee's refinement a theorem of its own,
+  not walked again in each caller.
 - `slc heapcheck` on larger heaps: each byte's view membership (`held`)
   searches every group's slots (`in_reserved`), so a check grows with
-  groups x bytes (~2 min at 60 groups; the ignored tests take 3.5 min).
-  An interval form of the footprint per check would make it linear.
+  groups × bytes (about 2 min at 60 groups; the ignored tests take
+  3.5 min). An interval form of the footprint per check would make it
+  linear.
 
+### 1.3 The proof language
 
-## 6. Usability
+- `arith`:
+  - `x in bits(n)` for n above 100 is not arithmetic (bits(128):
+    narrowed by hand, `mp.hdr_new`);
+  - `ord_lt(0, n)` needs `n in omega` given;
+  - no `-1` literal (`int_neg(1)`);
+  - an inline `arith` inside `taut` needs its goal written out;
+  - `x in omega` is taken only as its own fact, not as a conjunct of one
+    (`x0 in omega && x1 in omega` destructured first).
+- `step`:
+  - outcome construction by witness matching. Each exit's outcome is
+    built by `disj` / `ex_intro` now, and the three-case joins (`ht2`,
+    `tm` in alloc_meta) are split by hand;
+  - its names: the continuation first, then the call's facts. A wrong
+    guess shows up only as "names not used" or an odd destructuring
+    error. The message could print which name got what.
+- `defs(..)` unfolds the goal only; a fact needs `expand` first (ctx_free
+  in `mp.co_unt`): `defs` could unfold the facts it is given too.
+- `ex_intro({..})` inside `taut(..)` is misparsed as a binder (hit again
+  in `mp.ta_q` and `gc.regs_one`: the inner witness needs its own
+  `have`).
+- `search`: by patterns and by the goal; not yet by a premise's shape
+  (what a fact in hand can be fed to), nor ranked by how much of the
+  pattern a fact's statement is.
+- alloc_meta's remaining plumbing (am_run, about 1120 lines): the
+  context's usable words derived per memory stretch (`mp.ctx_usable` per
+  offset, `mp.usable_pg` across a page change). A closure deriving
+  usability from the invariant (`mp.ctx_usable_w`, tried at every usable
+  premise, its variables bound from the `using` facts) made the run
+  several times slower: not that way. Instead, a fact the run states once
+  per memory, instantiated by `step`.
 
-- `rsimp` for the machine's semantics (proofs/linux_sys.core) instead of
-  hand lemmas: a dispatch's live case is `rsimp(h, tag)` already; a
-  statement's known outcome through the elaborator's sequencing forms
-  (the outcomes' parts and their kinds' disequalities registered,
-  core/records.core) should be too -- the hand lemmas `lx.top_*`,
-  `lx.blk_*`, `lx.ib_*`, `lx.istep_*`, `lx.tlp_*`, `lx.lp_brk` then go.
-  The rest of the proofs' `simp` that only rewrites: `rsimp` (simp kept
-  for executing program paths). eff.rs' last simp: a stack call's
-  argument count (`seq_len(list) = n`, `tr.eff_call1_s`) -- the list
-  lemmas or rsimp through the proof API.
+### 1.4 Bookkeeping the tool should do
 
 - `divergence()` takes a contract's body only of the `ct.dv_*` shapes (a
-  step, a return after a choice or two); brk's and munmap's (branches,
-  havocs) by hand (`mp.sy1_divw`, `mp.sy2_divw`, `mp.mun_divw`: never
-  diverging with the requirement met -- a memory for the havoc there is;
-  `contract` takes a `THM_divw` proven before it, only for a spec without
-  parameters). A body's divergence by its structure (per statement), a
-  havoc's choice by a given existence fact, would cover such specs.
-- A leaf translation unit's C1 has no `.linked` (`contract` derives
-  `THM_linked` from it): munmap's, unlock's linked forms by hand
-  (`mp.mun_linked`, `mp.mun_calls_linked`), each callee's C1, typing, io
-  and refinement listed.
-- alloc_meta's remaining plumbing (am_run ~1120 lines): the context's
-  usable words derived per memory stretch (`mp.ctx_usable` per offset,
-  `mp.usable_pg` across a page change); the two three-case joins (`ht2`,
-  `tm`) still split by hand; each exit's outcome built by `disj` /
-  `ex_intro`. A closure deriving usability from the invariant
-  (`mp.ctx_usable_w`, tried at every usable premise, its variables bound
-  from the `using` facts) made the run several times slower: not that
-  way -- a fact the run states once per memory, instantiated by step.
-
-- `contract`: a callee never reached (the locks' `__lock`, `a_fetch_add`,
-  `__wake`) linked as a_crash's spec by hand (`mp.rdl_linked` ..): C1's
-  `.linked` covers only callees with a C1 of their own.
+  step, a return after a choice or two). brk's and munmap's (branches,
+  havocs) are by hand (`mp.sy1_divw`, `mp.sy2_divw`, `mp.mun_divw`: never
+  diverging with the requirement met, since there is a memory for the
+  havoc). `contract` takes a `THM_divw` proven before it, only for a spec
+  without parameters. A body's divergence by its structure (per
+  statement), a havoc's choice by a given existence fact, would cover
+  such specs.
+- `.linked` facts:
+  - a leaf translation unit's C1 has no `.linked` (`contract` derives
+    `THM_linked` from it): munmap's and unlock's linked forms are by hand
+    (`mp.mun_linked`, `mp.mun_calls_linked`), each callee's C1, typing,
+    io and refinement listed;
+  - a callee never reached (the locks' `__lock`, `a_fetch_add`,
+    `__wake`) is linked as a_crash's spec by hand (`mp.rdl_linked` ..):
+    C1's `.linked` covers only callees with a C1 of their own.
 - `contract` for the rest: get_random_secret and memcpy (their `_fun`
-  forms by hand, no procedure-level `refines` theorem); a procedure-level
-  refinement's ghost bookkeeping (`mp.ag`'s ~70 lines: the precondition's
-  clauses read from the union, the ghost part's update) and `THM_q` (a
-  `step` over the run lemma) by the procedure too; linking a function
-  whose C1 has no `.linked` (alloc_meta over dequeue_head:
-  `mp.am_over_leaves` by hand).
+  forms by hand, no procedure-level `refines` theorem); a
+  procedure-level refinement's ghost bookkeeping (`mp.ag`'s about 70
+  lines: the precondition's clauses read from the union, the ghost
+  part's update) and `THM_q` (a `step` over the run lemma) by the
+  procedure too; linking a function whose C1 has no `.linked`
+  (alloc_meta over dequeue_head: `mp.am_over_leaves` by hand).
+- User proofs on a CFG (an invariant per label) for functions with no
+  structured view.
+
+### 1.5 Cleanups
+
 - The bitfield store `ms.stbfw_det` (fun/alloc_group.core) belongs with
   ops.core's store lemmas.
 - The trivial facts that a callee refines itself (`agself`, `dbself` in
-  `mp.ta_run`, `amself`, `taself`) are no longer needed (`gc.calls_self`):
-  to be removed.
-- `ex_intro({..})` inside `taut(..)` misparsed as a binder (hit again in
-  `mp.ta_q` and `gc.regs_one`: the inner witness needs its own `have`);
-  the list lemmas of proofs/translate_call.core (`tr.seq_one_type`,
+  `mp.ta_run`, `amself`, `taself`) are no longer needed
+  (`gc.calls_self`): to be removed.
+- The list lemmas of proofs/translate_call.core (`tr.seq_one_type`,
   `tr.concat_list`) to core/list.core.
-- `step`'s names: the continuation first, then the call's facts; a
-  wrong guess shows up only as "names not used" or an odd destructuring
-  error. The message could print which name got what.
-- `defs(..)` unfolds the goal only; a fact needs `expand` first (ctx_free
-  in `mp.co_unt`): `defs` could unfold the facts it is given too.
-- `arith`: `x in bits(n)` for n above 100 is not arithmetic (bits(128):
-  narrowed by hand, `mp.hdr_new`); `ord_lt(0, n)` needs `n in omega` given;
-  no `-1` literal (`int_neg(1)`); an inline arith inside `taut` needs its
-  goal written out.
-- Record updates in another order (`fn_update` with distinct keys): simp
-  does not normalize them; `mp.clear_perm` swaps four times by hand.
 - A call's registers read back: the inversion lemmas `gc.regs1` ..
   `gc.regs_32_64` per list of widths remain (the existence side is
   general now); `gc.reg_at` reads one register of any list.
-- The rules' standard form: the statics' names, `and r8, 2^k - 1`, `[p + 0]`
-  as equations of N (docs/overview.md).
-- `arith` takes `x in omega` only as its own fact, not as a conjunct of
-  one (`x0 in omega && x1 in omega` destructured first).
+- The rules' standard form: the statics' names, `and r8, 2^k - 1` and
+  `[p + 0]` as equations of N (docs/overview.md).
 - The invariant's constant tables (the class table, a_ctz_32's) are
   stated, framed and read each by its own copy of the same lemmas
   (`mp.mf_classes` / `mp.mf_debruijn`, `mp.lf_*`, `mp.*_table`): one
   predicate for a read-only table, framed once, would serve both.
 - Lemmas stated twice: `ms.imul_4` / `_16` and the generated contexts'
-  effect lemmas (`dqtc.eff_meta_next` .. repeated in each `..tc` of `slc
-  steps`): one shared set.
-- `search`: by patterns and by the goal; not yet by a premise's shape
-  (what a fact in hand can be fed to), nor ranked by how much of the
-  pattern a fact's statement is.
+  effect lemmas (`dqtc.eff_meta_next` .. repeated in each `..tc` of
+  `slc steps`): one shared set.
+- The entry variants entry_np and entry0p made generic like `tr.entry_n`
+  and `tr.entry0` (optional).
+- Stack objects: the single object's older path (`alloc_at`,
+  `tr.astore_r`: get_random_secret) and the several objects' unified
+  (optional).
 
-## Later
+## 2. Open from the milestone: a reached main
 
-- Multi-threading; traces of infinite runs (I/O specs that run forever).
-- Optimized code: the cut-point theorem between two CFGs, an optimization
-  layer, DWARF location maps; other compilers (LLVM IR).
+The malloc claim's `Init` is about the runs that reach `main`, and it
+would hold vacuously if none did. A witness that some exec state reaches
+`main` is a separate statement, not made yet. The program claim says
+that every run exits with 0 or 1 or overflows the stack, but it does not
+state that an exec state exists either.
+
+## 3. Long-term directions
+
+Each is designed in a principled way before it is built: which level it
+belongs to, what it adds to the layers, and how the existing claims
+compose with it (docs/overview.md's levels).
+
+### 3.1 Shared libraries
+
+The standard setup: the program dynamically linked, musl's libc.so (also
+its dynamic linker, /lib/ld-musl-x86_64.so.1) loaded at a random base.
+- The exec model (spec/linux/exec.sl, static non-PIE only now):
+  PT_INTERP, the interpreter from the file system mapped at a random
+  base, auxv's AT_BASE / AT_PHDR / AT_ENTRY for it; a PIE program at a
+  random base.
+- The library's claim about libc.so alone: malloc and free correct
+  wherever it is loaded. C1 proofs relative to the load base (code at
+  base + offset, RIP-relative data); `implements2_at` and `loaded` take a
+  base already, the engine and the generated steps do not.
+- Startup is the dynamic linker (ldso/dlstart.c, dynlink.c):
+  self-relocation, the program's and libc's relocations (GOT entries for
+  malloc and free), TLS, then the program's `_start`; calls through the
+  PLT.
+- The program's claim then for a program and the library file, proven
+  from the library's claim and the program's own proofs.
+
+### 3.2 Optimized code
+
+- The cut-point theorem between two CFGs as an optimization layer:
+  GIMPLE ⊑ GIMPLE, from the -O2 GIMPLE to the -O0 one's structure.
+- DWARF location maps for optimized frames; other compilers (LLVM IR).
+- Engine features optimized code needs:
+  - frames with a frame pointer (`push rbp; mov rbp, rsp`, rbp-based
+    slots): C1 knows rsp-based frames only (musl's
+    -fomit-frame-pointer; the test program is compiled so too,
+    scripts/build-musl.sh);
+  - narrow return values (a char returned in al, the rest of eax any):
+    C1 wants the register to hold the value's width;
+  - CFG -> loops: nested loops, a head reached at two structured loops,
+    an exit of two loops, a callee refined inside a walk with loops of
+    its own;
+  - flags kept across instructions (`tr.ptf` / `tr.lvf`,
+    proofs/translate_memset.core): `_f` forms exist for the rules memset
+    needs; others as a function needs them;
+  - stack objects read before their first store (none at -O0 yet).
+
+### 3.3 Multi-threading
+
+The per-thread simulation meeting a memory model at the primitives
+(`cas32` and the other atomic steps of layers/gimple.sl); musl's locks
+then taken for real. Traces of infinite runs (I/O specs that run
+forever).
+
+### 3.4 More of the library and the model
+
 - calloc (its spec in layers/malloc.sl, not claimed): calloc.c's C1
   (`calloc`, `mal0_clear`'s page loop) and memset (`rep stos`). musl
-  returns a block unclear when `__malloc_allzerop` says its group has its
-  own mapping: malloc's spec must then promise such a block's bytes zero
-  (fresh anonymous pages zero in the model; the group's slot not reused
-  after a client wrote it -- to check against free's `MADV_FREE`).
+  returns a block uncleared when `__malloc_allzerop` says its group has
+  its own mapping: malloc's spec must then promise such a block's bytes
+  zero (fresh anonymous pages are zero in the model; the group's slot is
+  not reused after a client wrote it -- to check against free's
+  `MADV_FREE`).
 - realloc (no spec yet).
-- Beyond malloc: signals, varargs, filesystem, networking, C types above
-  raw memory, whole executables (busybox).
-- Model: file mappings, recursion, fault ordering across two pages.
+- The string instructions in general (layers/musl_asm.sl): `rep movs` /
+  `rep stos` of any element size (`x86i.rep_movsq`, `x86i.rep_stosq` are
+  for 8: their iterations and facts with the size a parameter); an
+  overlapping forward copy (s < d < s + n: each element read after
+  writes reached it, as in memmove) by its exact bytes, not undefined:
+  the pointwise invariant of `x86.moved` with the source as it is then.
+- The C world owning only its statics, heap and stack objects.
+- Beyond malloc: signals, varargs, the file system, networking, C types
+  above raw memory, whole executables (busybox).
+- The model: file mappings, recursion, fault ordering across two pages.
