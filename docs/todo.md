@@ -54,9 +54,17 @@ proofs/mallocng/code/lists.core):
   `Env::ext_cache`; mallocng/init.core 65 s -> 52 s).
 
 The typing procedure (`types`, slc/proof/src/types.rs; rsimp's premises
-and closing use it, and distinct literals by their bytes or numerals) now
+and closing use it, and distinct literals by their bytes or numerals)
 proves 7,055 of the 8,047 membership goals simp proves in the chain
-(`SLC_SHADOW=types`), at about 0.1 ms each. The plan, in order:
+(`SLC_SHADOW=types`), at about 0.1 ms each. `rsimp` as a goal rule is now
+a fixed sequence (typing for a membership, rewriting, then taut / arith
+with the facts about the normal form's terms). By the shadow
+(`SLC_SHADOW=rsimp`, scripts/shadow-report.py) scripts/migrate-simp.py
+moved 9,030 steps from simp to rsimp: simp calls 20,052 -> 9,653. The
+shadow covered the first 138 files (the rest: its own memory, rerun from
+there). The plan, in order:
+- The shadow and the migration over the remaining files (a recheck from
+  a file on), then the calls it does not prove: by kind, as before.
 - The typing procedure's gaps (the shadow's failures): `rec_and` states
   (`m in rec_and(Machine, ..)`), program sets (`pair(s, o) in
   set_select(univ(1), ..)`), terms bounded by a definition's arithmetic
@@ -107,7 +115,7 @@ proves 7,055 of the 8,047 membership goals simp proves in the chain
 - Variables reference counted (a name and arity freed with its last
   term, identity by pointer, not a table index). Now a proof's variables
   are dropped only at its end (`Env::begin_locals` .. `end_locals`).
-- An uncached check is 786 s, at most 0.9 GB (was 1407 s, 2.3 GB, before
+- An uncached check is 576 s, at most 0.9 GB (was 1407 s, 2.3 GB, before
   hash-consing and the DAG-aware walks). The refinements
   (proofs/mallocng/machine/cfg.core, 160 s) are still the largest part:
   alloc_group's alone 110 s, then

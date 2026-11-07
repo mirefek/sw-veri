@@ -325,7 +325,8 @@ impl<'a> Typer<'a> {
         // (t defined by a known equation `t = e`: e's)
         if let Some((e, eq)) = self.equation(env, t) {
             if let Some(p) = self.check(env, &e, set) {
-                return Seq::rewrite(env, &Seq::sym(env, &eq).ok()?, &p).ok();
+                // (e back to t where the goal has t only -- not in the set)
+                return Seq::rewrite_to(env, &Seq::sym(env, &eq).ok()?, &p, goal).ok();
             }
         }
         if let Some(u) = self.is(set, self.s.univ) {
@@ -750,7 +751,8 @@ impl<'a> Typer<'a> {
         // (t defined by a known equation `t = e`: e's set)
         if let Some((e, eq)) = self.equation(env, t) {
             if let Some((ty, p)) = self.infer(env, &e) {
-                return Some((ty, Seq::rewrite(env, &Seq::sym(env, &eq).ok()?, &p).ok()?));
+                let target = self.mk(self.s.in_, vec![t.clone(), ty.clone()]);
+                return Some((ty, Seq::rewrite_to(env, &Seq::sym(env, &eq).ok()?, &p, &target).ok()?));
             }
         }
         let a = self.is(t, self.s.app);

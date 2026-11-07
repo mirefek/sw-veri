@@ -24,6 +24,24 @@ use sl_kernel::Nat;
 
 /// rewrites before giving up (a rule set that loops)
 const LIMIT: usize = 2000;
+
+thread_local! {
+    /// (a diagnostic's time limit for an attempt: the shadow's -- never set
+    /// while checking a proof as written)
+    static DEADLINE: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) };
+}
+
+/// f with a time limit: rsimp gives up past it
+pub(crate) fn with_deadline<T>(secs: f64, f: impl FnOnce() -> T) -> T {
+    let old = DEADLINE.with(|d| d.replace(Some(std::time::Instant::now() + std::time::Duration::from_secs_f64(secs))));
+    let r = f();
+    DEADLINE.with(|d| d.set(old));
+    r
+}
+
+fn past_deadline() -> bool {
+    DEADLINE.with(|d| d.get()).is_some_and(|t| std::time::Instant::now() > t)
+}
 /// nesting of simp proving a rule's premise
 const DEPTH: usize = 2;
 
@@ -118,6 +136,15 @@ fn ground_cmp(env: &Env, t: &Term) -> Option<bool> {
         "int_lt" => y.sub(&x).is_some_and(|d| !d.is_zero()),
         _ => y.sub(&x).is_some(),
     })
+}
+
+/// the facts that can bear on `n` for taut / arith: small, and about one
+/// of n's leaves (`arith_leaves`) -- not every fact of the block, which
+/// makes a failing arith slow
+pub(crate) fn relevant_facts<'a>(env: &Env, n: &Term, facts: &'a [Seq]) -> Vec<&'a Seq> {
+    let mut leaves = Vec::new();
+    arith_leaves(env, n, &mut leaves);
+    facts.iter().filter(|s| small_term(s.concl(), 400) && leaves.iter().any(|l| occurs(l, s.concl()))).collect()
 }
 
 /// a comparison or a membership in `omega` / `bits(n)` / `int` (closed)
@@ -399,6 +426,9 @@ impl State {
         if let Some(s) = self.premise_known(env, lg, h, rs) {
             return Ok(Some(s));
         }
+        if past_deadline() {
+            return Ok(None);
+        }
         // (distinct literals: by their bytes or numerals -- a field read
         // through an update at another key)
         if let Node::App(n, a) = h.node() {
@@ -602,6 +632,9 @@ impl State {
                         sr = Seq::gen(env, lg, &sr, *v)?;
                     }
                 }
+                if Seq::instance_count(env, lg, &sr, s.concl(), true) == 0 {
+                    continue;
+                }
                 if let Ok(s2) = Seq::rewrite_under(env, lg, &sr, s, &[]) {
                     if s2.concl() != s.concl() {
                         return Ok(Some(s2));
@@ -615,6 +648,9 @@ impl State {
     /// `s` with the part `focus` picks of its conclusion simplified
     fn normalize(&self, env: &mut Env, lg: &Logic, mut s: Seq, focus: &dyn Fn(&Term) -> Term, rs: &Rules, depth: usize) -> KResult<Seq> {
         for _ in 0..LIMIT {
+            if past_deadline() {
+                return err("rsimp: out of time (a diagnostic's limit)");
+            }
             if !rs.defs.is_empty() {
                 let u = unfold_all(env, s.concl(), &rs.defs);
                 if &u != s.concl() {
@@ -629,6 +665,11 @@ impl State {
             // (under binders: the unconditional equations)
             let mut moved = false;
             for r in rs.rules.iter().filter_map(|r| r.general.as_ref()) {
+                // (no instance: not tried -- a failed rewrite's message
+                // prints the rule, folding the proof's lets: slow)
+                if Seq::instance_count(env, lg, r, s.concl(), true) == 0 {
+                    continue;
+                }
                 if let Ok(s2) = Seq::rewrite_under(env, lg, r, &s, &[]) {
                     if s2.concl() != s.concl() {
                         s = s2;
@@ -684,6 +725,39 @@ impl State {
             }
         };
         Seq::rewrite(env, &Seq::sym(env, &e)?, &pn)
+    }
+
+    /// `rsimp(..)` as a goal rule: a fixed sequence of determined
+    /// procedures, the first that proves the goal -- rewriting to `true`
+    /// (rsimp_close, a membership left by typing); a membership by the
+    /// typing procedure; the normal form by taut or arith with the facts
+    /// about its terms, simplified alike. The way it went, for the shadow.
+    pub(crate) fn rsimp_goal(&self, env: &mut Env, lg: &Logic, goal: &Term, rs: &Rules) -> KResult<(Seq, &'static str)> {
+        // (a membership: the typing procedure first -- by its forms, at
+        // once, where rewriting a word operation's value is slow)
+        if matches!(goal.node(), Node::App(i, _) if *i == lg.in_) {
+            let mut ty = super::types::Typer::new(env, self, lg, &rs.given)?;
+            if let Ok(s) = ty.prove(env, goal) {
+                return Ok((s, "types"));
+            }
+        }
+        let first = match self.rsimp_close(env, lg, goal, rs, 0) {
+            Ok(s) => return Ok((s, "rsimp")),
+            Err(e) => e,
+        };
+        rs.reset();
+        let e = self.rsimp_eq(env, lg, goal, rs, 0)?;
+        let n = eq_parts(env, e.concl()).ok_or_else(|| KernelError("rsimp: not an equation".into()))?.1;
+        let rel: Vec<Seq> = relevant_facts(env, &n, &rs.given).into_iter().cloned().collect();
+        let mut more: Vec<Seq> = Vec::new();
+        for f in rel {
+            more.push(self.rsimp_fact(env, lg, f.clone(), rs).unwrap_or(f));
+        }
+        let mr: Vec<&Seq> = more.iter().collect();
+        match Seq::taut(env, lg, &mr, &n).or_else(|_| Seq::arith(env, lg, &mr, &n)) {
+            Ok(pn) => Ok((Seq::rewrite(env, &Seq::sym(env, &e)?, &pn)?, "rsimp+arith")),
+            Err(_) => Err(first),
+        }
     }
 
     /// a proof of the simplified goal n, if it is trivial

@@ -3,9 +3,18 @@
 # of each sample (where the time is spent) and the functions on the
 # stacks (inclusive: what the time is spent under).
 #
-#   scripts/sample-report.py FILE [N]
+#   scripts/sample-report.py FILE [N] [--within NAME]
+#
+# --within NAME: only the samples with a frame whose function's name
+# contains NAME (e.g. untrusted_simp)
 import collections
 import sys
+
+within = None
+if "--within" in sys.argv:
+    i = sys.argv.index("--within")
+    within = sys.argv[i + 1]
+    del sys.argv[i : i + 2]
 
 samples, cur = [], []
 for line in open(sys.argv[1]):
@@ -20,6 +29,8 @@ if cur:
     samples.append(cur)
 # (a thread waiting to join another: not working)
 samples = [s for s in samples if not any("Thread>::join" in f for f in s[:6])]
+if within:
+    samples = [s for s in samples if any(within in f.partition(" ")[0] for f in s)]
 n = int(sys.argv[2]) if len(sys.argv) > 2 else 30
 print("samples", len(samples))
 

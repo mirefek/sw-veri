@@ -1542,7 +1542,7 @@ impl State {
             // rules to `true` (or a known fact)
             "rsimp" => {
                 let rs = self.rsimp_rules(env, lg, args)?;
-                self.rsimp_close(env, lg, goal, &rs, 0)
+                self.rsimp_goal(env, lg, goal, &rs).map(|(s, _)| s)
             }
             // taut(p1, ..): the goal by propositional logic, an equation the
             // same as its flip (`eq_sym` instances added for the equations

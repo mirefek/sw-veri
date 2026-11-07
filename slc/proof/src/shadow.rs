@@ -16,6 +16,8 @@ use std::sync::OnceLock;
 
 thread_local! {
     static LINE: Cell<usize> = const { Cell::new(0) };
+    /// the simp call's number within its step (from 0, in evaluation order)
+    static CALL: Cell<usize> = const { Cell::new(0) };
 }
 
 pub(crate) fn on() -> bool {
@@ -27,6 +29,15 @@ pub(crate) fn on() -> bool {
 pub(crate) fn set_line(l: usize) {
     if on() {
         LINE.with(|c| c.set(l));
+        CALL.with(|c| c.set(0));
+    }
+}
+
+impl State {
+    /// A simp goal as `rsimp` proves it (`rsimp_goal`), and how
+    pub(crate) fn untrusted_simp(&self, env: &mut Env, lg: &Logic, goal: &Term, args: &[Arg], _facts: &[Seq]) -> KResult<(Seq, &'static str)> {
+        let rs = self.rsimp_rules(env, lg, args)?;
+        self.rsimp_goal(env, lg, goal, &rs)
     }
 }
 
@@ -41,6 +52,21 @@ impl State {
     pub(crate) fn shadow_simp(&self, env: &mut Env, lg: &Logic, goal: &Term, args: &[Arg], facts: &[Seq], plain: bool, simp_ok: bool, simp_t: f64) {
         let refs: Vec<&Seq> = facts.iter().collect();
         let (mut a, mut b, mut c) = (("-", 0.0), ("-", 0.0), ("-", 0.0));
+        let call = CALL.with(|c| {
+            let v = c.get();
+            c.set(v + 1);
+            v
+        });
+        // (SLC_SHADOW=rsimp: the replacement's attempt, within 0.1 s:
+        // `shadow-r <TAB> line <TAB> call <TAB> simp secs <TAB> by <TAB> secs
+        // <TAB> goal`, by `-` for a program path's simp, `failed` if none)
+        if std::env::var("SLC_SHADOW").is_ok_and(|v| v == "rsimp") {
+            let t0 = std::time::Instant::now();
+            let by = if plain { super::rsimp::with_deadline(0.1, || self.untrusted_simp(env, lg, goal, args, facts)).map(|(_, b)| b).unwrap_or("failed") } else { "-" };
+            let g: String = Printer::new(env).term(goal).chars().take(160).collect();
+            eprintln!("shadow-r\t{}\t{}\t{:.4}\t{}\t{:.4}\t{}", LINE.with(|l| l.get()), call, simp_t, by, t0.elapsed().as_secs_f64(), g.replace(['\t', '\n'], " "));
+            return;
+        }
         // (SLC_SHADOW=types: the typing procedure alone, on membership goals)
         if std::env::var("SLC_SHADOW").is_ok_and(|v| v == "types") {
             if !matches!(goal.node(), Node::App(i, _) if *i == lg.in_) && !matches!(goal.node(), Node::App(f, _) if env.syms[*f as usize].name == "is_fun") {
