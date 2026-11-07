@@ -332,6 +332,21 @@ impl<'a> Typer<'a> {
         if let Some(u) = self.is(set, self.s.univ) {
             return self.univ(env, t, &u[0]);
         }
+        // (a union: a member of either side, union2_iff)
+        if let Some(name) = self.head_name(env, set) {
+            if name == "union2" {
+                let ab = match set.node() {
+                    Node::App(_, x) => x.to_vec(),
+                    _ => return None,
+                };
+                for side in &ab {
+                    if let Some(p) = self.check(env, t, side) {
+                        let iff = thm(env, "union2_iff", &[("a", &ab[0]), ("b", &ab[1]), ("z", t)]).ok()?;
+                        return Seq::taut(env, self.lg, &[&iff, &p], goal).ok();
+                    }
+                }
+            }
+        }
         // (an insert chain with t one of its elements: an enum's value)
         if self.is(set, self.s.insert).is_some() {
             if let Some(p) = self.in_set(env, t, set) {
@@ -465,6 +480,17 @@ impl<'a> Typer<'a> {
             }
             Some("cart") => return by_args(self, env, "cart_univ", &["a", "b"]),
             Some("bits") if un(u) == Some(1) => return thm(env, "bits_univ", &[("n", &args[0])]).ok(),
+            // (a universe in the next: univ_chain, raised further)
+            Some("univ") => {
+                let k = un(&args[0])?;
+                if k >= un(u)? {
+                    return None;
+                }
+                let s = use_thm(env, "univ_chain", &[("u", &args[0])], &[&Seq::kernel(env.lit_is_nat(&args[0])).ok()?]).ok()?;
+                let e = Seq::kernel(env.lit_compute(env.builtins.lit_add, &args[0], &Term::nat(sl_kernel::Nat::from_u64(1)))).ok()?;
+                let s = Seq::rewrite(env, &e, &s).ok()?;
+                return self.raise(env, s, k + 1, un(u)?);
+            }
             Some("omega") if un(u) == Some(1) => return thm(env, "omega_univ", &[]).ok(),
             Some("app") => {
                 // (a record's field or a function's value: of its set, if

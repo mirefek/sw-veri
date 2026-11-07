@@ -791,6 +791,29 @@ enum Arg {
     Term(String),
 }
 
+/// A proof expression printed back as written (up to whitespace): for
+/// locating a rule's call in its step's text (the simp shadow).
+fn pe_text(p: &PE) -> String {
+    match p {
+        PE::Ref(n) => n.clone(),
+        PE::Rule(n, a) => format!("{}({})", n, args_text(a)),
+        PE::Inst(p, bs) => format!("{}[{}]", pe_text(p), bs.iter().map(|(v, t)| format!("{} := {}", v, t)).collect::<Vec<_>>().join(", ")),
+        PE::Conj(p, Ok(k)) => format!("{}.{}", pe_text(p), k),
+        PE::Conj(p, Err(l)) => format!("{}.{}", pe_text(p), l),
+        PE::By(phi, r) => format!("({} by {})", phi, pe_text(r)),
+    }
+}
+
+fn args_text(a: &[Arg]) -> String {
+    a.iter()
+        .map(|x| match x {
+            Arg::Proof(p) => pe_text(p),
+            Arg::Term(t) => format!("{{{}}}", t),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Splits `s` at top-level occurrences of `sep` (outside brackets).
 fn split_top(s: &str, sep: char) -> Vec<String> {
     let mut out = Vec::new();

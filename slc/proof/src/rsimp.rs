@@ -144,7 +144,9 @@ fn ground_cmp(env: &Env, t: &Term) -> Option<bool> {
 pub(crate) fn relevant_facts<'a>(env: &Env, n: &Term, facts: &'a [Seq]) -> Vec<&'a Seq> {
     let mut leaves = Vec::new();
     arith_leaves(env, n, &mut leaves);
-    facts.iter().filter(|s| small_term(s.concl(), 400) && leaves.iter().any(|l| occurs(l, s.concl()))).collect()
+    // (no leaves -- `false`, a closed comparison: every small fact, a
+    // contradiction among them)
+    facts.iter().filter(|s| small_term(s.concl(), 400) && (leaves.is_empty() || leaves.iter().any(|l| occurs(l, s.concl())))).collect()
 }
 
 /// a comparison or a membership in `omega` / `bits(n)` / `int` (closed)
@@ -733,6 +735,17 @@ impl State {
     /// typing procedure; the normal form by taut or arith with the facts
     /// about its terms, simplified alike. The way it went, for the shadow.
     pub(crate) fn rsimp_goal(&self, env: &mut Env, lg: &Logic, goal: &Term, rs: &Rules) -> KResult<(Seq, &'static str)> {
+        // (a conjunction: each conjunct by the sequence, joined by
+        // and_intro -- a membership and an arithmetic fact together)
+        if let Node::App(a, x) = goal.node() {
+            if env.sym_by_name.get("and") == Some(a) {
+                if let (Ok((pa, _)), Ok((pb, _))) = (self.rsimp_goal(env, lg, &x[0], rs), self.rsimp_goal(env, lg, &x[1], rs)) {
+                    let mut s = lemma(env, "and_intro", &[x[0].clone(), x[1].clone()])?;
+                    s = Seq::mp(env, &Seq::mp(env, &s, &pa)?, &pb)?;
+                    return Ok((s, "rsimp"));
+                }
+            }
+        }
         // (a membership: the typing procedure first -- by its forms, at
         // once, where rewriting a word operation's value is slow)
         if matches!(goal.node(), Node::App(i, _) if *i == lg.in_) {

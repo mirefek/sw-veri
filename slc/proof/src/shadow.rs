@@ -64,7 +64,9 @@ impl State {
             let t0 = std::time::Instant::now();
             let by = if plain { super::rsimp::with_deadline(0.1, || self.untrusted_simp(env, lg, goal, args, facts)).map(|(_, b)| b).unwrap_or("failed") } else { "-" };
             let g: String = Printer::new(env).term(goal).chars().take(160).collect();
-            eprintln!("shadow-r\t{}\t{}\t{:.4}\t{}\t{:.4}\t{}", LINE.with(|l| l.get()), call, simp_t, by, t0.elapsed().as_secs_f64(), g.replace(['\t', '\n'], " "));
+            // (the call as written, up to whitespace: where it is in its step)
+            let text = format!("simp({})", super::args_text(args)).replace(['\t', '\n'], " ");
+            eprintln!("shadow-r\t{}\t{}\t{:.4}\t{}\t{:.4}\t{}\t{}", LINE.with(|l| l.get()), call, simp_t, by, t0.elapsed().as_secs_f64(), g.replace(['\t', '\n'], " "), text);
             return;
         }
         // (SLC_SHADOW=types: the typing procedure alone, on membership goals)

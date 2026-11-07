@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 # Moves simp call sites to rsimp, by a simp shadow's log (SLC_SHADOW=rsimp,
-# slc/proof/src/shadow.rs): a proof step whose every simp goal call
-# rsimp proved (rsimp, types or rsimp+arith; none a program path's) has
-# its `simp(` written `rsimp(` -- on the step's line, when that line holds
-# all of the step's calls. Then each changed file is checked
-# (scripts/check.sh FILE, with the caches) and a step the checker rejects
-# is put back, until the file checks.
+# slc/proof/src/shadow.rs). Each logged call has its text as written (up
+# to whitespace); a call rsimp proved (rsimp, types or rsimp+arith -- not
+# much slower than simp) is found in its step (the step's line and its
+# continuation lines, more indented) and written `rsimp(`, when exactly one
+# occurrence there has its text and no call rsimp did not prove has it
+# too. Then each changed file is checked (scripts/check.sh FILE, with the
+# caches) and a step the checker rejects is put back, until the file
+# checks.
 #
 #   scripts/migrate-simp.py LOG [--only PATH-SUBSTRING] [--dry]
 import collections
@@ -19,7 +21,7 @@ only = args[args.index("--only") + 1] if "--only" in args else None
 dry = "--dry" in args
 GOOD = {"rsimp", "types", "rsimp+arith"}
 
-steps = collections.defaultdict(list)  # (file, line) -> [by]
+calls = collections.defaultdict(list)  # (file, line) -> [(by, text)]
 f = None
 for line in open(log):
     line = line.rstrip("\n")
@@ -27,79 +29,106 @@ for line in open(log):
         f = line.split("\t")[1]
     elif line.startswith("shadow-r\t"):
         p = line.split("\t")
-        # (a call the attempt proves much slower than simp: not moved --
-        # over 10 times simp's time and 20 ms)
+        if len(p) < 8:
+            continue
         by = p[4]
-        if by in ("rsimp", "types", "rsimp+arith") and float(p[5]) > max(10 * float(p[3]), 0.02):
+        # (much slower than simp: over 10 times its time and 20 ms)
+        if by in GOOD and float(p[5]) > max(10 * float(p[3]), 0.02):
             by = "slow"
-        steps[(f, int(p[1]))].append(by)
+        calls[(f, int(p[1]))].append((by, p[7]))
 
 SIMP = re.compile(r"(?<![A-Za-z0-9_.])simp\(")
-todo = collections.defaultdict(list)  # file -> [line]
-for (f, l), bys in steps.items():
-    if f is None or not f.startswith("proofs/") and not f.startswith("core/"):
-        continue
-    if only and only not in f:
-        continue
-    if all(b in GOOD for b in bys):
-        todo[f].append(l)
+norm = lambda s: re.sub(r"\s+", "", s)
 
 
-def lines_of(f):
-    return open(f).read().split("\n")
+def call_at(text, i):
+    """the balanced call starting at text[i] (`simp(`), or None"""
+    d = 0
+    for j in range(i, len(text)):
+        c = text[j]
+        if c in "([{":
+            d += 1
+        elif c in ")]}":
+            d -= 1
+            if d == 0:
+                return text[i : j + 1]
+    return None
 
 
-def write(f, ls):
-    open(f, "w").write("\n".join(ls))
+def region(ls, i):
+    """the step's lines: line i and the more-indented ones after it"""
+    ind = len(ls[i]) - len(ls[i].lstrip())
+    j = i + 1
+    while j < len(ls) and ls[j].strip() and len(ls[j]) - len(ls[j].lstrip()) > ind:
+        j += 1
+    return range(i, j)
 
 
 def check(f):
     r = subprocess.run(["scripts/check.sh", f], capture_output=True, text=True)
     out = r.stdout + r.stderr
-    m = re.search(r"error: " + re.escape(f) + r": line (\d+)[^:]*: proof of `[^`]*`, line (\d+)", out)
     if "ok: all declarations" in out and "error" not in out:
         return None
-    if m:
-        return int(m.group(2))
-    return -1
+    m = re.search(r"error: " + re.escape(f) + r": line (\d+)[^:]*: proof of `[^`]*`, line (\d+)", out)
+    return int(m.group(2)) if m else -1
 
+
+byfile = collections.defaultdict(list)
+for (f, l), cs in calls.items():
+    if f and (f.startswith("proofs/") or f.startswith("core/")) and (not only or only in f):
+        byfile[f].append((l, cs))
 
 total = 0
-for f in sorted(todo):
-    ls = lines_of(f)
-    changed = []
-    for l in sorted(set(todo[f])):
-        i = l - 1
-        if i >= len(ls):
+for f in sorted(byfile):
+    ls = open(f).read().split("\n")
+    orig = list(ls)
+    # (line in the file -> the step's first line, for putting back)
+    moved = {}
+    for l, cs in sorted(byfile[f]):
+        if l - 1 >= len(ls):
             continue
-        n = len(SIMP.findall(ls[i]))
-        if n == 0 or n != len(steps[(f, l)]):
-            continue
-        ls[i] = SIMP.sub("rsimp(", ls[i])
-        changed.append(l)
-    if not changed:
+        good = collections.Counter(norm(t) for b, t in cs if b in GOOD)
+        bad = set(norm(t) for b, t in cs if b not in GOOD)
+        lines = region(ls, l - 1)
+        # (the occurrences of each proven call's text in the step)
+        occ = collections.defaultdict(list)
+        for i in lines:
+            for m in SIMP.finditer(ls[i]):
+                c = call_at(ls[i], m.start())
+                if c is not None:
+                    occ[norm(c)].append((i, m.start()))
+        edits = []
+        for t, n in good.items():
+            if t in bad or len(occ.get(t, [])) != 1 or n != 1:
+                continue
+            edits.append(occ[t][0])
+        # (right to left within a line: the offsets stay valid)
+        for i, col in sorted(edits, key=lambda x: (x[0], -x[1])):
+            ls[i] = ls[i][:col] + "r" + ls[i][col:]
+            moved.setdefault(i + 1, l)
+    if not moved:
         continue
-    print("%s: %d steps" % (f, len(changed)), flush=True)
+    print("%s: %d lines" % (f, len(moved)), flush=True)
     if dry:
-        total += len(changed)
+        total += len(moved)
         continue
-    orig = lines_of(f)
-    write(f, ls)
-    # (a rejected step put back, the file checked again)
+    open(f, "w").write("\n".join(ls))
     while True:
-        bad = check(f)
-        if bad is None:
+        badl = check(f)
+        if badl is None:
             break
-        if bad in changed:
-            ls[bad - 1] = orig[bad - 1]
-            changed.remove(bad)
-            write(f, ls)
-            print("  line %d put back" % bad, flush=True)
-            continue
-        # (an error elsewhere: the whole file put back)
-        print("  an error not at a changed step (%s): the file put back" % bad, flush=True)
-        write(f, orig)
-        changed = []
-        break
-    total += len(changed)
-print("steps moved: %d" % total)
+        # (the rejected step's changed lines put back)
+        step = moved.get(badl, badl if badl in moved.values() else None)
+        back = [i for i, s in moved.items() if s == step] if step is not None else []
+        if not back:
+            print("  an error not at a changed step (%s): the file put back" % badl, flush=True)
+            open(f, "w").write("\n".join(orig))
+            moved = {}
+            break
+        for i in back:
+            ls[i - 1] = orig[i - 1]
+            del moved[i]
+        open(f, "w").write("\n".join(ls))
+        print("  step at line %d put back" % step, flush=True)
+    total += len(moved)
+print("lines changed: %d" % total)
