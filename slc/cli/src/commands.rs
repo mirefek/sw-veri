@@ -214,6 +214,7 @@ pub fn kernel_check(args: &[String]) -> CResult {
     let mut prefix = String::new();
     let mut n_cached = 0;
     let mut n_proofs_cached = 0;
+    let mut recheck_from = false;
     for (i, f) in files.iter().enumerate() {
         let first = i == 0;
         let t0 = std::time::Instant::now();
@@ -224,7 +225,12 @@ pub fn kernel_check(args: &[String]) -> CResult {
         let src = std::fs::read_to_string(f).map_err(|e| format!("{}: {}", f.display(), e))?;
         // (SLC_RECHECK=s: the files whose path contains s checked again,
         // their file and proof caches not used -- to time one file)
-        let recheck = std::env::var("SLC_RECHECK").is_ok_and(|s| !s.is_empty() && f.to_string_lossy().contains(&s));
+        // (SLC_RECHECK_FROM=s: the first file whose path contains s and
+        // every file after it)
+        if std::env::var("SLC_RECHECK_FROM").is_ok_and(|s| !s.is_empty() && f.to_string_lossy().contains(&s)) {
+            recheck_from = true;
+        }
+        let recheck = recheck_from || std::env::var("SLC_RECHECK").is_ok_and(|s| !s.is_empty() && f.to_string_lossy().contains(&s));
         let cache_f = if recheck { None } else { cache.as_ref() };
         let hit = cache_f.and_then(|c| c.lookup(f, &src, &prefix, first));
         let cached = hit.is_some();
