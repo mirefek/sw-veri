@@ -55,6 +55,27 @@ def call_at(text, i):
     return None
 
 
+def renamed(call):
+    """`simp(..)` as `rsimp(..)`, its `keep(..)` arguments dropped (rsimp
+    unfolds only what it is given)"""
+    inner = call[len("simp(") : -1]
+    parts, d, cur = [], 0, ""
+    for c in inner:
+        if c in "([{":
+            d += 1
+        elif c in ")]}":
+            d -= 1
+        if c == "," and d == 0:
+            parts.append(cur)
+            cur = ""
+        else:
+            cur += c
+    if cur.strip() or parts:
+        parts.append(cur)
+    parts = [p for p in parts if not p.strip().startswith("keep(")]
+    return "rsimp(" + ",".join(parts).strip() + ")" if parts else "rsimp()"
+
+
 def region(ls, i):
     """the step's lines: line i and the more-indented ones after it"""
     ind = len(ls[i]) - len(ls[i].lstrip())
@@ -96,15 +117,15 @@ for f in sorted(byfile):
             for m in SIMP.finditer(ls[i]):
                 c = call_at(ls[i], m.start())
                 if c is not None:
-                    occ[norm(c)].append((i, m.start()))
+                    occ[norm(c)].append((i, m.start(), c))
         edits = []
         for t, n in good.items():
             if t in bad or len(occ.get(t, [])) != 1 or n != 1:
                 continue
             edits.append(occ[t][0])
         # (right to left within a line: the offsets stay valid)
-        for i, col in sorted(edits, key=lambda x: (x[0], -x[1])):
-            ls[i] = ls[i][:col] + "r" + ls[i][col:]
+        for i, col, c in sorted(edits, key=lambda x: (x[0], -x[1])):
+            ls[i] = ls[i][:col] + renamed(c) + ls[i][col + len(c) :]
             moved.setdefault(i + 1, l)
     if not moved:
         continue

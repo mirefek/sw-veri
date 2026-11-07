@@ -50,6 +50,22 @@ print("files by the proven attempts' time:")
 for k, (n, t) in sorted(per.items(), key=lambda x: -x[1][1])[:nfiles]:
     print("  %7.1f s %5d %s" % (t, n, k))
 
+if "--kinds" in args:
+    # (the failed calls by their goal's head symbol)
+    import re
+
+    kinds = collections.Counter()
+    for r in rows:
+        if r["by"].startswith("failed"):
+            m = re.match(r"!?\(?([A-Za-z_0-9.]+)", r["goal"])
+            head = m.group(1) if m else r["goal"][:12]
+            if " in " in r["goal"][:200] and re.match(r"^[^(]*\(?[^ ]* in ", r["goal"]):
+                head = "(membership)"
+            kinds["%s %s" % (r["by"], head)] += 1
+    print("failed by goal head:")
+    for k, v in kinds.most_common(30):
+        print("  %6d %s" % (v, k))
+
 if nfailed:
     fails = [r for r in rows if r["by"] == "failed"]
     random.seed(1)

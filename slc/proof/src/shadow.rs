@@ -36,7 +36,9 @@ pub(crate) fn set_line(l: usize) {
 impl State {
     /// A simp goal as `rsimp` proves it (`rsimp_goal`), and how
     pub(crate) fn untrusted_simp(&self, env: &mut Env, lg: &Logic, goal: &Term, args: &[Arg], _facts: &[Seq]) -> KResult<(Seq, &'static str)> {
-        let rs = self.rsimp_rules(env, lg, args)?;
+        // (simp's `keep(..)` dropped: rsimp unfolds only what it is given)
+        let args: Vec<Arg> = args.iter().filter(|a| !matches!(a, Arg::Proof(PE::Rule(r, _)) if r == "keep")).cloned().collect();
+        let rs = self.rsimp_rules(env, lg, &args)?;
         self.rsimp_goal(env, lg, goal, &rs)
     }
 }
@@ -62,7 +64,17 @@ impl State {
         // <TAB> goal`, by `-` for a program path's simp, `failed` if none)
         if std::env::var("SLC_SHADOW").is_ok_and(|v| v == "rsimp") {
             let t0 = std::time::Instant::now();
-            let by = if plain { super::rsimp::with_deadline(0.1, || self.untrusted_simp(env, lg, goal, args, facts)).map(|(_, b)| b).unwrap_or("failed") } else { "-" };
+            let mut by = if plain { super::rsimp::with_deadline(0.1, || self.untrusted_simp(env, lg, goal, args, facts)).map(|(_, b)| b).unwrap_or("failed") } else { "-" };
+            // (what the trusted eval would prove of the rest: an untrusted
+            // evaluation's target)
+            let closed = {
+                let mut vs = Vec::new();
+                goal.vars(&mut vs);
+                vs.is_empty()
+            };
+            if by == "failed" && closed {
+                by = if Seq::eval_goal(env, lg, &[], goal).is_ok() { "failed-eval" } else { "failed-closed" };
+            }
             let g: String = Printer::new(env).term(goal).chars().take(160).collect();
             // (the call as written, up to whitespace: where it is in its step)
             let text = format!("simp({})", super::args_text(args)).replace(['\t', '\n'], " ");

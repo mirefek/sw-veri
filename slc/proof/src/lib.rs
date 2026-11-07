@@ -771,7 +771,7 @@ fn imp_parts(env: &Env, t: &Term) -> KResult<(Term, Term)> {
 }
 
 /// Proof expressions.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum PE {
     /// a fact (hypothesis, earlier step, theorem or axiom)
     Ref(String),
@@ -785,7 +785,7 @@ enum PE {
     By(String, Box<PE>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Arg {
     Proof(PE),
     Term(String),
@@ -1717,7 +1717,9 @@ impl State {
                     }
                 }
                 let refs: Vec<&Seq> = facts.iter().collect();
-                let plain = loops.is_empty() && keep.is_empty() && lets.0.is_empty() && lets.1.is_empty();
+                // (for the shadow: no loop hints or lets -- `keep` means
+                // nothing to rsimp, which unfolds only what it is given)
+                let plain = loops.is_empty() && lets.0.is_empty() && lets.1.is_empty();
                 *lg.simp_lets.borrow_mut() = lets;
                 let t0 = std::time::Instant::now();
                 let r = Seq::simp_goal(env, lg, &refs, goal, &loops, &keep);
