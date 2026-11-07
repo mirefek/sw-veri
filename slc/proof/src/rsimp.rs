@@ -399,6 +399,26 @@ impl State {
         if let Some(s) = self.premise_known(env, lg, h, rs) {
             return Ok(Some(s));
         }
+        // (distinct literals: by their bytes or numerals -- a field read
+        // through an update at another key)
+        if let Node::App(n, a) = h.node() {
+            if env.sym_by_name.get("not") == Some(n) {
+                if let Some((x, y)) = eq_parts(env, &a[0]) {
+                    if let Some(s) = super::types::lit_ne(env, lg, &x, &y) {
+                        return Ok(Some(s));
+                    }
+                }
+            }
+        }
+        // (a membership: the typing procedure, from the facts given and the
+        // block's)
+        if matches!(h.node(), Node::App(i, _) if *i == lg.in_) {
+            if let Ok(mut ty) = super::types::Typer::new(env, self, lg, &rs.given) {
+                if let Ok(s) = ty.prove(env, h) {
+                    return Ok(Some(s));
+                }
+            }
+        }
         if depth < DEPTH {
             if let Ok(s) = self.rsimp_close(env, lg, h, rs, depth + 1) {
                 return Ok(Some(s));
@@ -648,7 +668,15 @@ impl State {
     pub(crate) fn rsimp_close(&self, env: &mut Env, lg: &Logic, goal: &Term, rs: &Rules, depth: usize) -> KResult<Seq> {
         let e = self.rsimp_eq(env, lg, goal, rs, depth)?;
         let n = eq_parts(env, e.concl()).unwrap().1;
-        let pn = match self.closes(env, lg, &n, rs) {
+        // (a membership left: the typing procedure)
+        let typed = |env: &mut Env| -> Option<Seq> {
+            if !matches!(n.node(), Node::App(i, _) if *i == lg.in_) {
+                return None;
+            }
+            let mut ty = super::types::Typer::new(env, self, lg, &rs.given).ok()?;
+            ty.prove(env, &n).ok()
+        };
+        let pn = match self.closes(env, lg, &n, rs).or_else(|| typed(env)) {
             Some(p) => p,
             None => {
                 let pp = Printer::new(env);

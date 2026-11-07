@@ -758,7 +758,8 @@ premise they stand for.
 |---|---|
 | `taut(p..)` | a propositional tautology from the premises; `a = b` is also `b = a`, and `a != b` is `!(a = b)` |
 | `arith(p..)` | propositional logic plus linear arithmetic over integers: words mod 2^n with symbolic widths, `*`, `/`, `%` by constants (numerals, or powers of numerals: `pow2(64)`, `int_pow(2, 32)`); products of non-constants as monomials (`a * (b + c)` is `a b + a c`), a product of nonnegatives nonnegative, `x = m q + r` for `/`, `%` by a symbolic m > 0, `pow2(k + 1)` as `2 pow2(k)` |
-| `rsimp(e.., D.., [only])` | left-to-right rewriting to `true` with the facts, definitions and registered `simp` rules |
+| `rsimp(e.., D.., [only])` | left-to-right rewriting to `true` with the facts, definitions and registered `simp` rules; a rule's premise that is a membership by `types`, `!(a = b)` of distinct literals by their bytes or numerals |
+| `types(p..)` | a membership `t in T` (or `k in dom(r)`, `is_fun(r)`) by the forms of t and T, from the facts given and the block's: universes by t's constructors and literals, a record's fields from its type, updates of a typed record, function values, word operations by their width, numbers by arith over the atoms' inferred sets; determined, each step a lemma (slc/proof/src/types.rs) |
 | `simp(p.., keep(P..), {l0 l. I}, {l. m})` | the path simplifier, below |
 | `defs(p, D..)` | p proves the goal with D unfolded |
 | `ex_intro({w}.., p)` | witnesses for `ex` |

@@ -53,15 +53,16 @@ proofs/mallocng/code/lists.core):
   mostly its registered rules rebuilt at every call (now built once,
   `Env::ext_cache`; mallocng/init.core 65 s -> 52 s).
 
-The plan, in order:
-- A typing procedure, determined (no search): a term's membership from
-  its form -- records by their fields' types, updates of a typed record,
-  `univ(u)` closure, words and naturals of their operations, `dom` of a
-  record -- by the lemmas of core/records.core and core/sets.core, each
-  form one rule. rsimp's premises and its closing check use it.
-- The record and outcome equations as registered rsimp rules (fields read
-  through updates, pair and outcome injectivity, distinct literals), and
-  a normal order of updates at distinct keys.
+The typing procedure (`types`, slc/proof/src/types.rs; rsimp's premises
+and closing use it, and distinct literals by their bytes or numerals) now
+proves 7,055 of the 8,047 membership goals simp proves in the chain
+(`SLC_SHADOW=types`), at about 0.1 ms each. The plan, in order:
+- The typing procedure's gaps (the shadow's failures): `rec_and` states
+  (`m in rec_and(Machine, ..)`), program sets (`pair(s, o) in
+  set_select(univ(1), ..)`), terms bounded by a definition's arithmetic
+  (`page_of(x) in set_select(omega, ..)`), facts under premises.
+- The outcome equations as registered rsimp rules (pair and outcome
+  injectivity), and a normal order of updates at distinct keys.
 - rsimp's speed: the rules indexed by their left side's head (only those
   that can match a node tried).
 - Then simp's call sites moved, file by file, by the shadow's data (a

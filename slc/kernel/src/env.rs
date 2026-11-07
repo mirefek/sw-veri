@@ -94,6 +94,9 @@ pub struct Builtins {
     pub lit_mod: SymId,
     pub bytes_len: SymId,
     pub bytes_at: SymId,
+    /// `is_bytes(b)`: b is a bytes (string) literal (`lit_is_bytes`), as
+    /// `is_nat` of a numeric one
+    pub is_bytes: SymId,
 }
 
 /// The first local variable's id: the global variables (declared outside a
@@ -231,6 +234,7 @@ impl Env {
                 lit_mod: 0,
                 bytes_len: 0,
                 bytes_at: 0,
+                is_bytes: 0,
             },
         };
         let mut b = |name: &str, arity: usize| env.add_sym(name, vec![0; arity], SymKind::Builtin).unwrap();
@@ -245,7 +249,8 @@ impl Env {
         let lit_mod = b("lit_mod", 2);
         let bytes_len = b("bytes_len", 1);
         let bytes_at = b("bytes_at", 2);
-        env.builtins = Builtins { imp, eq, is_nat, lit_lt, lit_add, lit_sub, lit_mul, lit_div, lit_mod, bytes_len, bytes_at };
+        let is_bytes = b("is_bytes", 1);
+        env.builtins = Builtins { imp, eq, is_nat, lit_lt, lit_add, lit_sub, lit_mul, lit_div, lit_mod, bytes_len, bytes_at, is_bytes };
         env
     }
 
@@ -648,6 +653,14 @@ impl Env {
     pub fn lit_is_nat(&self, n: &Term) -> KResult<Thm> {
         Self::lit(n)?;
         Ok(Thm(Term::app(self.builtins.is_nat, vec![n.clone()])))
+    }
+
+    /// `is_bytes(b)` for a bytes (string) literal `b`.
+    pub fn lit_is_bytes(&self, b: &Term) -> KResult<Thm> {
+        match b.node() {
+            Node::Bytes(_) => Ok(Thm(Term::app(self.builtins.is_bytes, vec![b.clone()]))),
+            _ => err("expected a bytes literal"),
+        }
     }
 
     /// For literals a, b: `lit_lt(a, b)`, `a = b` or `lit_lt(b, a)`.

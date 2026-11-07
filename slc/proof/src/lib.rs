@@ -100,6 +100,7 @@ mod lets;
 mod mem;
 mod rsimp;
 mod shadow;
+mod types;
 
 fn err<T>(m: impl Into<String>) -> KResult<T> {
     Err(KernelError(m.into()))
@@ -759,7 +760,7 @@ struct State {
 }
 
 /// Rules that take their statement from the goal.
-const GOAL_RULES: &[&str] = &["taut", "arith", "simp", "rsimp", "lists", "induct", "ex_intro", "defs", "clauses", "sel", "eval", "mem", "bitwise", "cases", "disj", "spec_ret", "divergence", "runs_univ", "div_body"];
+const GOAL_RULES: &[&str] = &["taut", "arith", "types", "simp", "rsimp", "lists", "induct", "ex_intro", "defs", "clauses", "sel", "eval", "mem", "bitwise", "cases", "disj", "spec_ret", "divergence", "runs_univ", "div_body"];
 
 /// `a -> b`: (a, b)
 fn imp_parts(env: &Env, t: &Term) -> KResult<(Term, Term)> {
@@ -1594,6 +1595,14 @@ impl State {
                 ps.extend(more);
                 let refs: Vec<&Seq> = ps.iter().collect();
                 Seq::arith(env, lg, &refs, goal).map_err(|_| e)
+            }
+            // types(p1, ..): a membership `t in T` (`k in dom(r)`,
+            // `is_fun(r)`) by the forms of t and T, from the facts given and
+            // the block's (types.rs: determined, each step a lemma)
+            "types" => {
+                let ps = self.proofs(env, lg, args)?;
+                let mut ty = types::Typer::new(env, self, lg, &ps)?;
+                ty.prove(env, goal)
             }
             // mem(p1, ..): the goal by the memory rules (reads through writes,
             // frames), the writes' places by arith from the facts
@@ -5160,6 +5169,7 @@ fn lit(env: &Env, t: &Term) -> KResult<Seq> {
         Node::App(s, a) if [b.lit_add, b.lit_sub, b.lit_mul, b.lit_div, b.lit_mod].contains(s) => Seq::kernel(env.lit_compute(*s, &a[0], &a[1])),
         Node::App(s, a) if *s == b.lit_lt => Seq::kernel(env.lit_compare(&a[0], &a[1])),
         Node::App(s, a) if *s == b.is_nat => Seq::kernel(env.lit_is_nat(&a[0])),
+        Node::App(s, a) if *s == b.is_bytes => Seq::kernel(env.lit_is_bytes(&a[0])),
         Node::App(s, a) if *s == b.bytes_len => Seq::kernel(env.bytes_len(&a[0])),
         Node::App(s, a) if *s == b.bytes_at => Seq::kernel(env.bytes_at(&a[0], &a[1])),
         _ => err("lit: not a literal operation"),

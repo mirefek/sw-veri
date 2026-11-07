@@ -162,7 +162,10 @@ example, proofs/mallocng/fun/alloc_slot.core or try_avail.core.
 ## What is trusted
 
 - The kernel (`slc/kernel`): a small second-order logic with conservative
-  definitions and the 38 axioms of `core/prelude.core`.
+  definitions and the 36 axioms of `core/prelude.core`. Among them, the
+  literals' bridges: a numeric literal is a natural (`lit_nat`), a bytes
+  (string) literal -- a record's field name -- a member of the least
+  universe (`bytes_univ`; its value as a set otherwise unspecified).
 - Its trusted extensions (`slc/kernel/src/ext/`): derived rules and
   decision procedures such as natural deduction, tautologies, linear
   arithmetic, lists, memory reads through writes and the simplifiers. Each one documents how it reduces

@@ -41,6 +41,19 @@ impl State {
     pub(crate) fn shadow_simp(&self, env: &mut Env, lg: &Logic, goal: &Term, args: &[Arg], facts: &[Seq], plain: bool, simp_ok: bool, simp_t: f64) {
         let refs: Vec<&Seq> = facts.iter().collect();
         let (mut a, mut b, mut c) = (("-", 0.0), ("-", 0.0), ("-", 0.0));
+        // (SLC_SHADOW=types: the typing procedure alone, on membership goals)
+        if std::env::var("SLC_SHADOW").is_ok_and(|v| v == "types") {
+            if !matches!(goal.node(), Node::App(i, _) if *i == lg.in_) && !matches!(goal.node(), Node::App(f, _) if env.syms[*f as usize].name == "is_fun") {
+                return;
+            }
+            let t = timed(|| {
+                let mut ty = super::types::Typer::new(env, self, lg, facts)?;
+                ty.prove(env, goal)
+            });
+            let g: String = Printer::new(env).term(goal).chars().take(200).collect();
+            eprintln!("shadow-types\t{}\t{}\t{:.4}\t{}\t{:.4}\t{}", LINE.with(|l| l.get()), if simp_ok { "ok" } else { "failed" }, simp_t, t.0, t.1, g.replace(['\t', '\n'], " "));
+            return;
+        }
         if plain {
             a = timed(|| {
                 let rs = self.rsimp_rules(env, lg, args)?;
