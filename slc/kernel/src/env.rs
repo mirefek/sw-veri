@@ -142,6 +142,10 @@ pub struct Env {
     /// NAME`: a proven fact, an equation or equivalence possibly under
     /// premises), in order. A hint for proof search only.
     pub simp_set: Vec<String>,
+    /// the proof checker's caches across proofs, by name (rsimp's rules
+    /// built from `simp_set`). Not part of the logic: what they hold are
+    /// derived theorems and terms of global variables only.
+    pub ext_cache: std::cell::RefCell<HashMap<&'static str, Box<dyn std::any::Any>>>,
     /// the memory procedure's views (`mem_view NAME`: an equation unfolding
     /// a read or a write into `gimple.bytes_at` / `store_le`) and frame
     /// equations (`mem_frame NAME`: a predicate the bytes do not matter
@@ -205,6 +209,7 @@ impl Env {
             abbrevs: HashMap::new(),
             irreducible: Default::default(),
             simp_set: Vec::new(),
+            ext_cache: Default::default(),
             mem_views: Vec::new(),
             mem_frames: Vec::new(),
             mem_closures: Vec::new(),
@@ -357,6 +362,13 @@ impl Env {
         let name = self.var_name_id(name);
         self.globals.push(VarSlot { name, arity });
         id as VarId
+    }
+
+    /// a pattern variable kept across proofs (a rule's schematic variables
+    /// built once, `ext_cache`): a global variable, inside a proof too. A
+    /// variable states nothing; its ids are never reused.
+    pub fn new_pattern_var(&mut self, name: &str, arity: u32) -> VarId {
+        self.new_global_var(name, arity)
     }
 
     /// what the environment holds, counted: entries added after it are a

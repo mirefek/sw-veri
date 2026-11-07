@@ -34,12 +34,39 @@ goes.
 ### 1.1 `rsimp` as the default, `simp` retired
 
 `simp` is still called about 20,000 times in the proofs, `rsimp` about
-730 times. `simp`'s search makes check times unpredictable and a proof's
-step hard to read.
-- Find what the `simp` calls do, by kind: plain rewriting, unfolding a
-  definition, deciding a literal, executing a program path. Give each
-  kind a determined replacement: `rsimp`, `defs` / `unfold`, evaluation,
-  `step`.
+730 times. `simp` is a trusted extension of about 6,000 lines
+(slc/kernel/src/ext/simp.rs) with search inside; `rsimp` is untrusted
+(each step a kernel rule). Retiring simp shrinks the trusted base and
+makes each step readable; it is not for speed -- simp is cheap.
+
+What simp does now (`SLC_SHADOW=1`, the first 6,085 goal calls, up to
+proofs/mallocng/code/lists.core):
+- 29 s of simp in all, 27 s of it in the 738 calls with loop hints,
+  `keep` or `lets` -- executing program paths (`step`'s job);
+- of the other 5,347: rsimp proves 1,622 alone, 1,254 more with taut or
+  arith after it, eval 324; 2,147 neither. Those are typing and
+  membership facts (963: `x in bits(64)`, `fn_update(..) in univ(1)`,
+  `M in x86_64_linux.Vm`), equations of records and outcomes (585:
+  `o = ok(fn_update(..))`, fields read through updates), `k in dom(w)`
+  and contradictions of literals (389), orders (114);
+- rsimp was about 60 times slower per call than simp where both prove:
+  mostly its registered rules rebuilt at every call (now built once,
+  `Env::ext_cache`; mallocng/init.core 65 s -> 52 s).
+
+The plan, in order:
+- A typing procedure, determined (no search): a term's membership from
+  its form -- records by their fields' types, updates of a typed record,
+  `univ(u)` closure, words and naturals of their operations, `dom` of a
+  record -- by the lemmas of core/records.core and core/sets.core, each
+  form one rule. rsimp's premises and its closing check use it.
+- The record and outcome equations as registered rsimp rules (fields read
+  through updates, pair and outcome injectivity, distinct literals), and
+  a normal order of updates at distinct keys.
+- rsimp's speed: the rules indexed by their left side's head (only those
+  that can match a node tried).
+- Then simp's call sites moved, file by file, by the shadow's data (a
+  call rsimp proves, as fast: renamed); simp's program-path calls to
+  `step`; the shadow given a per-call time limit so it covers the chain.
 - The machine's semantics (proofs/linux_sys.core) by `rsimp` instead of
   hand lemmas. A dispatch's live case is `rsimp(h, tag)` already. A
   statement's known outcome through the elaborator's sequencing forms
@@ -79,7 +106,7 @@ step hard to read.
 - Variables reference counted (a name and arity freed with its last
   term, identity by pointer, not a table index). Now a proof's variables
   are dropped only at its end (`Env::begin_locals` .. `end_locals`).
-- An uncached check is 874 s, at most 0.9 GB (was 1407 s, 2.3 GB, before
+- An uncached check is 786 s, at most 0.9 GB (was 1407 s, 2.3 GB, before
   hash-consing and the DAG-aware walks). The refinements
   (proofs/mallocng/machine/cfg.core, 160 s) are still the largest part:
   alloc_group's alone 110 s, then

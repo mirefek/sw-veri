@@ -216,26 +216,49 @@ impl State {
             }
         }
         if !only {
-            for n in env.simp_set.clone() {
-                if let Some(s) = facts::seq_of(env, &n) {
-                    if let Some(r) = self.rule(env, lg, &n, s) {
-                        rs.rules.push(r);
-                    }
-                }
-            }
+            rs.rules.extend(self.registered(env, lg));
         }
         Ok(rs)
     }
 
+    /// The registered rules (`simp NAME`), built once while the set stays
+    /// as it is (their pattern variables global, `Env::new_pattern_var`):
+    /// building them at every call was most of a small rsimp's time.
+    fn registered(&self, env: &mut Env, lg: &Logic) -> Vec<Rule> {
+        let n = env.simp_set.len();
+        if let Some(c) = env.ext_cache.borrow().get("rsimp.rules").and_then(|b| b.downcast_ref::<(usize, Vec<Rule>)>()) {
+            if c.0 == n {
+                return c.1.clone();
+            }
+        }
+        let mut rules = Vec::new();
+        for name in env.simp_set.clone() {
+            if let Some(s) = facts::seq_of(env, &name) {
+                if let Some(r) = self.rule_with(env, lg, &name, s, true) {
+                    rules.push(r);
+                }
+            }
+        }
+        env.ext_cache.borrow_mut().insert("rsimp.rules", Box::new((n, rules.clone())));
+        rules
+    }
+
     /// `s` as a rewrite rule
     fn rule(&self, env: &mut Env, lg: &Logic, name: &str, s: Seq) -> Option<Rule> {
+        self.rule_with(env, lg, name, s, false)
+    }
+
+    /// (`global`: its pattern variables kept across proofs -- a registered
+    /// rule, built once)
+    fn rule_with(&self, env: &mut Env, lg: &Logic, name: &str, s: Seq, global: bool) -> Option<Rule> {
         let mut pvars = self.free_vars(&s);
         let mut s = s;
         while let Node::App(q, _) = s.concl().node() {
             if *q != lg.all {
                 break;
             }
-            let v = env.new_var(s.concl().binder_name().unwrap_or("x"), 0);
+            let bn = s.concl().binder_name().unwrap_or("x").to_string();
+            let v = if global { env.new_pattern_var(&bn, 0) } else { env.new_var(&bn, 0) };
             s = Seq::all_elim(env, lg, &s, &Term::var(v, vec![])).ok()?;
             pvars.push(v);
         }
