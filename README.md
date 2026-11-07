@@ -152,7 +152,7 @@ scripts/check.sh                                # check the whole chain
 program, dumps GCC's GIMPLE of the translation units the proofs read, and
 generates the decode facts, readable GIMPLE and the locals' location map.
 `scripts/check.sh` keeps caches in `build/`. A check without them takes
-about 25 minutes and about 2.5 GB of memory; the script limits memory to
+about 15 minutes and about 1 GB of memory; the script limits memory to
 6 GB. It ends with:
 
 ```

@@ -788,10 +788,17 @@ impl<'e> Gen<'e> {
         // any)
         {
             let q = self.qs[qi].clone();
-            let u1 = self.parse("mkprog(x0 x1. true)")?;
-            let u2 = self.parse("mkprog(x0 x1. ex x2. true && x1 = x2)")?;
-            for (u, lemma) in [(u1, "g.ref_undef"), (u2, "g.ref_undef2")] {
-                if self.canon(&q) == self.canon(&u) {
+            // (the two forms parsed once; their canonical forms each time,
+            // as a value named later may stand for one)
+            if self.undef_forms.is_none() {
+                let u1 = self.parse("mkprog(x0 x1. true)")?;
+                let u2 = self.parse("mkprog(x0 x1. ex x2. true && x1 = x2)")?;
+                self.undef_forms = Some([u1, u2]);
+            }
+            let cq = self.canon(&q);
+            let forms = self.undef_forms.clone().unwrap();
+            for (u, lemma) in forms.iter().zip(["g.ref_undef", "g.ref_undef2"]) {
+                if cq == self.canon(u) {
                     return self.run(&mp(R::Inst(lemma.into(), vec![("l", lo.clone())]), vec![t(w)]), &[]);
                 }
             }

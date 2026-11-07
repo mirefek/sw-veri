@@ -115,6 +115,8 @@ impl<'e> Gen<'e> {
             env,
             api: Some(api),
             names: Vec::new(),
+            names_map: Default::default(),
+            undef_forms: None,
             vals: Vec::new(),
             vexp: Default::default(),
             exp_memo: Default::default(),

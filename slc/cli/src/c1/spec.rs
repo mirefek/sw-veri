@@ -470,11 +470,19 @@ impl<'e> Gen<'e> {
     /// the body as a value of x0 x1 y
     /// r (closed) a subterm of t
     pub(super) fn mentions(&self, t: &Term, r: &Term) -> bool {
-        t == r
-            || match t.node() {
-                Node::Var(_, a) | Node::App(_, a) => a.iter().any(|x| self.mentions(x, r)),
-                _ => false,
+        // (a DAG: each node looked at once; a part without one of r's
+        // variables has no r in it)
+        fn go(t: &Term, r: &Term, seen: &mut sl_kernel::term::PtrSet<usize>) -> bool {
+            if !t.may_contain_vars_of(r) || (t.shared() && !seen.insert(t.ptr_id())) {
+                return false;
             }
+            t == r
+                || match t.node() {
+                    Node::Var(_, a) | Node::App(_, a) => a.iter().any(|x| go(x, r, seen)),
+                    _ => false,
+                }
+        }
+        go(t, r, &mut sl_kernel::term::PtrSet::default())
     }
 
     pub(super) fn abstract_(&self, t: &Term, r: &Term, depth: u32) -> Term {

@@ -431,14 +431,14 @@ impl Env {
     /// `t.instantiate_params(args, ..)` (the same term): its parts without
     /// a parameter kept as they are, a closed argument not shifted
     pub fn instantiate_params_m(&self, t: &Term, args: &[Term]) -> Term {
-        self.inst_m(t, args, 0, &mut HashMap::new())
+        self.inst_m(t, args, 0, &mut crate::term::PtrMap::default())
     }
 
     /// (`memo`: a shared subterm's instance at a depth made once -- the
     /// terms are DAGs, a walk as a tree would repeat it per path. Keyed by
     /// the node itself, not its structure: equal terms may carry other
     /// labels. Its keys are t's subterms, alive throughout.)
-    fn inst_m(&self, t: &Term, args: &[Term], depth: u32, memo: &mut HashMap<(usize, u32), Term>) -> Term {
+    fn inst_m(&self, t: &Term, args: &[Term], depth: u32, memo: &mut crate::term::PtrMap<(usize, u32), Term>) -> Term {
         if self.loose_depth_m(t) <= depth {
             return t.clone();
         }
@@ -470,12 +470,12 @@ impl Env {
     /// `t.subst_var(v, value, ..)` (the same term): the value's instances
     /// as `instantiate_params_m` makes them
     pub fn subst_var_m(&self, t: &Term, v: VarId, value: &Term) -> Term {
-        self.subst_var_mm(t, v, value, &mut HashMap::new())
+        self.subst_var_mm(t, v, value, &mut crate::term::PtrMap::default())
     }
 
     /// (`memo`: a shared subterm's substitution made once; by the node, as
     /// `inst_m`'s)
-    fn subst_var_mm(&self, t: &Term, v: VarId, value: &Term, memo: &mut HashMap<usize, Term>) -> Term {
+    fn subst_var_mm(&self, t: &Term, v: VarId, value: &Term, memo: &mut crate::term::PtrMap<usize, Term>) -> Term {
         if !t.may_contain_var(v) {
             return t.clone();
         }

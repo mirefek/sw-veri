@@ -39,12 +39,39 @@ fn union<T: Clone + PartialEq>(a: &[T], b: &[T]) -> Vec<T> {
 /// variable of a new binder around `t` (so the result has one loose
 /// variable, `BVar(0)` at the top).
 pub fn abstract_term(t: &Term, pat: &Term, depth: u32, binders: &dyn Fn(SymId, usize) -> u32) -> Term {
+    abstract_memo(t, pat, depth, binders, &mut crate::term::PtrMap::default())
+}
+
+/// (`memo`: a shared node's result at a depth made once -- terms are DAGs.
+/// A part without one of pat's schematic variables has no occurrence of
+/// pat: it is itself, as the walk would rebuild it -- `with_args` keeps a
+/// node whose arguments are unchanged.)
+fn abstract_memo(t: &Term, pat: &Term, depth: u32, binders: &dyn Fn(SymId, usize) -> u32, memo: &mut crate::term::PtrMap<(usize, u32), Term>) -> Term {
+    if !t.may_contain_vars_of(pat) {
+        return t.clone();
+    }
     if t == pat {
         return Term::bvar(depth);
     }
     match t.node() {
-        Node::App(s, args) => t.with_args(args.iter().enumerate().map(|(i, a)| abstract_term(a, pat, depth + binders(*s, i), binders)).collect()),
-        Node::Var(_, args) => t.with_args(args.iter().map(|a| abstract_term(a, pat, depth, binders)).collect()),
+        Node::App(..) | Node::Var(..) => {
+            let key = (t.ptr_id(), depth);
+            let sh = t.shared();
+            if sh {
+                if let Some(r) = memo.get(&key) {
+                    return r.clone();
+                }
+            }
+            let r = match t.node() {
+                Node::App(s, args) => t.with_args(args.iter().enumerate().map(|(i, a)| abstract_memo(a, pat, depth + binders(*s, i), binders, memo)).collect()),
+                Node::Var(_, args) => t.with_args(args.iter().map(|a| abstract_memo(a, pat, depth, binders, memo)).collect()),
+                _ => unreachable!(),
+            };
+            if sh {
+                memo.insert(key, r.clone());
+            }
+            r
+        }
         // bound variables of `t` itself: those below `depth` are bound inside
         // `t`, the new binder is outside them all
         _ => t.clone(),
@@ -54,6 +81,10 @@ pub fn abstract_term(t: &Term, pat: &Term, depth: u32, binders: &dyn Fn(SymId, u
 /// `abstract_term` at the chosen occurrences of `pat` only (numbered from
 /// 1 in `count`, outer before inner, left to right; all if `occ` is empty).
 fn abstract_at(t: &Term, pat: &Term, depth: u32, binders: &dyn Fn(SymId, usize) -> u32, occ: &[usize], count: &mut usize) -> Term {
+    // (no occurrence in a part without one of pat's variables: none counted)
+    if !t.may_contain_vars_of(pat) {
+        return t.clone();
+    }
     if t == pat {
         *count += 1;
         if occ.is_empty() || occ.contains(count) {

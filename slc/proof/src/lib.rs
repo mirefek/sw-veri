@@ -99,6 +99,7 @@ mod bits;
 mod lets;
 mod mem;
 mod rsimp;
+mod shadow;
 
 fn err<T>(m: impl Into<String>) -> KResult<T> {
     Err(KernelError(m.into()))
@@ -150,6 +151,7 @@ fn run_block(env: &mut Env, lg: &Logic, mut st: State, text: &str, line: usize, 
     for (line_no, body_no, step) in all {
         let t0 = std::time::Instant::now();
         let before = st.facts.len();
+        shadow::set_line(line + line_no);
         res = st.step(env, lg, &step, line + line_no, line + body_no).map_err(|e| {
             if e.0.starts_with("line ") { e } else { KernelError(format!("line {}: {}", line + line_no, e.0)) }
         });
@@ -1683,10 +1685,17 @@ impl State {
                     }
                 }
                 let refs: Vec<&Seq> = facts.iter().collect();
+                let plain = loops.is_empty() && keep.is_empty() && lets.0.is_empty() && lets.1.is_empty();
                 *lg.simp_lets.borrow_mut() = lets;
+                let t0 = std::time::Instant::now();
                 let r = Seq::simp_goal(env, lg, &refs, goal, &loops, &keep);
+                let dt = t0.elapsed().as_secs_f64();
                 lg.simp_lets.borrow_mut().0.clear();
                 lg.simp_lets.borrow_mut().1.clear();
+                // (SLC_SHADOW: would rsimp or eval prove it too)
+                if shadow::on() {
+                    self.shadow_simp(env, lg, goal, args, &facts, plain, r.is_ok(), dt);
+                }
                 r
             }
             // lists(p1, ..): `A = B` for list expressions with the same pieces

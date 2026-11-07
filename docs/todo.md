@@ -11,9 +11,25 @@ built.
 
 ## 1. Next: usability and speed
 
-The aim: proofs that are short to write, read as ideas rather than
-bookkeeping, and check fast, cold as well as cached. Every change is
-timed (the uncached check is about 25 minutes and 2.5 GB now).
+The aim:
+- an efficient, intuitive language that states high-level ideas
+  directly, with little plumbing; proofs read as ideas rather than
+  bookkeeping;
+- a fast checker, cold as well as cached, that never accepts anything
+  unsound.
+
+Trusted extensions: a check that an algorithm does quickly, but that is
+laborious through the kernel, may be a trusted extension that guarantees
+its validity. Each new one, and each moving work from the kernel into an
+extension, comes with a switch that turns the trust off: the same check
+then goes through the kernel or lower extensions. (Most of the existing
+extensions have no such switch.)
+
+Every change is timed: `SLC_TIMES=1 scripts/check.sh --no-cache` for
+each file's time and memory, `C1_STATS=1` for each refinement's,
+`SLC_RECHECK=PATH` to check one file again with the rest cached,
+scripts/sample-stacks.py (with check.sh's `SLC_WRAP`) for where the time
+goes.
 
 ### 1.1 `rsimp` as the default, `simp` retired
 
@@ -60,12 +76,17 @@ step hard to read.
     premise instantiated there, about 1.5 s per label in alloc_group's
     56, though only the heads' and exits' are not vacuous. Split on the
     heads (and exits) alone, so that the rest are vacuous at once.
-- Terms and variables in memory: variables reference counted (a name and
-  arity freed with its last term, identity by pointer, not a table
-  index), terms hash-consed (equal terms one node, equality a pointer
-  compare, a weak table freeing them). Now a proof's variables are
-  dropped only at its end (`Env::begin_locals` .. `end_locals`), and
-  equal terms built apart are separate nodes.
+- Variables reference counted (a name and arity freed with its last
+  term, identity by pointer, not a table index). Now a proof's variables
+  are dropped only at its end (`Env::begin_locals` .. `end_locals`).
+- An uncached check is 874 s, at most 0.9 GB (was 1407 s, 2.3 GB, before
+  hash-consing and the DAG-aware walks). The refinements
+  (proofs/mallocng/machine/cfg.core, 160 s) are still the largest part:
+  alloc_group's alone 110 s, then
+  __libc_malloc_impl's, __malloc_alloc_meta's and try_avail's. Their
+  remaining time is in the walk's lemma instances (`ev inst`) and
+  goal-directed steps (`evp`): profile again (scripts/sample-stacks.py,
+  scripts/sample-report.py) after the label claims below.
 - The elaborated layers (gimple.core, generated definitions) kept in
   memory, elaborated in the checker from the .sl files, as the `steps`
   and `text` lines make their facts. The readable GIMPLE (cfg*.sl) stays

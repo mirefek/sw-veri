@@ -217,12 +217,16 @@ pub fn kernel_check(args: &[String]) -> CResult {
     for (i, f) in files.iter().enumerate() {
         let first = i == 0;
         let t0 = std::time::Instant::now();
-        // (SLC_TIDY: the prover's reports below are this file's)
-        if std::env::var("SLC_TIDY").is_ok() {
+        // (SLC_TIDY, SLC_SHADOW: the prover's reports below are this file's)
+        if std::env::var("SLC_TIDY").is_ok() || std::env::var("SLC_SHADOW").is_ok() {
             eprintln!("tidy-file\t{}", f.display());
         }
         let src = std::fs::read_to_string(f).map_err(|e| format!("{}: {}", f.display(), e))?;
-        let hit = cache.as_ref().and_then(|c| c.lookup(f, &src, &prefix, first));
+        // (SLC_RECHECK=s: the files whose path contains s checked again,
+        // their file and proof caches not used -- to time one file)
+        let recheck = std::env::var("SLC_RECHECK").is_ok_and(|s| !s.is_empty() && f.to_string_lossy().contains(&s));
+        let cache_f = if recheck { None } else { cache.as_ref() };
+        let hit = cache_f.and_then(|c| c.lookup(f, &src, &prefix, first));
         let cached = hit.is_some();
         if cached {
             n_cached += 1;
@@ -236,7 +240,7 @@ pub fn kernel_check(args: &[String]) -> CResult {
             None => {
                 // (its proofs checked before, in the same context: from the
                 // proof cache)
-                let rep = match &cache {
+                let rep = match cache_f {
                     Some(c) => {
                         let mut store = ProofStore::new(c, &src, &prefix, first);
                         let r = syntax::load_checked(&mut env, &src, first, &mut prover, &mut store);

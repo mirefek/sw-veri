@@ -16,6 +16,33 @@ use std::rc::Rc;
 pub type SymId = u32;
 pub type VarId = u32;
 
+/// A hasher for keys of node addresses and small integers (memo tables of
+/// one walk): a multiply and rotate per word, not SipHash -- the keys are
+/// no input an adversary chooses.
+#[derive(Default, Clone, Copy)]
+pub struct PtrHasher(u64);
+impl std::hash::Hasher for PtrHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for b in bytes {
+            self.write_u64(*b as u64);
+        }
+    }
+    fn write_u64(&mut self, x: u64) {
+        self.0 = (self.0.rotate_left(5) ^ x).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
+    }
+    fn write_usize(&mut self, x: usize) {
+        self.write_u64(x as u64)
+    }
+    fn write_u32(&mut self, x: u32) {
+        self.write_u64(x as u64)
+    }
+}
+pub type PtrMap<K, V> = std::collections::HashMap<K, V, std::hash::BuildHasherDefault<PtrHasher>>;
+pub type PtrSet<K> = std::collections::HashSet<K, std::hash::BuildHasherDefault<PtrHasher>>;
+
 /// A term, with an optional label: metadata for proofs (`name: φ`, a
 /// conjunct named), not part of the logic -- equality and hashing ignore
 /// it, and no rule looks at it. Rebuilding a node keeps its label; where a
@@ -33,6 +60,11 @@ struct Inner {
     /// the variables in it, as bits v mod 64 (none set: no variable v in
     /// it -- a substitution or a search for variables skips it)
     vbits: u64,
+    /// one more than the largest bound-variable index in it, as written
+    /// (binders not subtracted: a bound on its loose depth -- 0: no
+    /// bound variable at all). A walk replacing or shifting the bound
+    /// variables from some depth d up skips a subterm with bmax <= d.
+    bmax: u32,
     label: Option<Rc<str>>,
     /// (metadata too) the name written at an `all`/`ex` binder, for
     /// instantiating it by name; at another binding symbol (`letin(a, x.
@@ -68,12 +100,24 @@ impl Term {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         node.hash(&mut h);
+        let hash = h.finish();
+        // (an equal node alive, unlabelled: that node -- see `intern`)
+        if let Some(t) = intern::find(hash, &node) {
+            return t;
+        }
         let vbits = match &node {
             Node::Var(v, args) => args.iter().fold(1u64 << (v % 64), |b, a| b | a.0.vbits),
             Node::App(_, args) => args.iter().fold(0, |b, a| b | a.0.vbits),
             _ => 0,
         };
-        Term(Rc::new(Inner { node, hash: h.finish(), vbits, label: None, bind: None }))
+        let bmax = match &node {
+            Node::BVar(i) => i + 1,
+            Node::Var(_, args) | Node::App(_, args) => args.iter().map(|a| a.0.bmax).max().unwrap_or(0),
+            _ => 0,
+        };
+        let t = Term(Rc::new(Inner { node, hash, vbits, bmax, label: None, bind: None }));
+        intern::add(&t);
+        t
     }
     pub fn app(s: SymId, args: Vec<Term>) -> Term {
         Term::mk(Node::App(s, args.into_boxed_slice()))
@@ -110,7 +154,7 @@ impl Term {
         if self.0.label == label {
             return self.clone();
         }
-        Term(Rc::new(Inner { node: self.0.node.clone(), hash: self.0.hash, vbits: self.0.vbits, label, bind: self.0.bind.clone() }))
+        Term(Rc::new(Inner { node: self.0.node.clone(), hash: self.0.hash, vbits: self.0.vbits, bmax: self.0.bmax, label, bind: self.0.bind.clone() }))
     }
 
     /// The name written at this `all`/`ex` binder (metadata, see `Term`).
@@ -123,7 +167,7 @@ impl Term {
         if self.0.bind == bind {
             return self.clone();
         }
-        Term(Rc::new(Inner { node: self.0.node.clone(), hash: self.0.hash, vbits: self.0.vbits, label: self.0.label.clone(), bind }))
+        Term(Rc::new(Inner { node: self.0.node.clone(), hash: self.0.hash, vbits: self.0.vbits, bmax: self.0.bmax, label: self.0.label.clone(), bind }))
     }
 
     /// `self` with `outer`'s label, if it has one (the outer label wins).
@@ -141,6 +185,14 @@ impl Term {
             Some(b) => t.with_binder_name(Some(b.clone())),
             None => t,
         }
+    }
+
+    /// Held more than once (by several parents, or a parent and a caller):
+    /// a walk over the DAG may reach it again; a node held once is reached
+    /// again only through a parent reached again. Memo tables of a walk
+    /// need only the shared nodes.
+    pub fn shared(&self) -> bool {
+        Rc::strong_count(&self.0) > 1
     }
 
     /// The same node (not just an equal one).
@@ -180,6 +232,9 @@ impl Term {
     /// (0 = no loose bound variables). `binders(s, i)` gives the number of
     /// variables bound by argument `i` of symbol `s`.
     pub fn loose_depth(&self, binders: &dyn Fn(SymId, usize) -> u32) -> u32 {
+        if self.0.bmax == 0 {
+            return 0;
+        }
         match self.node() {
             Node::BVar(i) => i + 1,
             Node::Nat(_) | Node::Bytes(_) => 0,
@@ -195,24 +250,30 @@ impl Term {
 
     /// Collects schematic variables occurring in the term.
     pub fn vars(&self, out: &mut Vec<VarId>) {
-        if self.0.vbits == 0 {
-            return;
-        }
-        match self.node() {
-            Node::Var(v, args) => {
-                if !out.contains(v) {
-                    out.push(*v);
-                }
-                args.iter().for_each(|a| a.vars(out));
+        // (in the order of first occurrence; a shared node visited once --
+        // its variables are out after its first visit)
+        fn go(t: &Term, out: &mut Vec<VarId>, seen: &mut PtrSet<usize>) {
+            if t.0.vbits == 0 || (t.shared() && !seen.insert(t.ptr_id())) {
+                return;
             }
-            Node::App(_, args) => args.iter().for_each(|a| a.vars(out)),
-            _ => {}
+            match t.node() {
+                Node::Var(v, args) => {
+                    if !out.contains(v) {
+                        out.push(*v);
+                    }
+                    args.iter().for_each(|a| go(a, out, seen));
+                }
+                Node::App(_, args) => args.iter().for_each(|a| go(a, out, seen)),
+                _ => {}
+            }
         }
+        go(self, out, &mut PtrSet::default())
     }
 
     /// Adds `d` to every bound variable with index >= `cutoff`.
     pub fn shift(&self, d: u32, cutoff: u32, binders: &dyn Fn(SymId, usize) -> u32) -> Term {
-        if d == 0 {
+        // (no bound variable from cutoff up: itself)
+        if d == 0 || self.0.bmax <= cutoff {
             return self.clone();
         }
         match self.node() {
@@ -232,10 +293,17 @@ impl Term {
     /// `i`, see module docs) by `args`, which live in the context of the
     /// substitution site. The value must have no other loose variables.
     pub fn instantiate_params(&self, args: &[Term], binders: &dyn Fn(SymId, usize) -> u32) -> Term {
-        self.inst_params_at(args, 0, binders)
+        self.inst_params_at(args, 0, binders, &mut PtrMap::default())
     }
 
-    fn inst_params_at(&self, args: &[Term], depth: u32, binders: &dyn Fn(SymId, usize) -> u32) -> Term {
+    /// (`memo`: a shared node's instance at a depth made once -- terms are
+    /// DAGs, a walk as a tree repeats a shared part per path; keyed by the
+    /// node, as equal terms may carry other labels. A part with no bound
+    /// variable from `depth` up is itself.)
+    fn inst_params_at(&self, args: &[Term], depth: u32, binders: &dyn Fn(SymId, usize) -> u32, memo: &mut PtrMap<(usize, u32), Term>) -> Term {
+        if self.0.bmax <= depth {
+            return self.clone();
+        }
         let k = args.len() as u32;
         match self.node() {
             Node::BVar(i) if *i >= depth => {
@@ -244,13 +312,23 @@ impl Term {
                 args[(k - 1 - j) as usize].shift(depth, 0, binders).labelled_as(self)
             }
             Node::BVar(_) | Node::Nat(_) | Node::Bytes(_) => self.clone(),
-            Node::Var(_, a) => self.with_args(a.iter().map(|x| x.inst_params_at(args, depth, binders)).collect()),
-            Node::App(s, a) => self.with_args(
-                a.iter()
-                    .enumerate()
-                    .map(|(i, x)| x.inst_params_at(args, depth + binders(*s, i), binders))
-                    .collect(),
-            ),
+            Node::Var(_, a) | Node::App(_, a) => {
+                let key = (self.ptr_id(), depth);
+                let sh = self.shared();
+                if sh {
+                    if let Some(r) = memo.get(&key) {
+                        return r.clone();
+                    }
+                }
+                let r = match self.node() {
+                    Node::App(s, _) => self.with_args(a.iter().enumerate().map(|(i, x)| x.inst_params_at(args, depth + binders(*s, i), binders, memo)).collect()),
+                    _ => self.with_args(a.iter().map(|x| x.inst_params_at(args, depth, binders, memo)).collect()),
+                };
+                if sh {
+                    memo.insert(key, r.clone());
+                }
+                r
+            }
         }
     }
 
@@ -283,5 +361,94 @@ impl Term {
             Node::App(_, args) => self.with_args(args.iter().map(|a| a.subst_var(v, value, binders)).collect()),
             _ => self.clone(),
         }
+    }
+}
+
+/// Hash-consing: an equal node alive, made by `Term::mk` (unlabelled, no
+/// binder name), is reused instead of a new one. Equality stays as it is
+/// (`Term::eq`: the same node, or equal hash and node); with equal terms
+/// mostly one node, it is mostly a pointer compare, and a node's children
+/// compare by pointer. Not part of the logic: a term is the same term
+/// either way. The table holds weak references (a term lives as long as
+/// its users keep it); the dead ones are dropped when the table has
+/// doubled since the last purge.
+mod intern {
+    use super::{Inner, Node, Term};
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::rc::{Rc, Weak};
+
+    /// (the key is the node's hash already: not hashed again)
+    #[derive(Default)]
+    struct Id(u64);
+    impl std::hash::Hasher for Id {
+        fn finish(&self) -> u64 {
+            self.0
+        }
+        fn write(&mut self, _: &[u8]) {
+            unreachable!("Id hashes u64 keys only")
+        }
+        fn write_u64(&mut self, x: u64) {
+            self.0 = x;
+        }
+    }
+
+    /// (one node per key: keys of other nodes colliding, the later kept --
+    /// a lost share, not a wrong term: `find` checks the node)
+    #[derive(Default)]
+    struct Table {
+        map: HashMap<u64, Weak<Inner>, std::hash::BuildHasherDefault<Id>>,
+        /// the entries at the last purge
+        at_purge: usize,
+    }
+
+    thread_local! {
+        static T: RefCell<Table> = RefCell::new(Table::default());
+    }
+
+    /// (the same node: its children the same nodes -- not just equal ones,
+    /// which may carry other labels, and labels must stay where they are)
+    fn same(a: &Node, b: &Node) -> bool {
+        match (a, b) {
+            (Node::App(s, x), Node::App(t, y)) => s == t && x.len() == y.len() && x.iter().zip(y.iter()).all(|(p, q)| p.ptr_eq(q)),
+            (Node::Var(v, x), Node::Var(w, y)) => v == w && x.len() == y.len() && x.iter().zip(y.iter()).all(|(p, q)| p.ptr_eq(q)),
+            (Node::App(..) | Node::Var(..), _) | (_, Node::App(..) | Node::Var(..)) => false,
+            _ => a == b,
+        }
+    }
+
+    /// the table's key: the node's identity -- its hash with its children's
+    /// addresses (equal nodes whose children are other nodes, e.g.
+    /// labelled ones, have other keys: a bucket holds the same nodes only,
+    /// not every equal one)
+    fn key(hash: u64, node: &Node) -> u64 {
+        match node {
+            Node::App(_, a) | Node::Var(_, a) => a.iter().fold(hash, |h, x| (h ^ x.ptr_id() as u64).wrapping_mul(0x100000001b3).rotate_left(29)),
+            _ => hash,
+        }
+    }
+
+    pub(super) fn find(hash: u64, node: &Node) -> Option<Term> {
+        T.with(|t| {
+            let t = t.borrow();
+            // (an upgraded node not the same is dropped again: another
+            // holder keeps it, no node is freed while the table is borrowed)
+            let rc = t.map.get(&key(hash, node))?.upgrade()?;
+            same(&rc.node, node).then_some(Term(rc))
+        })
+    }
+
+    pub(super) fn add(term: &Term) {
+        T.with(|t| {
+            let mut t = t.borrow_mut();
+            t.map.insert(key(term.0.hash, &term.0.node), Rc::downgrade(&term.0));
+            // (the dead entries dropped when the table has grown 4 times
+            // since the last purge: a weak entry keeps its node's
+            // allocation)
+            if t.map.len() > 4 * t.at_purge.max(1 << 16) {
+                t.map.retain(|_, w| w.strong_count() > 0);
+                t.at_purge = t.map.len();
+            }
+        })
     }
 }

@@ -11,6 +11,9 @@
 #                               after a change to the binaries or the spec
 #   scripts/check.sh [FILE]     elaborate the layers, check the chain (up
 #                               to FILE, e.g. proofs/mallocng/fun/try_avail.core)
+#   scripts/check.sh --no-cache [FILE]
+#                               the same without the caches (with
+#                               SLC_TIMES=1: each file's time and memory)
 #
 # The test itself checks everything without the caches (--no-cache).
 # Needs the musl build (scripts/build-musl.sh -O0) and slc built
@@ -47,6 +50,8 @@ if [ "$1" = gen ]; then
   done
   exit 0
 fi
+NOCACHE=""
+if [ "$1" = --no-cache ]; then NOCACHE=--no-cache; shift; fi
 [ -e "$B/steps.core" ] || { echo "no build/chain: run scripts/check.sh gen" >&2; exit 1; }
 LEAF_SL=""
 for t in $LEAVES; do name=${t#*:}; name=${name%%:*}; LEAF_SL="$LEAF_SL build/gimple-O0/sl/$name.sl $B/cfg_$name.sl"; done
@@ -65,4 +70,5 @@ if [ -n "$1" ]; then
   esac
   FILES=$(echo $FILES | sed "s| $1 .*| $1|")
 fi
-$S kernel-check $FILES 2>&1 | grep -v "^core/\|^proofs/[a-z_0-9/]*.core: .*(cached)\$\|^$B/\|^build/"
+# (SLC_WRAP: a command the checker runs under, e.g. a profiler)
+$SLC_WRAP $S kernel-check $NOCACHE $FILES 2>&1 | grep -v "^core/\|^proofs/[a-z_0-9/]*.core: .*(cached)\$\|^$B/\|^build/"

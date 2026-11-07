@@ -230,6 +230,12 @@ struct Gen<'e> {
     /// the placeholders by name (for terms parsed): values `T`, choices `Z`,
     /// worlds, the fixed variables
     names: Vec<(String, VarId)>,
+    /// (the same as a map, the later of a name's: what parsing reads --
+    /// a list made a map at every term parsed was a third of a large
+    /// refinement's time)
+    names_map: std::collections::HashMap<String, VarId>,
+    /// (gref: the forms of an undefined structured side, parsed once)
+    undef_forms: Option<[Term; 2]>,
     /// the named values: their definitions (`T`, worlds, `Z`, `V`, `W`)
     vals: Vec<(VarId, Term)>,
     /// (their expansions; the values' names by their expansions, for canon)
@@ -481,6 +487,7 @@ impl<'e> Gen<'e> {
     fn var(&mut self, name: &str) -> Term {
         let v = self.env.new_var(name, 0);
         self.names.push((name.to_string(), v));
+        self.names_map.insert(name.to_string(), v);
         Term::var(v, vec![])
     }
 
@@ -761,6 +768,7 @@ impl<'e> Gen<'e> {
         let name = format!("T{}", self.nval);
         self.nval += 1;
         let v = self.env.new_var(&name, 0);
+        self.names_map.insert(name.clone(), v);
         self.names.push((name, v));
         self.push_val(v, t);
         Term::var(v, vec![])
@@ -970,8 +978,7 @@ impl<'e> Gen<'e> {
 
     /// a term from text (terms only), the placeholders by their names
     fn parse(&mut self, text: &str) -> Result<Term, String> {
-        let names = self.names.clone();
-        syntax::parse_term(self.env, text, &names).map_err(|e| format!("{}: {}", text, e.0))
+        syntax::parse_term_in(self.env, text, &self.names_map).map_err(|e| format!("{}: {}", text, e.0))
     }
 
     /// (C1_TRACE: a message)

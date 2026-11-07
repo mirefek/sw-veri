@@ -172,15 +172,16 @@ impl<'a> Lexer<'a> {
 }
 
 /// Parser state for one statement: bound-variable scopes and schematic params.
-struct Parser<'a, 'e> {
+struct Parser<'a, 'e, 'p> {
     lex: Lexer<'a>,
     tok: Tok,
     env: &'e mut Env,
     scopes: Vec<String>,                  // bound variables, innermost last
-    params: HashMap<String, VarId>,       // schematic variables of the statement
+    // schematic variables of the statement (a caller's map borrowed)
+    params: std::borrow::Cow<'p, HashMap<String, VarId>>,
 }
 
-impl<'a, 'e> Parser<'a, 'e> {
+impl<'a, 'e, 'p> Parser<'a, 'e, 'p> {
     fn bump(&mut self) -> KResult<Tok> {
         let t = std::mem::replace(&mut self.tok, Tok::Eof);
         self.tok = self.lex.next()?;
@@ -495,11 +496,11 @@ impl<'a, 'e> Parser<'a, 'e> {
     }
 
     fn bind_params(&mut self, ps: &[(String, u32)]) -> Vec<VarId> {
-        self.params.clear();
+        self.params.to_mut().clear();
         ps.iter()
             .map(|(n, k)| {
                 let v = self.env.new_var(n, *k);
-                self.params.insert(n.clone(), v);
+                self.params.to_mut().insert(n.clone(), v);
                 v
             })
             .collect()
@@ -614,9 +615,21 @@ pub fn parse_term(env: &mut Env, text: &str, scope: &[(String, VarId)]) -> KResu
 /// Parses a value for a variable of arity `k`: `x1 .. xk. body` (just a
 /// term for k = 0).
 pub fn parse_value(env: &mut Env, text: &str, scope: &[(String, VarId)], k: u32) -> KResult<Term> {
+    let map: HashMap<String, VarId> = scope.iter().cloned().collect();
+    parse_value_in(env, text, &map, k)
+}
+
+/// `parse_term` with the schematic variables as a map (a later name in a
+/// scope list hides an earlier one: the map has the later)
+pub fn parse_term_in(env: &mut Env, text: &str, scope: &HashMap<String, VarId>) -> KResult<Term> {
+    parse_value_in(env, text, scope, 0)
+}
+
+/// `parse_value` with the schematic variables as a map
+pub fn parse_value_in(env: &mut Env, text: &str, scope: &HashMap<String, VarId>, k: u32) -> KResult<Term> {
     let mut lex = Lexer { src: text.as_bytes(), pos: 0, line: 1 };
     let tok = lex.next()?;
-    let mut p = Parser { lex, tok, env, scopes: Vec::new(), params: scope.iter().cloned().collect() };
+    let mut p = Parser { lex, tok, env, scopes: Vec::new(), params: std::borrow::Cow::Borrowed(scope) };
     if k > 0 {
         let names = match p.binding_names()? {
             Some(n) if n.len() == k as usize => n,
@@ -686,7 +699,7 @@ fn load_mode(
 ) -> KResult<LoadReport> {
     let mut lex = Lexer { src: src.as_bytes(), pos: 0, line: 1 };
     let tok = lex.next()?;
-    let mut p = Parser { lex, tok, env, scopes: Vec::new(), params: HashMap::new() };
+    let mut p = Parser { lex, tok, env, scopes: Vec::new(), params: std::borrow::Cow::Owned(HashMap::new()) };
     let mut rep = LoadReport::default();
     // (the proof cache's context: the file so far, its proofs cut out; `at`
     // where the uncopied text starts)
@@ -737,7 +750,7 @@ fn load_mode(
                     return p.error("an abbreviation's parameters are terms (binding none)");
                 }
                 p.expect(":=")?;
-                p.params.clear();
+                p.params.to_mut().clear();
                 let n = ps.len();
                 p.scopes.extend(ps.into_iter().map(|(x, _)| x));
                 let body = p.term();
@@ -983,7 +996,7 @@ fn load_mode(
                 }
             }
             "claim" => {
-                p.params.clear();
+                p.params.to_mut().clear();
                 p.expect(":")?;
                 let t = p.term()?;
                 facts::check_new(p.env, &name).map_err(ctx)?;
