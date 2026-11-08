@@ -150,8 +150,9 @@ The plan, in order (each step measured: speed comes first):
   and `text` lines make their facts. The readable GIMPLE (cfg*.sl) stays
   text: it is what a person reads.
 - The structured form generated and checked in one run (`slc gimple`
-  running the refinement); a callee's refinement a theorem of its own,
-  not walked again in each caller.
+  running the refinement). (A callee procedure is walked once per run
+  now, its refinement kept; the walks' time is the large functions' own
+  -- alloc_group's 20 s, static_init_tls's 5 s, __init_libc's 4 s.)
 - `slc heapcheck` on larger heaps: each byte's view membership (`held`)
   searches every group's slots (`in_reserved`), so a check grows with
   groups × bytes (about 2 min at 60 groups; the ignored tests take
