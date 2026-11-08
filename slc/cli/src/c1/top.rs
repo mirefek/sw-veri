@@ -356,7 +356,7 @@ impl<'e> Gen<'e> {
             None => (|| {
                 let fb = self.app(&sbody, "fn_build", 2)?;
                 let mp = self.app(&fb[1], "mkprog", 1)?;
-                (self.app(&mp[0], "or", 2).is_none() && fb[1].loose_depth(&self.env.binders_fn()) == 0).then_some(())?;
+                (self.app(&mp[0], "or", 2).is_none() && self.env.loose_depth_m(&fb[1]) == 0).then_some(())?;
                 let &ps = self.env.sym_by_name.get(pname)?;
                 self.reroot = Some(ps);
                 Some(fb[1].clone())

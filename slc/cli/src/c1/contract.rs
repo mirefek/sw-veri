@@ -252,7 +252,7 @@ impl<'e> Ct<'e> {
             // binders above it: under them too)
             (Node::Var(v, a), _) if a.is_empty() && vars.contains(v) => match b.get(v) {
                 Some(x) => x == t,
-                None if d == 0 || t.loose_depth(&self.env.binders_fn()) == 0 => {
+                None if d == 0 || self.env.loose_depth_m(&t) == 0 => {
                     b.insert(*v, t.clone());
                     true
                 }

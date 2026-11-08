@@ -3204,7 +3204,7 @@ impl<'e> Gen<'e> {
             if let Some(x) = g.app(t, "fn_update", 3) {
                 if x[1] == Term::bytes(b"objs") {
                     if let Some(y) = g.app(&x[2], "fn_update", 3) {
-                        if y[1] == Term::bytes(b"live") && y[2].loose_depth(&g.env.binders_fn()) == 0 {
+                        if y[1] == Term::bytes(b"live") && g.env.loose_depth_m(&y[2]) == 0 {
                             return Some(y[2].clone());
                         }
                     }

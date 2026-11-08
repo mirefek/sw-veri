@@ -918,7 +918,7 @@ impl<'e> Gen<'e> {
         let Some(body) = self.app(pr, "mkprog", 1).map(|x| x[0].clone()) else { return Ok(None) };
         let Some(e) = self.app(&body, "ex", 1).and_then(|e| self.app(&e[0], "and", 2).map(|x| x.to_vec())) else { return Ok(None) };
         let Some(or) = self.app(&e[0], "or", 2).map(|x| x.to_vec()) else { return Ok(None) };
-        let Some(c) = self.app(&or[0], "not", 1).map(|x| x[0].clone()).filter(|c| c.loose_depth(&self.env.binders_fn()) == 0) else { return Ok(None) };
+        let Some(c) = self.app(&or[0], "not", 1).map(|x| x[0].clone()).filter(|c| self.env.loose_depth_m(&c) == 0) else { return Ok(None) };
         let Some(b) = self.app(&e[1], "ex", 1).and_then(|x| self.app(&x[0], "and", 2).map(|y| y.to_vec())) else { return Ok(None) };
         let Some(l) = self.app(&b[0], "or", 2).and_then(|x| self.app(&x[0], "and", 2).map(|y| y[1].clone())) else { return Ok(None) };
         let Some(ll) = self.lam(&l, &["x0", "x1", "x2", "x3"], &["x2", "x3"]) else { return Ok(None) };
@@ -954,7 +954,7 @@ impl<'e> Gen<'e> {
             return Ok(None);
         }
         let Some(or) = self.app(&e[0], "or", 2).map(|x| x.to_vec()) else { return Ok(None) };
-        let Some(c) = self.app(&or[0], "not", 1).map(|x| x[0].clone()).filter(|c| c.loose_depth(&self.env.binders_fn()) == 0) else { return Ok(None) };
+        let Some(c) = self.app(&or[0], "not", 1).map(|x| x[0].clone()).filter(|c| self.env.loose_depth_m(&c) == 0) else { return Ok(None) };
         let Some(r) = self.lam(&or[1], &["x0", "x1", "x2"], &["x0", "x2"]) else { return Ok(None) };
         let nc = self.mk("not", vec![c.clone()]);
         let Some((true, hn)) = self.guard(&nc, &st.hyps) else { return Ok(None) };
@@ -2821,7 +2821,7 @@ impl<'e> Gen<'e> {
         let e = self.expand(c);
         let mut vs = Vec::new();
         e.vars(&mut vs);
-        if !vs.is_empty() || e.loose_depth(&self.env.binders_fn()) > 0 {
+        if !vs.is_empty() || self.env.loose_depth_m(&e) > 0 {
             return None;
         }
         let lg = &self.api.as_ref()?.lg;

@@ -115,7 +115,7 @@ impl<'e> Gen<'e> {
             (k, e)
         }
         const OPS: [&str; 3] = ["eq", "int_lt", "int_le"];
-        if g.loose_depth(&self.env.binders_fn()) > 0 {
+        if self.env.loose_depth_m(&g) > 0 {
             return None;
         }
         let (k, e) = strip(self, g);

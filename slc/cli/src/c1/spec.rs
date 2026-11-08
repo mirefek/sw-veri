@@ -28,8 +28,7 @@ impl<'e> Gen<'e> {
                 return None;
             }
             if let (Some(x), Some(y)) = (self.app(&a[0], "runs", 3), self.app(&a[1], "runs", 3)) {
-                let bf = self.env.binders_fn();
-                if x[0].loose_depth(&bf) == 0 && y[0].loose_depth(&bf) == 0 {
+                if self.env.loose_depth_m(&x[0]) == 0 && self.env.loose_depth_m(&y[0]) == 0 {
                     return Some((y[0].clone(), x[0].clone()));
                 }
             }
@@ -169,7 +168,7 @@ impl<'e> Gen<'e> {
             return Some((y, join(f, f2)));
         }
         if let Some(a) = self.app(g, "eq", 2) {
-            if a[0] == a[1] && g.loose_depth(&self.env.binders_fn()) == 0 {
+            if a[0] == a[1] && self.env.loose_depth_m(&g) == 0 {
                 return Some((true, vec![]));
             }
             // (the equation the other way round: the stack protector's
@@ -195,7 +194,7 @@ impl<'e> Gen<'e> {
     fn pick(&mut self, t: &Term, hyps: &[(Term, Seq)]) -> Option<Vec<Pick>> {
         let _p = super::prof::g("pick");
         if let Some(a) = self.app(t, "and", 2) {
-            if a[0].loose_depth(&self.env.binders_fn()) == 0 {
+            if self.env.loose_depth_m(&a[0]) == 0 {
                 if let Some((true, pf)) = self.guard(&a[0], hyps) {
                     return Some(vec![Pick::And(a[0].clone(), pf)]);
                 }
@@ -204,7 +203,7 @@ impl<'e> Gen<'e> {
         }
         if let Some(a) = self.app(t, "or", 2) {
             // (`require C`, `!C || R`, with C holding: R)
-            if let Some(c) = self.app(&a[0], "not", 1).map(|x| x[0].clone()).filter(|c| c.loose_depth(&self.env.binders_fn()) == 0) {
+            if let Some(c) = self.app(&a[0], "not", 1).map(|x| x[0].clone()).filter(|c| self.env.loose_depth_m(&c) == 0) {
                 if let Some((true, _)) = self.guard(&c, hyps) {
                     return Some(vec![Pick::R]);
                 }
@@ -443,7 +442,7 @@ impl<'e> Gen<'e> {
     fn whole_field_in(&self, t: &Term) -> Option<(Term, u128, Term)> {
         if let Some(a) = self.app(t, "bits_of_int", 2) {
             if let Some(n) = nat(&a[0]) {
-                if [8, 16, 32, 64].contains(&n) && t.loose_depth(&self.env.binders_fn()) == 0 {
+                if [8, 16, 32, 64].contains(&n) && self.env.loose_depth_m(&t) == 0 {
                     let x = self.expand(&a[1]);
                     let field = (|| {
                         let m = self.app(&x, "int_mod", 2)?;
@@ -1339,7 +1338,7 @@ impl<'e> Gen<'e> {
         // a loop's iteration ended (tr.lcont): the body went on (its marked
         // return), or it left (the rest in the wrapper)
         if let Some(x) = self.app(&body, "tr.lcont", 4).map(|x| x.to_vec()) {
-            let closed = x[0].loose_depth(&self.env.binders_fn()) == 0;
+            let closed = self.env.loose_depth_m(&x[0]) == 0;
             if matches!(x[1].node(), Node::BVar(0)) && closed {
                 let (e, k, kw) = (x[0].clone(), x[2].clone(), x[3].clone());
                 if let Some(o) = self.app(&e, "ok", 2) {
@@ -1350,7 +1349,7 @@ impl<'e> Gen<'e> {
                 return Ok(Some(Red::Exit { e, k, kw }));
             }
             // (the body's outcome of the start world: that the point's)
-            if matches!(x[1].node(), Node::BVar(0)) && !closed && x[0].loose_depth(&self.env.binders_fn()) <= 2 {
+            if matches!(x[1].node(), Node::BVar(0)) && !closed && self.env.loose_depth_m(&x[0]) <= 2 {
                 let (j, inst) = self.by(qi, "tr.q_at", &[("b", body.clone()), ("w", w.clone())])?;
                 return Ok(Some(Red::Q(j, inst)));
             }
@@ -1427,13 +1426,13 @@ impl<'e> Gen<'e> {
         let Some(ex) = self.app(&body, "ex", 1).and_then(|e| self.app(&e[0], "and", 2).map(|x| x.to_vec())) else {
             if let Some(x) = self.app(&body, "eq", 2) {
                 if let Some(o) = self.app(&x[1], "ok", 2) {
-                    if matches!(x[0].node(), Node::BVar(0)) && matches!(o[0].node(), Node::BVar(1)) && o[1].loose_depth(&self.env.binders_fn()) == 0 {
+                    if matches!(x[0].node(), Node::BVar(0)) && matches!(o[0].node(), Node::BVar(1)) && self.env.loose_depth_m(&o[1]) == 0 {
                         let val = self.value(&o[1]);
                         return Ok(Some(Red::Ret(val)));
                     }
                     // (the result's world the point's, by its name: the
                     // start world x0, tr.q_from)
-                    if matches!(x[0].node(), Node::BVar(0)) && o[0].loose_depth(&self.env.binders_fn()) == 0 {
+                    if matches!(x[0].node(), Node::BVar(0)) && self.env.loose_depth_m(&o[0]) == 0 {
                         let ow = self.expand(&o[0]);
                         if ow != self.expand(&w) {
                             return Err(format!("the result's world {} is not the point's {}", self.print(&o[0]), self.print(&w)));
@@ -1455,7 +1454,7 @@ impl<'e> Gen<'e> {
         let kl = self.lam(&k, &ctx, &["x8", "x1"]).ok_or("a block's rest reads the world")?;
         // a let
         if let Some(x) = self.app(&a, "letin", 2) {
-            if x[0].loose_depth(&self.env.binders_fn()) > 0 {
+            if self.env.loose_depth_m(&x[0]) > 0 {
                 // (of the world's part: the point's, tr.qs_letw)
                 let e = self.lam(&x[0], &ctx, &["x0"]).ok_or_else(|| format!("a let of the state: {}", self.lambda(3, &x[0])))?;
                 let al = self.lam(&x[1], &["x0", "x1", "x8", "x"], &["x0", "x8", "x"]).ok_or("a let's body reads the outcome")?;
@@ -1495,7 +1494,7 @@ impl<'e> Gen<'e> {
         // an operation
         if let Some(x) = self.app(&a, "bind_rel", 5) {
             // (its arguments reading the world: the point's, tr.qs_atop)
-            if matches!(x[1].node(), Node::BVar(2)) && x[0].loose_depth(&self.env.binders_fn()) > 0 {
+            if matches!(x[1].node(), Node::BVar(2)) && self.env.loose_depth_m(&x[0]) > 0 {
                 if let Some(op) = self.lam(&x[0], &ctx, &["x0"]) {
                     let c5 = ["x0", "x1", "x8", "x9", "x10"];
                     let al = self.lam(&x[2], &c5, &["x9", "x10", "x8"]).ok_or("an operation's continuation reads the world before it")?;
@@ -1505,7 +1504,7 @@ impl<'e> Gen<'e> {
                     return Ok(Some(Red::Q(j, inst)));
                 }
             }
-            if matches!(x[1].node(), Node::BVar(2)) && x[0].loose_depth(&self.env.binders_fn()) == 0 {
+            if matches!(x[1].node(), Node::BVar(2)) && self.env.loose_depth_m(&x[0]) == 0 {
                 let c5 = ["x0", "x1", "x8", "x9", "x10"];
                 let al = self.lam(&x[2], &c5, &["x9", "x10", "x8"]).ok_or("an operation's continuation reads the world before it")?;
                 let xl = self.lam(&x[3], &c5, &["x9", "x10", "x8"]).ok_or("an operation's handler reads the world before it")?;

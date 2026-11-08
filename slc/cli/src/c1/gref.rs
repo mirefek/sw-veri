@@ -278,7 +278,7 @@ impl<'e> Gen<'e> {
         let mut vs = Vec::new();
         let cp = self.proj_simp(c, &mut std::collections::HashMap::new());
         self.expand(&cp).vars(&mut vs);
-        if !vs.is_empty() || c.loose_depth(&self.env.binders_fn()) > 0 {
+        if !vs.is_empty() || self.env.loose_depth_m(&c) > 0 {
             return None;
         }
         if let Ok(pf) = self.evp(&RP::Simp(false, vec![], vec![], false), c, &[]) {
@@ -314,7 +314,7 @@ impl<'e> Gen<'e> {
             .filter(|e| matches!(e[0].node(), Node::BVar(0)))
             .and_then(|e| self.app(&e[1], "ok", 2).map(|o| o[0].clone()))
             .and_then(|p0| self.app(&p0, "pair", 2).map(|p| p[1].clone()))
-            .filter(|t| t.loose_depth(&self.env.binders_fn()) == 0)
+            .filter(|t| self.env.loose_depth_m(&t) == 0)
     }
 
     /// the join's program q with its tuple T (join_tuple) the closed term
@@ -344,7 +344,7 @@ impl<'e> Gen<'e> {
             return None;
         }
         let st = self.app(&wr[0], "pair", 2)?;
-        (matches!(st[0].node(), Node::BVar(2)) && st[1].loose_depth(&self.env.binders_fn()) == 0).then(|| st[1].clone())
+        (matches!(st[0].node(), Node::BVar(2)) && self.env.loose_depth_m(&st[1]) == 0).then(|| st[1].clone())
     }
 
     /// the loop's program q with its tuple T (loop_tuple) the closed term
@@ -606,7 +606,7 @@ impl<'e> Gen<'e> {
         if let Some(b) = self.app(t, "ex", 1).map(|b| b[0].clone()) {
             if let Some(c) = self.app(&b, "and", 2).map(|c| c.to_vec()) {
                 if let Some(e) = self.app(&c[1], "eq", 2).map(|e| e.to_vec()) {
-                    if matches!(e[1].node(), Node::BVar(0)) && e[0].loose_depth(&self.env.binders_fn()) == 0 {
+                    if matches!(e[1].node(), Node::BVar(0)) && self.env.loose_depth_m(&e[0]) == 0 {
                         let ae = c[0].instantiate_params(std::slice::from_ref(&e[0]), &self.env.binders_fn());
                         let Some(pf) = self.refute(&ae)? else { return Ok(None) };
                         return self.run(&mp(R::Inst("g.ex_eq_n".into(), vec![("A", c[0].clone()), ("e", e[0].clone())]), vec![s(&pf)]), &[]).map(Some);
@@ -798,7 +798,7 @@ impl<'e> Gen<'e> {
     /// the result o = e: e
     fn leaf_of(&self, lo: &Term) -> Option<Term> {
         let x = self.app(lo, "eq", 2)?;
-        (matches!(x[0].node(), Node::BVar(0)) && x[1].loose_depth(&self.env.binders_fn()) == 0).then(|| x[1].clone())
+        (matches!(x[0].node(), Node::BVar(0)) && self.env.loose_depth_m(&x[1]) == 0).then(|| x[1].clone())
     }
 
     /// the CFG going on at x (`all q2. inv(x, q2) -> .. -> runs(q2, fst(x), o)`): x
@@ -810,7 +810,7 @@ impl<'e> Gen<'e> {
         }
         let r = self.app(&c, "runs", 3)?;
         let x = self.app(&r[1], "fst", 1)?[0].clone();
-        (x.loose_depth(&self.env.binders_fn()) == 0).then_some(x)
+        (self.env.loose_depth_m(&x) == 0).then_some(x)
     }
 
     /// the iteration's end `(ex l2. e = ok(l2) && J(l2, o)) || (!is_ok(e)
@@ -1324,7 +1324,7 @@ impl<'e> Gen<'e> {
         if let Some(x) = self.app(&ub, "eq", 2) {
             if matches!(x[0].node(), Node::BVar(0)) {
                 // (its world the start's: x0 the world here)
-                if x[1].loose_depth(&self.env.binders_fn()) > 0 {
+                if self.env.loose_depth_m(&x[1]) > 0 {
                     let b = self.lam(&ub, &["x0", "x1"], &["x0", "x1"]).ok_or("the result")?;
                     let (j, inst) = self.by(qi, "tr.q_at", &[("b", b), ("w", w.clone())])?;
                     let rest = self.leaf_eq(e, j, w)?;
@@ -1621,7 +1621,7 @@ impl<'e> Gen<'e> {
                     Some((a.clone(), b.clone()))
                 }
                 let shown = |t: &Term| match t.node() {
-                    _ if t.loose_depth(&self.env.binders_fn()) == 0 => self.print(t),
+                    _ if self.env.loose_depth_m(&t) == 0 => self.print(t),
                     Node::App(s, _) => format!("<open {}>", self.env.syms[*s as usize].name),
                     _ => "<open>".into(),
                 };
