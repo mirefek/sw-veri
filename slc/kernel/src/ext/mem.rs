@@ -24,7 +24,13 @@
 //!   so the read is `int_mod(int_div(v, int_pow(256, int_sub(b, a))),
 //!   int_pow(256, m))` (`(v div 256^d) div 256^i = v div 256^(d + i)`);
 //!
-//! else the walk stops with an error naming the write. A memory or bytes of
+//! else, with earlier writes passed (or other fields' updates), the read is
+//! of the memory at this write (it left in place); else an error naming the
+//! write. A byte `app(app(M, "bytes"), b)`, b in bits(64) by `arith` (so
+//! store_le's `fn_build` applies at b), is read the same as one byte (m =
+//! 1): past apart writes, inside one `bits_of_int(8, int_div(v,
+//! int_pow(256, int_sub(b, a))))` (`int_pow(256, 0)` if b is a), the rest
+//! `app(app(M', "bytes"), b)`. A memory or bytes of
 //! another form end the walk: the read is then `gimple.bytes_at` of that
 //! memory (of `fn_update(M', "bytes", X')` for bytes X'). The facts given to
 //! each `arith` check are the premises connected to its terms (a choice of
@@ -154,11 +160,42 @@ impl Logic {
         (0..premises.len()).filter(|&i| sel[i]).collect()
     }
 
-    /// `goal` by arith from the premises about its terms: the narrow
-    /// choice, else the wide one (`arith_relevant`)
+    /// whether a premise branches arith's cases (a disjunction, implication
+    /// or negation, also inside a conjunction)
+    pub fn branching(&self, env: &Env, t: &Term) -> bool {
+        let (and, or, not) = (env.ksym("and"), env.ksym("or"), env.ksym("not"));
+        match t.node() {
+            Node::App(f, _) if Some(*f) == or || Some(*f) == not || *f == env.builtins.imp => true,
+            Node::App(f, a) if Some(*f) == and => a.iter().any(|x| self.branching(env, x)),
+            _ => false,
+        }
+    }
+
+    /// the premise sets `arith_rel` tries, in order: the narrow choice
+    /// (`arith_relevant`) without its branching premises (no case splits on
+    /// facts the goal may not need), the narrow choice, the wide one (each
+    /// only if not the set before); and the narrow choice's place
+    pub fn arith_tiers(&self, env: &Env, premises: &[Term], goal: &Term) -> (Vec<Vec<usize>>, usize) {
+        let narrow = self.arith_relevant(env, premises, goal, false);
+        let units: Vec<usize> = narrow.iter().copied().filter(|&i| !self.branching(env, &premises[i])).collect();
+        let wide = self.arith_relevant(env, premises, goal, true);
+        let mut out = Vec::new();
+        if units.len() < narrow.len() {
+            out.push(units);
+        }
+        let at = out.len();
+        let same = wide == narrow;
+        out.push(narrow);
+        if !same {
+            out.push(wide);
+        }
+        (out, at)
+    }
+
+    /// `goal` by arith from the premises about its terms (`arith_tiers`)
     pub fn arith_rel(&self, env: &Env, premises: &[Term], goal: &Term) -> bool {
-        [false, true].iter().any(|&wide| {
-            let rel: Vec<Term> = self.arith_relevant(env, premises, goal, wide).into_iter().map(|i| premises[i].clone()).collect();
+        self.arith_tiers(env, premises, goal).0.into_iter().any(|sel| {
+            let rel: Vec<Term> = sel.into_iter().map(|i| premises[i].clone()).collect();
             self.arith(env, &rel, goal).is_ok()
         })
     }
@@ -184,13 +221,27 @@ impl Logic {
             return err("mem_read: needs the prelude, gimple.bytes_at and x86_64_linux.store_le");
         };
         let pr = Printer::new(env);
-        let (mut m_t, b, m) = match t.node() {
-            Node::App(f, a) if *f == bytes_at && a.len() == 3 => (a[0].clone(), a[1].clone(), a[2].clone()),
-            _ => return err(format!("mem_read: not `gimple.bytes_at(M, b, m)`: {}", pr.short(t))),
+        let is_bytes_key = |k: &Term| matches!(k.node(), Node::Bytes(k) if &**k == b"bytes");
+        let nat = |v: u128| Term::nat(Nat::from_u128(v));
+        // (a byte `app(app(M, "bytes"), b)`: read as one byte, b in bits(64))
+        let (mut m_t, b, m, byte) = match t.node() {
+            Node::App(f, a) if *f == bytes_at && a.len() == 3 => (a[0].clone(), a[1].clone(), a[2].clone(), false),
+            Node::App(f, a) if *f == app && a.len() == 2 => match a[0].node() {
+                Node::App(f2, c) if *f2 == app && c.len() == 2 && is_bytes_key(&c[1]) => (c[0].clone(), a[1].clone(), nat(1), true),
+                _ => return err(format!("mem_read: not `gimple.bytes_at(M, b, m)` or `M.bytes[b]`: {}", pr.short(t))),
+            },
+            _ => return err(format!("mem_read: not `gimple.bytes_at(M, b, m)` or `M.bytes[b]`: {}", pr.short(t))),
         };
+        let Some(bits_of_int) = g("bits_of_int") else { return err("mem_read: needs bits_of_int") };
+        if byte {
+            let (in_, Some(bits)) = (self.in_, g("bits")) else { return err("mem_read: needs bits") };
+            let b64 = Term::app(in_, vec![b.clone(), Term::app(bits, vec![nat(64)])]);
+            if !self.arith_rel(env, premises, &b64) {
+                return err(format!("mem_read: the byte's address not shown in bits(64): {}", pr.short(&b)));
+            }
+        }
         // (a numeral for a write the read meets; any size past apart writes)
         let mn = numeral(&m);
-        let nat = |v: u128| Term::nat(Nat::from_u128(v));
         let two64 = nat(1u128 << 64);
         let zero = nat(0);
         let le = |x: Term, y: Term| Term::app(int_le, vec![x, y]);
@@ -202,7 +253,6 @@ impl Logic {
         if !holds(&in_range(&b, &m)) {
             return err(format!("mem_read: the read's range not shown in the address space: 0 <= {0}, {0} + {1} <= 2^64", pr.short(&b), pr.short(&m)));
         }
-        let is_bytes_key = |k: &Term| matches!(k.node(), Node::Bytes(k) if &**k == b"bytes");
         let mut steps = 0;
         // in a memory's bytes: (the memory updated, the key, the bytes X)
         let mut cur: Option<(Term, Term, Term)> = None;
@@ -243,6 +293,9 @@ impl Logic {
             if !holds(&in_range(&wa, &wn_t)) {
                 return err(format!("mem_read: a write's range not shown in the address space: 0 <= {0}, {0} + {1} <= 2^64", pr.short(&wa), wn));
             }
+            // (the steps before this write: past writes shown apart, other
+            // fields' updates)
+            let passed = steps;
             steps += 1;
             // apart: past it
             let apart = Term::app(or, vec![le(add(wa.clone(), wn_t.clone()), b.clone()), le(add(b.clone(), m.clone()), wa.clone())]);
@@ -251,7 +304,14 @@ impl Logic {
                 continue;
             }
             let pow = |e: Term| Term::app(int_pow, vec![nat(256), e]);
-            if let Some(mn) = mn {
+            // a byte inside the write: its digit b - a
+            if byte {
+                if holds(&conj(le(wa.clone(), b.clone()), le(add(b.clone(), m.clone()), add(wa.clone(), wn_t.clone())))) {
+                    let d = if wa == b { nat(0) } else { Term::app(int_sub, vec![b.clone(), wa.clone()]) };
+                    let r = Term::app(bits_of_int, vec![nat(8), Term::app(int_div, vec![v, pow(d)])]);
+                    return Ok(Term::app(env.builtins.eq, vec![t.clone(), r]));
+                }
+            } else if let Some(mn) = mn {
                 // the same: its value
                 if wn == mn && holds(&conj(le(wa.clone(), b.clone()), le(b.clone(), wa.clone()))) {
                     let r = Term::app(int_mod, vec![v, pow(nat(wn))]);
@@ -263,6 +323,13 @@ impl Logic {
                     let r = Term::app(int_mod, vec![Term::app(int_div, vec![v, pow(d)]), pow(nat(mn))]);
                     return Ok(Term::app(env.builtins.eq, vec![t.clone(), r]));
                 }
+            }
+            // (a write not decided after others passed: the read of the
+            // memory there, this write in place -- as at a form not looked
+            // into, below; every write passed was apart)
+            if passed > 0 {
+                steps = passed;
+                break;
             }
             return err(format!(
                 "mem_read: the read of {} bytes at {} and the write of {} bytes at {}: not shown apart, the same, or the read inside the write{}",
@@ -281,7 +348,7 @@ impl Logic {
         if steps == 0 {
             return err(format!("mem_read: no write to read through in {}", pr.short(&rest)));
         }
-        let r = Term::app(bytes_at, vec![rest, b, m]);
+        let r = if byte { Term::app(app, vec![Term::app(app, vec![rest, Term::bytes(b"bytes")]), b]) } else { Term::app(bytes_at, vec![rest, b, m]) };
         Ok(Term::app(env.builtins.eq, vec![t.clone(), r]))
     }
 }
@@ -329,6 +396,35 @@ mod tests {
         assert_eq!(r, "gimple.bytes_at(W, b, 8)");
         // no write: nothing to resolve
         assert!(read(&mut env, &RANGE, r#"gimple.bytes_at(fn_update(M, "bytes", X), b, 8)"#).is_err());
+    }
+
+    #[test]
+    fn past_the_apart_writes_up_to_an_undecided_one() {
+        let mut env = env();
+        // a apart from the read, c not decided: the read of the memory at c's write
+        let ps = ["int_le(0, b)", "int_le(int_add(b, 8), 18446744073709551616)", "int_le(0, a)", "int_le(int_add(a, 8), b)", "int_le(0, c)", "int_le(int_add(c, 8), 18446744073709551616)"];
+        let t = r#"gimple.bytes_at(fn_update(M, "bytes", x86_64_linux.store_le(x86_64_linux.store_le(X, c, 8, d), a, 8, v)), b, 8)"#;
+        let r = read(&mut env, &ps, t).unwrap();
+        assert_eq!(r, r#"gimple.bytes_at(fn_update(M, "bytes", x86_64_linux.store_le(X, c, 8, d)), b, 8)"#);
+        // the first write itself undecided: no step, an error
+        let t1 = r#"gimple.bytes_at(fn_update(M, "bytes", x86_64_linux.store_le(X, c, 8, d)), b, 8)"#;
+        assert!(read(&mut env, &ps, t1).is_err());
+    }
+
+    #[test]
+    fn a_byte_through_writes() {
+        let mut env = env();
+        let ps = ["b in bits(64)", "int_le(0, a)", "int_le(int_add(a, 8), b)", "int_le(0, c)", "int_le(int_add(c, 8), 18446744073709551616)"];
+        // past the apart write, then up to the undecided one
+        let t = r#"app(app(fn_update(M, "bytes", x86_64_linux.store_le(x86_64_linux.store_le(X, c, 8, d), a, 8, v)), "bytes"), b)"#;
+        assert_eq!(read(&mut env, &ps, t).unwrap(), r#"app(app(fn_update(M, "bytes", x86_64_linux.store_le(X, c, 8, d)), "bytes"), b)"#);
+        // inside a write: its digit
+        let pin = ["b in bits(64)", "int_le(0, a)", "int_le(a, b)", "int_lt(b, int_add(a, 8))", "int_le(int_add(a, 8), 18446744073709551616)"];
+        let t2 = r#"app(app(fn_update(M, "bytes", x86_64_linux.store_le(X, a, 8, v)), "bytes"), b)"#;
+        assert_eq!(read(&mut env, &pin, t2).unwrap(), "bits_of_int(8, int_div(v, int_pow(256, int_sub(b, a))))");
+        // the address not in bits(64): no read
+        let t3 = r#"app(app(fn_update(M, "bytes", x86_64_linux.store_le(X, a, 8, v)), "bytes"), k)"#;
+        assert!(read(&mut env, &pin, t3).is_err());
     }
 
     #[test]

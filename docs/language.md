@@ -681,8 +681,18 @@ read hits is decided by a fixed algorithm.
   B it does not know (the read is then of `fn_update(M, "bytes", B)`).
   For each it tests, by `arith` on the facts given: apart (past it), the
   same place and size (its value), the read inside it (its digits); else
-  it stops, naming the write. A read of a size not a numeral passes apart
-  writes only. A word's value is then cleaned back from its digits.
+  it stops there -- the read of the memory at that write, when writes
+  were passed (two memories written alike compare equal there), else an
+  error naming the write. A read of a size not a numeral passes apart
+  writes only. A byte `M.bytes[x]` (x in bits(64)) is read the same way,
+  as one byte. A word's value is then cleaned back from its digits.
+- Each `arith` test takes the facts about its terms, first without those
+  that branch (disjunctions, implications, negations: case splits on
+  facts the test may not need), then with them, then the facts connected
+  to them.
+- Equations among the facts given whose left side occurs in the goal
+  (`V3 = wr64(V2, ..)` of a case, `bits_of_int(64, x) = x`) are
+  substituted into the goal first.
 - In a `mem` goal a read that does not resolve (inside a value written,
   or of bytes not known) is left as it is: the goal may not need it (a
   fact about it may), else the failure lists such reads and why.

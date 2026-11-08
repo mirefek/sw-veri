@@ -28,6 +28,7 @@ extensions have no such switch.)
 Every change is timed: `SLC_TIMES=1 scripts/check.sh --no-cache` for
 each file's time and memory, `C1_STATS=1` for each refinement's,
 `SLC_RECHECK=PATH` to check one file again with the rest cached,
+`SLC_SLOW_BY=MS` for each `by` step taking MS ms or more,
 scripts/sample-stacks.py (with check.sh's `SLC_WRAP`) for where the time
 goes.
 
@@ -108,21 +109,23 @@ The plan, in order (each step measured: speed comes first):
 - Variables reference counted (a name and arity freed with its last
   term, identity by pointer, not a table index). Now a proof's variables
   are dropped only at its end (`Env::begin_locals` .. `end_locals`).
-- An uncached check is about 260 s (run-to-run noise about 10 s), at
+- An uncached check is about 220 s (run-to-run noise about 10 s), at
   most 0.45 GB (was 1407 s, 2.3 GB, before hash-consing, the DAG-aware
   walks and memos, the projection chains, the intern table's own-entry
   removal, the cheap symbol lookups, simp's conditional rules under
-  binders by head, x86.step_one). Largest: cfg.core 54 s, c1.core 33 s,
-  the `steps` line 35 s. alloc_group's refinement is 28 s: 84,000
+  binders by head, x86.step_one, arith's facts without the branching ones
+  first). Largest: cfg.core 39 s, c1.core 31 s, the `steps` line 35 s. alloc_group's refinement is 28 s: 84,000
   `g.low_rw` rewrites and 50,000 `g.ref_low` compositions, each a lemma
   instance over the whole lower term (`C1_RULES=1` counts them). Profile
   with `SLC_CACHE_AS=any GREF_ONLY=alloc_group_ref C1_KEEP_GOING=1
   C1_PHASES=1 C1_PROF=1 C1_RULES=1 SLC_RECHECK=machine/cfg.core
   scripts/check.sh` (about 40 s).
-- Reads through stores by hand: about 30 left (`have r := apply(mp.rd_at8[..])`
-  unstated, or inside `subst({y. ..}, ..)` case constructions:
-  fun/lists.core, set_size.core, nontrivial_free.core, enframe.core),
-  where a stated `.. by mem()` reads them. The C1 engine's lemma premises
+- Reads through stores by hand (`mp.st_out`, `mp.w64_out`, `mp.rd_out`,
+  `mp.rd_at8` chains): about 50 left (lists.core's later lemmas,
+  alloc_meta.core's `eb`, free_group.core, libc_free.core, set_size.core,
+  try_avail.core, rotation.core, context.core, test/helpers.core), where a
+  stated `.. by mem(..)` reads them -- bytes `B[y]` of a bare store chain
+  (not in a memory) are not read by `mem` yet. The C1 engine's lemma premises
   by `symex` (`simp0()`, `simp_l()`: about 450,000 calls in c1.core,
   45,000 after the memo, api.rs, 11 s in all): spread over small shapes
   (`k in dom(fn_update(..))`, record equations, word memberships);

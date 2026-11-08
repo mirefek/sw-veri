@@ -590,6 +590,44 @@ fn flip_seq(env: &mut Env, lg: &Logic, s: &Seq) -> KResult<Seq> {
     }
 }
 
+/// x a subterm of t (a shared node visited once)
+fn term_occurs(x: &Term, t: &Term) -> bool {
+    fn go(x: &Term, t: &Term, seen: &mut sl_kernel::term::PtrSet<usize>) -> bool {
+        if t == x {
+            return true;
+        }
+        if t.shared() && !seen.insert(t.ptr_id()) {
+            return false;
+        }
+        match t.node() {
+            Node::App(_, a) | Node::Var(_, a) => a.iter().any(|y| go(x, y, seen)),
+            _ => false,
+        }
+    }
+    go(x, t, &mut Default::default())
+}
+
+/// t with each occurrence of the closed term `from` replaced by `to` (a
+/// shared node's result made once)
+fn replace_term(t: &Term, from: &Term, to: &Term) -> Term {
+    fn go(t: &Term, from: &Term, to: &Term, memo: &mut sl_kernel::term::PtrMap<usize, Term>) -> Term {
+        if t == from {
+            return to.clone();
+        }
+        let (Node::App(_, a) | Node::Var(_, a)) = t.node() else { return t.clone() };
+        if a.is_empty() {
+            return t.clone();
+        }
+        if let Some(r) = memo.get(&t.ptr_id()) {
+            return r.clone();
+        }
+        let r = t.with_args(a.iter().map(|y| go(y, from, to, memo)).collect());
+        memo.insert(t.ptr_id(), r.clone());
+        r
+    }
+    go(t, from, to, &mut Default::default())
+}
+
 fn nes_of(t: &Term, ne: Option<SymId>, out: &mut Vec<Term>) {
     nes_in(t, ne, out, &mut Default::default())
 }
@@ -1573,6 +1611,21 @@ impl State {
     /// A proof of `goal`: rules that need the goal get it, and pass the
     /// goals of their premises on to goal-directed premises.
     fn by(&self, env: &mut Env, lg: &Logic, goal: &Term, pe: &PE) -> KResult<Seq> {
+        // (SLC_SLOW_BY=ms: the rules taking longer printed, a debug aid)
+        thread_local!(static SLOW_BY: Option<u128> = std::env::var("SLC_SLOW_BY").ok().and_then(|v| v.parse().ok()));
+        let Some(ms) = SLOW_BY.with(|s| *s) else { return self.by_1(env, lg, goal, pe) };
+        let t0 = std::time::Instant::now();
+        let r = self.by_1(env, lg, goal, pe);
+        let dt = t0.elapsed().as_millis();
+        if dt >= ms {
+            if let PE::Rule(name, _) = pe {
+                eprintln!("slow by: {dt} ms {name}{} `{}`", if r.is_ok() { "" } else { " (failed)" }, Printer::new(env).short(goal));
+            }
+        }
+        r
+    }
+
+    fn by_1(&self, env: &mut Env, lg: &Logic, goal: &Term, pe: &PE) -> KResult<Seq> {
         let PE::Rule(name, args) = pe else {
             // a plain fact: check it against the goal
             let s = self.eval(env, lg, pe)?;
@@ -1650,6 +1703,33 @@ impl State {
             "mem" => {
                 let ps = self.proofs(env, lg, args)?;
                 let ps = with_aliases(env, split_conj(env, ps)?);
+                // (an equation given whose left side is in the goal -- a
+                // memory by a case, `V3 = wr64(V2, ..)` -- substituted first;
+                // the result rewritten back to the goal exactly)
+                let mut goals = vec![goal.clone()];
+                let mut eqs = Vec::new();
+                for p in &ps {
+                    if let Node::App(e, a) = p.concl().node() {
+                        if *e == env.builtins.eq && matches!(a[0].node(), Node::App(_, x) if !x.is_empty()) && term_occurs(&a[0], goals.last().unwrap()) {
+                            let g2 = replace_term(goals.last().unwrap(), &a[0], &a[1]);
+                            if !term_occurs(&a[0], &g2) {
+                                goals.push(g2);
+                                eqs.push(p.clone());
+                            }
+                        }
+                    }
+                }
+                // (failing so: the goal as stated -- a fact given may be about
+                // the term substituted, `rd: bytes_at(V, P, 8) = ..` with `P = A`)
+                if !eqs.is_empty() {
+                    let g2 = goals.last().unwrap().clone();
+                    if let Ok(mut s) = self.by(env, lg, &g2, &PE::Rule("mem".into(), args.to_vec())) {
+                        for (i, eq) in eqs.iter().enumerate().rev() {
+                            s = Seq::rewrite_to(env, &Seq::sym(env, eq)?, &s, &goals[i])?;
+                        }
+                        return Ok(s);
+                    }
+                }
                 // (`mem()`: no facts to try alone)
                 let first = if ps.is_empty() { Err(KernelError("mem: no facts given".into())) } else { self.mem_goal(env, lg, goal, &ps) };
                 match first {
@@ -1664,7 +1744,7 @@ impl State {
                             return Err(e);
                         }
                         let all = with_aliases(env, split_conj(env, ps.iter().cloned().chain(more).collect())?);
-                        self.mem_goal(env, lg, goal, &all).map_err(|_| e)
+                        self.mem_goal(env, lg, goal, &all).map_err(|e2| KernelError(format!("{}\n  and with the block's facts about the goal's terms: {}", e.0, e2.0)))
                     }
                 }
             }

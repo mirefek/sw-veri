@@ -111,9 +111,14 @@ impl State {
         let mut left: Vec<Term> = Vec::new();
         for _ in 0..1000 {
             let rhs = rhs_of(env, e.concl());
+            let written = |m: &Term| matches!(m.node(), Node::App(h, _) if Some(*h) == fn_update) && !bare(m);
             let Some(u) = find(env, &rhs, &|x: &Term| match x.node() {
-                Node::App(f, a) if Some(*f) == bytes_at && a.len() == 3 => {
-                    !left.contains(x) && matches!(a[0].node(), Node::App(h, _) if Some(*h) == fn_update) && !bare(&a[0])
+                Node::App(f, a) if Some(*f) == bytes_at && a.len() == 3 => !left.contains(x) && written(&a[0]),
+                // (a byte M.bytes[y])
+                Node::App(f, a) if Some(*f) == app && a.len() == 2 => {
+                    !left.contains(x)
+                        && matches!(a[0].node(), Node::App(f2, c) if Some(*f2) == app && c.len() == 2
+                            && matches!(c[1].node(), Node::Bytes(k) if &**k == b"bytes") && written(&c[0]))
                 }
                 _ => false,
             }) else {
@@ -293,17 +298,21 @@ fn rewrite_rhs(env: &Env, r: &Seq, e: &Seq) -> KResult<Seq> {
 }
 
 /// `goal` by arith from the facts mentioning its terms
-/// (`Logic::arith_relevant`: the narrow choice, else the wide one)
+/// (`Logic::arith_tiers`: the narrow choice without its branching facts,
+/// the narrow choice, the wide one; the narrow choice's error reported)
 pub(crate) fn rel_arith(env: &Env, lg: &Logic, facts: &[&Seq], goal: &Term) -> KResult<Seq> {
     let cs: Vec<Term> = facts.iter().map(|f| f.concl().clone()).collect();
-    let narrow: Vec<&Seq> = lg.arith_relevant(env, &cs, goal, false).into_iter().map(|i| facts[i]).collect();
-    Seq::arith(env, lg, &narrow, goal).or_else(|e| {
-        let wide: Vec<&Seq> = lg.arith_relevant(env, &cs, goal, true).into_iter().map(|i| facts[i]).collect();
-        if wide.len() == narrow.len() {
-            return Err(e);
+    let (tiers, at) = lg.arith_tiers(env, &cs, goal);
+    let mut narrow_err = None;
+    for (k, sel) in tiers.into_iter().enumerate() {
+        let ps: Vec<&Seq> = sel.into_iter().map(|i| facts[i]).collect();
+        match Seq::arith(env, lg, &ps, goal) {
+            Ok(s) => return Ok(s),
+            Err(e) if k == at => narrow_err = Some(e),
+            Err(_) => {}
         }
-        Seq::arith(env, lg, &wide, goal).map_err(|_| e)
-    })
+    }
+    Err(narrow_err.expect("the narrow choice is tried"))
 }
 
 /// whether t mentions the symbol f
