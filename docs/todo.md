@@ -126,6 +126,17 @@ The plan, in order (each step measured: speed comes first):
   alloc_meta.core, alloc_slot.core, a value just written read back in
   lists.core, nontrivial_free.core, set_size.core, try_avail.core), where
   a stated `.. by mem(..)` reads them.
+- Proofs short: passages repeated across files factored into lemmas
+  (/tmp-free: a script counting repeated line windows finds them). Left,
+  by count: the call rules' premise bundles in translate_call /
+  translate_nobrk / translate_scall / translate_stop_call (about 25
+  statements each repeating the same 5-8 premise lines: an abbreviation
+  for the bundle), the instruction rules' `gR` / `he` openings in
+  translate*.core (about 70), the startup proofs' `fix regs s o / assume
+  h1 h2 h3 hr` contract openings. A slow step is found by
+  `SLC_SLOW_BY=100`: an `arith` on a disjunction of guarded cases
+  (`ui.TAB(i, p)`, literal tests) is fast stated on the plain cases, the
+  guarded form by `simp`.
 - The C1 engine's lemma premises by `symex` (`simp0()`, `simp_l()`,
   api.rs; c1.core about 37,000 after the memo): a literal key's `k in
   dom(fn_update(..))` and `fn_update(..)[k] = v` now by the update lemmas
