@@ -648,9 +648,7 @@ impl State {
                     if pv.contains(v) {
                         continue;
                     }
-                    let mut vs = Vec::new();
-                    sr.concl().vars(&mut vs);
-                    if vs.contains(v) {
+                    if sr.concl().has_var(*v) {
                         sr = Seq::gen(env, lg, &sr, *v)?;
                     }
                 }

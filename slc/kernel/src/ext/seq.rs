@@ -374,9 +374,7 @@ impl Seq {
             return err("generalization over a variable with parameters");
         }
         for h in &s.hyps {
-            let mut vs = Vec::new();
-            h.vars(&mut vs);
-            if vs.contains(&v) {
+            if h.has_var(v) {
                 return err(format!("cannot generalize over `{}`: it occurs in a hypothesis", env.var(v).name));
             }
         }

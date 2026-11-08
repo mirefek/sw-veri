@@ -313,6 +313,10 @@ fn unfolding_needs_the_named_definitions() {
     assert!(env_of(ok).is_ok());
     // without naming `not`, the statements differ
     rejected("lemma i: false -> false\ntheorem bad: !false\nproof\n  show by defs(i, true)\nqed\n", "differ after unfolding");
+    // a goal rule's facts unfolded too, when the goal alone is not enough
+    let facts = "def lo(a) := int_lt(a, 5)\ntheorem t(x): lo(x) -> int_lt(x, 7)\nproof\n  assume h\n  show by defs(arith(h), lo)\nqed\n";
+    assert!(env_of(facts).is_ok(), "{:?}", env_of(facts).err());
+    assert!(env_of(&facts.replace("defs(arith(h), lo)", "arith(h)")).is_err());
 }
 
 #[test]

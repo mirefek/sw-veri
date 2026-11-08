@@ -96,9 +96,10 @@ The plan, in order (each step measured: speed comes first):
     semantics by `symex` for its own addressing form. Instead: one lemma
     per instruction shape with the effective address a parameter, each
     form by its address equation (as `tr.rsp_bd_ea`);
-  - the step theorems (about 70 ms each, 1069 encodings: about 80 s of
-    the `steps` line's 90 s, after each change of the binary): the
-    decoder's `members` and the `exec_insn` unfolding, per encoding;
+  - the step theorems (1069 encodings: the `steps` line 65 s rechecked,
+    100 s in an uncached check -- why the difference is not known yet),
+    after each change of the binary: mostly `symex` unfolding
+    `exec_insn` per encoding, then the decoder's `members`;
   - the loops' label claims (`lab_all`): each label's claim is the whole
     premise instantiated there, about 1.5 s per label in alloc_group's
     56, though only the heads' and exits' are not vacuous. Split on the
@@ -106,14 +107,19 @@ The plan, in order (each step measured: speed comes first):
 - Variables reference counted (a name and arity freed with its last
   term, identity by pointer, not a table index). Now a proof's variables
   are dropped only at its end (`Env::begin_locals` .. `end_locals`).
-- An uncached check is 532 s, at most 0.9 GB (was 1407 s, 2.3 GB, before
-  hash-consing and the DAG-aware walks). The refinements
-  (proofs/mallocng/machine/cfg.core, 160 s) are still the largest part:
-  alloc_group's alone 110 s, then
-  __libc_malloc_impl's, __malloc_alloc_meta's and try_avail's. Their
-  remaining time is in the walk's lemma instances (`ev inst`) and
-  goal-directed steps (`evp`): profile again (scripts/sample-stacks.py,
-  scripts/sample-report.py) after the label claims below.
+- An uncached check is 424 s, at most 0.6 GB (was 1407 s, 2.3 GB, before
+  hash-consing, the DAG-aware walks, the projection chains and the
+  intern table's own-entry removal). The refinements
+  (proofs/mallocng/machine/cfg.core, 83 s) are still a large part:
+  alloc_group's 60 s, of it point 7's walk 10 s (a branch chain of 14
+  blocks, each visit through the CFG's `bb < k` dispatch), the labels'
+  ways 6 s, the rests 6 s (`symex` on whole bodies). Profile with
+  `SLC_CACHE_AS=any GREF_ONLY=alloc_group_ref C1_KEEP_GOING=1
+  C1_PHASES=1 C1_PROF=1 SLC_RECHECK=machine/cfg.core scripts/check.sh`
+  (about 90 s).
+- proofs/mallocng/fun/alloc_group.core: a proof with 34.8 million
+  variables (`SLC_TIMES`): find which, and why (a search's fresh
+  variables?).
 - The elaborated layers (gimple.core, generated definitions) kept in
   memory, elaborated in the checker from the .sl files, as the `steps`
   and `text` lines make their facts. The readable GIMPLE (cfg*.sl) stays
@@ -144,8 +150,6 @@ The plan, in order (each step measured: speed comes first):
   - its names: the continuation first, then the call's facts. A wrong
     guess shows up only as "names not used" or an odd destructuring
     error. The message could print which name got what.
-- `defs(..)` unfolds the goal only; a fact needs `expand` first (ctx_free
-  in `mp.co_unt`): `defs` could unfold the facts it is given too.
 - `ex_intro({..})` inside `taut(..)` is misparsed as a binder (hit again
   in `mp.ta_q` and `gc.regs_one`: the inner witness needs its own
   `have`).

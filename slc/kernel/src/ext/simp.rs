@@ -5377,9 +5377,7 @@ fn mentions_sym(t: &Term, f: Option<SymId>) -> bool {
 }
 
 fn has_var(t: &Term, v: crate::term::VarId) -> bool {
-    let mut vs = Vec::new();
-    t.vars(&mut vs);
-    vs.contains(&v)
+    t.has_var(v)
 }
 
 /// t with the variable v made the bound variable of a new binder around it.

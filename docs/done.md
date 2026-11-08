@@ -141,6 +141,14 @@ For a first reading, docs/overview.md is the better start. The sections:
   alloc_meta, 18 lines); callers take the generated `_calls_linked` /
   `_call_linked` facts; about 820 lines of hand-written wrappers gone, each
   line checked in milliseconds.
+- **Usability and speed (first round).** `simp` is the rewriter (formerly
+  `rsimp`, untrusted, a fixed sequence: conjuncts, typing, rewriting,
+  taut / arith), `symex` the path simplifier for program runs (formerly
+  `simp`); 14,000 calls moved to `simp`. `defs(R(p..), D..)` unfolds R's
+  facts too when the goal alone is not enough. The uncached check 1407 s,
+  2.3 GB -> 424 s, 0.6 GB: hash-consed terms whose table entries go with
+  their nodes, DAG-aware walks, a tuple's projection chains reduced as a
+  whole in the refinement walk, cheap variable tests.
 
 ## The levels
 

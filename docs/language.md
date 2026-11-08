@@ -761,7 +761,7 @@ premise they stand for.
 | `simp(e.., D.., [only])` | left-to-right rewriting to `true` with the facts, definitions and registered `simp` rules; a rule's premise that is a membership by `types`, `!(a = b)` of distinct literals by their bytes or numerals |
 | `types(p..)` | a membership `t in T` (or `k in dom(r)`, `is_fun(r)`) by the forms of t and T, from the facts given and the block's: universes by t's constructors and literals, a record's fields from its type, updates of a typed record, function values, word operations by their width, numbers by arith over the atoms' inferred sets; determined, each step a lemma (slc/proof/src/types.rs) |
 | `symex(p.., keep(P..), {l0 l. I}, {l. m})` | the path simplifier (symbolic execution), below |
-| `defs(p, D..)` | p proves the goal with D unfolded |
+| `defs(p, D..)` | p proves the goal with D unfolded; a goal rule p failing so, again with its facts unfolded too (`defs(arith(h), D)` for `arith(expand(h, D))`) |
 | `ex_intro({w}.., p)` | witnesses for `ex` |
 | `disj({k}, p)` | the goal's k-th disjunct (as written, from 1) by p |
 | `spec_ret({w}.., f..)` | a contract body's instance: its letins, each choice and `ex` by the next witness, each property, equation and conjunct by taut, else symex, from the facts; a goal `runs(P, s, o)` (P a defined `mkprog`): its relation so, `pair(s, o) in univ(1)` from the facts |

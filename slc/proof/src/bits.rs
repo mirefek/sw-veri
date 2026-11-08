@@ -497,7 +497,7 @@ impl State {
             // the goal at c, by R; then at k = c
             let gc = body.instantiate_params(&[nat(c)], &env.binders_fn());
             // (R's terms at the case: k's name read as c)
-            let kname = env.var(*v).name.clone();
+            let kname = env.var(*v).name.to_string();
             let rc = pe_at(r, &kname, &c.to_string());
             let pc = self.by(env, lg, &gc, &rc).map_err(|e| KernelError(format!("cases: the case {}: {}", c, e.0)))?;
             let eq = Term::app(env.builtins.eq, vec![nat(c), k.clone()]);

@@ -72,6 +72,12 @@ struct Inner {
     bind: Option<Rc<str>>,
 }
 
+impl Drop for Inner {
+    fn drop(&mut self) {
+        intern::remove(self);
+    }
+}
+
 impl PartialEq for Term {
     fn eq(&self, other: &Term) -> bool {
         Rc::ptr_eq(&self.0, &other.0) || (self.0.hash == other.0.hash && self.0.node == other.0.node)
@@ -339,6 +345,22 @@ impl Term {
         }
     }
 
+    /// v in it (stopping at the first occurrence; a part whose variable
+    /// bits rule v out skipped, a shared node visited once)
+    pub fn has_var(&self, v: VarId) -> bool {
+        fn go(t: &Term, v: VarId, seen: &mut PtrSet<usize>) -> bool {
+            if !t.may_contain_var(v) || (t.shared() && !seen.insert(t.ptr_id())) {
+                return false;
+            }
+            match t.node() {
+                Node::Var(w, args) => *w == v || args.iter().any(|a| go(a, v, seen)),
+                Node::App(_, args) => args.iter().any(|a| go(a, v, seen)),
+                _ => false,
+            }
+        }
+        go(self, v, &mut PtrSet::default())
+    }
+
     /// v possibly in it (false: certainly not)
     pub fn may_contain_var(&self, v: VarId) -> bool {
         self.0.vbits & (1u64 << (v % 64)) != 0
@@ -377,8 +399,8 @@ impl Term {
 /// mostly one node, it is mostly a pointer compare, and a node's children
 /// compare by pointer. Not part of the logic: a term is the same term
 /// either way. The table holds weak references (a term lives as long as
-/// its users keep it); the dead ones are dropped when the table has
-/// doubled since the last purge.
+/// its users keep it); a node's entry is removed when the node is dropped
+/// (`Drop for Inner`), so the table holds live nodes only.
 mod intern {
     use super::{Inner, Node, Term};
     use std::cell::RefCell;
@@ -405,8 +427,6 @@ mod intern {
     #[derive(Default)]
     struct Table {
         map: HashMap<u64, Weak<Inner>, std::hash::BuildHasherDefault<Id>>,
-        /// the entries at the last purge
-        at_purge: usize,
     }
 
     thread_local! {
@@ -449,13 +469,23 @@ mod intern {
         T.with(|t| {
             let mut t = t.borrow_mut();
             t.map.insert(key(term.0.hash, &term.0.node), Rc::downgrade(&term.0));
-            // (the dead entries dropped when the table has grown 4 times
-            // since the last purge: a weak entry keeps its node's
-            // allocation)
-            if t.map.len() > 4 * t.at_purge.max(1 << 16) {
-                t.map.retain(|_, w| w.strong_count() > 0);
-                t.at_purge = t.map.len();
-            }
         })
+    }
+
+    /// a node being dropped: its entry, if the entry is its own (a labelled
+    /// copy has none; a colliding later node may have taken the key).
+    /// Dropping the entry's weak reference here does not free the node's
+    /// allocation: its `Rc` still holds the implicit weak one. (The table
+    /// busy -- not met: no node dies while it is borrowed -- or gone at the
+    /// thread's end: the entry left, a dead weak reference `find` skips.)
+    pub(super) fn remove(inner: &Inner) {
+        let k = key(inner.hash, &inner.node);
+        let _ = T.try_with(|t| {
+            if let Ok(mut t) = t.try_borrow_mut() {
+                if t.map.get(&k).is_some_and(|w| std::ptr::eq(w.as_ptr(), inner)) {
+                    t.map.remove(&k);
+                }
+            }
+        });
     }
 }

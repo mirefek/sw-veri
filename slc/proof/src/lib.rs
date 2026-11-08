@@ -222,9 +222,7 @@ fn close(env: &mut Env, lg: &Logic, st: State) -> KResult<Seq> {
                 Frame::Assume(t) => s.discharge(env, t)?,
                 // generalize over x only if it still occurs (a `gen` step may have done it)
                 Frame::Fix(v) => {
-                    let mut vs = Vec::new();
-                    s.concl().vars(&mut vs);
-                    if vs.contains(v) { Seq::gen(env, lg, &s, *v)? } else { s }
+                    if s.concl().has_var(*v) { Seq::gen(env, lg, &s, *v)? } else { s }
                 }
                 // ∃-elimination: ψ(x) ⊢ Q becomes ψ(c) -> Q with c the choice
                 // witness of P, then modus ponens with `witness(P)`
@@ -640,9 +638,7 @@ fn sym_facts(env: &Env, ps: &[Seq], goal: &Term) -> KResult<Vec<Seq>> {
 }
 
 fn has_var(t: &Term, v: VarId) -> bool {
-    let mut vs = Vec::new();
-    t.vars(&mut vs);
-    vs.contains(&v)
+    t.has_var(v)
 }
 
 /// Steps with their line numbers (relative to the start of the proof text)
@@ -1934,7 +1930,28 @@ impl State {
                 let occ = self.occs(&args[1.min(args.len())..]);
                 let unfolded = self.unfold_sel(env, goal, &syms, &occ)?;
                 let s = match p {
-                    PE::Rule(n, _) if GOAL_RULES.contains(&n.as_str()) => self.by(env, lg, &unfolded, p)?,
+                    // (a goal rule: its facts as given; failing that, its
+                    // facts unfolded too -- `defs(taut(h), D)` for
+                    // `taut(expand(h, D))`)
+                    PE::Rule(n, a) if GOAL_RULES.contains(&n.as_str()) => match self.by(env, lg, &unfolded, p) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            let ds = &args[1.min(args.len())..];
+                            // (a fact: not a definition's name, a rule's
+                            // option or an inner goal rule)
+                            let fact = |q: &PE| match q {
+                                PE::Ref(r) => !env.sym_by_name.contains_key(r.as_str()) && r != "only" && r != "unroll",
+                                PE::Rule(r, _) => !GOAL_RULES.contains(&r.as_str()) && !["keep", "lets", "only"].contains(&r.as_str()),
+                                _ => true,
+                            };
+                            let wrap = |x: &Arg| match x {
+                                Arg::Proof(q) if fact(q) => Arg::Proof(PE::Rule("expand".into(), std::iter::once(x.clone()).chain(ds.iter().cloned()).collect())),
+                                _ => x.clone(),
+                            };
+                            let p2 = PE::Rule(n.clone(), a.iter().map(wrap).collect());
+                            self.by(env, lg, &unfolded, &p2).map_err(|_| e)?
+                        }
+                    },
                     PE::Rule(n, a) if n == "apply" => self.apply_to(env, lg, a, Some(&unfolded))?,
                     _ => {
                         let s = self.eval(env, lg, p)?;
