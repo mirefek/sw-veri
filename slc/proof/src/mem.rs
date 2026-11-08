@@ -114,11 +114,14 @@ impl State {
             let written = |m: &Term| matches!(m.node(), Node::App(h, _) if Some(*h) == fn_update) && !bare(m);
             let Some(u) = find(env, &rhs, &|x: &Term| match x.node() {
                 Node::App(f, a) if Some(*f) == bytes_at && a.len() == 3 => !left.contains(x) && written(&a[0]),
-                // (a byte M.bytes[y])
+                // (a byte M.bytes[y], or of bare bytes store_le(..)[y])
                 Node::App(f, a) if Some(*f) == app && a.len() == 2 => {
                     !left.contains(x)
-                        && matches!(a[0].node(), Node::App(f2, c) if Some(*f2) == app && c.len() == 2
-                            && matches!(c[1].node(), Node::Bytes(k) if &**k == b"bytes") && written(&c[0]))
+                        && match a[0].node() {
+                            Node::App(f2, c) if Some(*f2) == app && c.len() == 2 => matches!(c[1].node(), Node::Bytes(k) if &**k == b"bytes") && written(&c[0]),
+                            Node::App(f2, _) => Some(*f2) == store_le,
+                            _ => false,
+                        }
                 }
                 _ => false,
             }) else {

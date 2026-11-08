@@ -30,7 +30,9 @@
 //! store_le's `fn_build` applies at b), is read the same as one byte (m =
 //! 1): past apart writes, inside one `bits_of_int(8, int_div(v,
 //! int_pow(256, int_sub(b, a))))` (`int_pow(256, 0)` if b is a), the rest
-//! `app(app(M', "bytes"), b)`. A memory or bytes of
+//! `app(app(M', "bytes"), b)`; a byte of bare bytes `app(store_le(X, ..),
+//! b)` likewise from X's writes, the rest `app(X', b)` (or a memory's byte,
+//! when the writes reach `app(W, "bytes")`). A memory or bytes of
 //! another form end the walk: the read is then `gimple.bytes_at` of that
 //! memory (of `fn_update(M', "bytes", X')` for bytes X'). The facts given to
 //! each `arith` check are the premises connected to its terms (a choice of
@@ -223,14 +225,18 @@ impl Logic {
         let pr = Printer::new(env);
         let is_bytes_key = |k: &Term| matches!(k.node(), Node::Bytes(k) if &**k == b"bytes");
         let nat = |v: u128| Term::nat(Nat::from_u128(v));
-        // (a byte `app(app(M, "bytes"), b)`: read as one byte, b in bits(64))
-        let (mut m_t, b, m, byte) = match t.node() {
-            Node::App(f, a) if *f == bytes_at && a.len() == 3 => (a[0].clone(), a[1].clone(), a[2].clone(), false),
+        // (a byte `app(app(M, "bytes"), b)`: read as one byte, b in bits(64);
+        // a byte of bare bytes `app(store_le(X, ..), b)`: the same, from X's
+        // writes -- `bare` the bytes)
+        let not_read = || err(format!("mem_read: not `gimple.bytes_at(M, b, m)`, `M.bytes[b]` or `store_le(..)[b]`: {}", pr.short(t)));
+        let (mut m_t, b, m, byte, bare) = match t.node() {
+            Node::App(f, a) if *f == bytes_at && a.len() == 3 => (a[0].clone(), a[1].clone(), a[2].clone(), false, None),
             Node::App(f, a) if *f == app && a.len() == 2 => match a[0].node() {
-                Node::App(f2, c) if *f2 == app && c.len() == 2 && is_bytes_key(&c[1]) => (c[0].clone(), a[1].clone(), nat(1), true),
-                _ => return err(format!("mem_read: not `gimple.bytes_at(M, b, m)` or `M.bytes[b]`: {}", pr.short(t))),
+                Node::App(f2, c) if *f2 == app && c.len() == 2 && is_bytes_key(&c[1]) => (c[0].clone(), a[1].clone(), nat(1), true, None),
+                Node::App(f2, _) if *f2 == store_le => (a[0].clone(), a[1].clone(), nat(1), true, Some(a[0].clone())),
+                _ => return not_read(),
             },
-            _ => return err(format!("mem_read: not `gimple.bytes_at(M, b, m)` or `M.bytes[b]`: {}", pr.short(t))),
+            _ => return not_read(),
         };
         let Some(bits_of_int) = g("bits_of_int") else { return err("mem_read: needs bits_of_int") };
         if byte {
@@ -254,8 +260,11 @@ impl Logic {
             return err(format!("mem_read: the read's range not shown in the address space: 0 <= {0}, {0} + {1} <= 2^64", pr.short(&b), pr.short(&m)));
         }
         let mut steps = 0;
-        // in a memory's bytes: (the memory updated, the key, the bytes X)
-        let mut cur: Option<(Term, Term, Term)> = None;
+        // in a memory's bytes: (the memory updated, the key, the bytes X);
+        // bare bytes: in them from the start, in no memory (`in_bare` until
+        // their writes reach a memory's bytes)
+        let mut cur: Option<(Term, Term, Term)> = bare.map(|x| (zero.clone(), Term::bytes(b"bytes"), x));
+        let mut in_bare = cur.is_some();
         loop {
             let Some((inner, key, x)) = cur.clone() else {
                 // a memory: past its other fields' updates, into its bytes
@@ -279,6 +288,7 @@ impl Logic {
             if *s == app && sa.len() == 2 && is_bytes_key(&sa[1]) {
                 m_t = sa[0].clone();
                 cur = None;
+                in_bare = false;
                 steps += 1;
                 continue;
             }
@@ -340,15 +350,25 @@ impl Logic {
                 if mn.is_none() { " (the read's size not a numeral: only apart writes pass)" } else { "" }
             ));
         }
-        // (the rest: a memory, or bytes of another form in their memory)
-        let rest = match cur {
-            Some((inner, key, x)) => Term::app(fn_update, vec![inner, key, x]),
-            None => m_t,
-        };
         if steps == 0 {
-            return err(format!("mem_read: no write to read through in {}", pr.short(&rest)));
+            return err(format!("mem_read: no write to read through in {}", pr.short(t)));
         }
-        let r = if byte { Term::app(app, vec![Term::app(app, vec![rest, Term::bytes(b"bytes")]), b]) } else { Term::app(bytes_at, vec![rest, b, m]) };
+        // (the rest: a memory, or bytes of another form in their memory, or
+        // the bare bytes left)
+        let r = match cur {
+            Some((_, _, x)) if in_bare => Term::app(app, vec![x, b]),
+            cur => {
+                let rest = match cur {
+                    Some((inner, key, x)) => Term::app(fn_update, vec![inner, key, x]),
+                    None => m_t,
+                };
+                if byte {
+                    Term::app(app, vec![Term::app(app, vec![rest, Term::bytes(b"bytes")]), b])
+                } else {
+                    Term::app(bytes_at, vec![rest, b, m])
+                }
+            }
+        };
         Ok(Term::app(env.builtins.eq, vec![t.clone(), r]))
     }
 }
@@ -425,6 +445,14 @@ mod tests {
         // the address not in bits(64): no read
         let t3 = r#"app(app(fn_update(M, "bytes", x86_64_linux.store_le(X, a, 8, v)), "bytes"), k)"#;
         assert!(read(&mut env, &pin, t3).is_err());
+        // a byte of bare bytes: to the bytes under the apart write, or to a
+        // memory's byte
+        let t4 = r#"app(x86_64_linux.store_le(x86_64_linux.store_le(X, c, 8, d), a, 8, v), b)"#;
+        assert_eq!(read(&mut env, &ps, t4).unwrap(), "app(x86_64_linux.store_le(X, c, 8, d), b)");
+        let t5 = r#"app(x86_64_linux.store_le(app(W, "bytes"), a, 8, v), b)"#;
+        assert_eq!(read(&mut env, &ps, t5).unwrap(), r#"app(app(W, "bytes"), b)"#);
+        let t6 = r#"app(x86_64_linux.store_le(X, a, 8, v), b)"#;
+        assert_eq!(read(&mut env, &pin, t6).unwrap(), "bits_of_int(8, int_div(v, int_pow(256, int_sub(b, a))))");
     }
 
     #[test]

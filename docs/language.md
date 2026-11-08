@@ -685,7 +685,7 @@ read hits is decided by a fixed algorithm.
   were passed (two memories written alike compare equal there), else an
   error naming the write. A read of a size not a numeral passes apart
   writes only. A byte `M.bytes[x]` (x in bits(64)) is read the same way,
-  as one byte. A word's value is then cleaned back from its digits.
+  as one byte, and so is a byte of a bare store chain, `store_le(B, ..)[x]`. A word's value is then cleaned back from its digits.
 - Each `arith` test takes the facts about its terms, first without those
   that branch (disjunctions, implications, negations: case splits on
   facts the test may not need), then with them, then the facts connected

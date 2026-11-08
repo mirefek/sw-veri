@@ -120,12 +120,11 @@ The plan, in order (each step measured: speed comes first):
   with `SLC_CACHE_AS=any GREF_ONLY=alloc_group_ref C1_KEEP_GOING=1
   C1_PHASES=1 C1_PROF=1 C1_RULES=1 SLC_RECHECK=machine/cfg.core
   scripts/check.sh` (about 40 s).
-- Reads through stores by hand (`mp.st_out`, `mp.w64_out`, `mp.rd_out`,
-  `mp.rd_at8` chains): about 50 left (lists.core's later lemmas,
-  alloc_meta.core's `eb`, free_group.core, libc_free.core, set_size.core,
-  try_avail.core, rotation.core, context.core, test/helpers.core), where a
-  stated `.. by mem(..)` reads them -- bytes `B[y]` of a bare store chain
-  (not in a memory) are not read by `mem` yet. The C1 engine's lemma premises
+- Reads through stores by hand (`mp.st_out`, `mp.wr32_out`, `mp.rd_at4`
+  ..): about 15 left in fun/ (activate_group.core, alloc_group.core,
+  alloc_meta.core, alloc_slot.core, a value just written read back in
+  lists.core, nontrivial_free.core, set_size.core, try_avail.core), where
+  a stated `.. by mem(..)` reads them. The C1 engine's lemma premises
   by `symex` (`simp0()`, `simp_l()`: about 450,000 calls in c1.core,
   45,000 after the memo, api.rs, 11 s in all): spread over small shapes
   (`k in dom(fn_update(..))`, record equations, word memberships);
