@@ -28,7 +28,7 @@ fn x86_model_facts_check() {
         .output()
         .unwrap();
     let out = String::from_utf8_lossy(&c.stdout);
-    assert!(c.status.success() && out.contains("proofs/x86.core: 0 constants, 0 axioms, 1 definitions, 26 theorems"), "{}{}", out, String::from_utf8_lossy(&c.stderr));
+    assert!(c.status.success() && out.contains("proofs/x86.core: 0 constants, 0 axioms, 1 definitions, 27 theorems"), "{}{}", out, String::from_utf8_lossy(&c.stderr));
 }
 
 /// Loaded code (proofs/x86_code.core): fetched, and kept by every access
