@@ -559,51 +559,64 @@ impl State {
     /// discharged, its other variables generalized again -- an
     /// unconditional equation, applied by `rewrite_under`
     fn under_conditional(&self, env: &mut Env, lg: &Logic, s: &Seq, rs: &Rules, depth: usize) -> KResult<Option<Seq>> {
-        // (the subterms below binders, with how many binders are above them)
-        fn walk(t: &Term, d: u32, bf: &dyn Fn(SymId, usize) -> u32, out: &mut Vec<(Term, u32)>) {
-            if d > 0 && t.loose_depth(bf) > 0 {
+        let conds: Vec<&Rule> = rs.rules.iter().filter(|r| r.prems > 0 && r.kind == Kind::Eq).collect();
+        if conds.is_empty() {
+            return Ok(None);
+        }
+        // (the heads a conditional rule's left side can match; None: any)
+        let heads: Option<Vec<SymId>> = conds.iter().map(|r| match r.lhs.node() {
+            Node::App(f, _) => Some(*f),
+            _ => None,
+        }).collect();
+        // (the subterms below binders reading them, with how many binders
+        // are above them -- of a head some rule has; a shared node at a
+        // depth visited once, a part without bound variables skipped)
+        fn walk(env: &Env, t: &Term, d: u32, heads: &Option<Vec<SymId>>, seen: &mut sl_kernel::term::PtrSet<(usize, u32)>, out: &mut Vec<(Term, u32)>) {
+            if t.bvar_bound() == 0 || (t.shared() && !seen.insert((t.ptr_id(), d))) {
+                return;
+            }
+            let head_ok = match (t.node(), heads) {
+                (_, None) => true,
+                (Node::App(f, _), Some(hs)) => hs.contains(f),
+                _ => false,
+            };
+            if d > 0 && head_ok && env.loose_depth_m(t) > 0 {
                 out.push((t.clone(), d));
             }
             match t.node() {
                 Node::App(s, a) => {
                     for (i, x) in a.iter().enumerate() {
-                        walk(x, d + bf(*s, i), bf, out);
+                        walk(env, x, d + env.syms[*s as usize].binders[i], heads, seen, out);
                     }
                 }
                 Node::Var(_, a) => {
                     for x in a.iter() {
-                        walk(x, d, bf, out);
+                        walk(env, x, d, heads, seen, out);
                     }
                 }
                 _ => {}
             }
         }
         let mut sites = Vec::new();
-        {
-            let bf = env.binders_fn();
-            walk(s.concl(), 0, &bf, &mut sites);
-        }
+        walk(env, s.concl(), 0, &heads, &mut Default::default(), &mut sites);
         if sites.is_empty() {
             return Ok(None);
         }
-        // (each site's bound variables as fresh variables, for matching)
+        // (each site's bound variables as fresh variables, for matching:
+        // one set for all the sites, the deepest site's many)
+        let dmax = sites.iter().map(|(_, d)| *d).max().unwrap_or(0) as usize;
+        let holes: Vec<Term> = (0..dmax).map(|_| Term::var(env.new_var("_b", 0), vec![])).collect();
+        let hole_vars: Vec<VarId> = holes.iter().filter_map(|h| match h.node() {
+            Node::Var(v, _) => Some(*v),
+            _ => None,
+        }).collect();
         let mut opened = Vec::new();
         for (t, d) in &sites {
-            let holes: Vec<Term> = (0..*d).map(|_| Term::var(env.new_var("_b", 0), vec![])).collect();
-            let tc = t.instantiate_params(&holes, &env.binders_fn());
-            let ids: Vec<VarId> = holes.iter().filter_map(|h| match h.node() {
-                Node::Var(v, _) => Some(*v),
-                _ => None,
-            }).collect();
-            opened.push((tc, ids));
+            let d = *d as usize;
+            let tc = env.instantiate_params_m(t, &holes[..d]);
+            opened.push((tc, hole_vars[..d].to_vec()));
         }
-        if !rs.rules.iter().any(|r| r.prems > 0 && r.kind == Kind::Eq) {
-            return Ok(None);
-        }
-        for rule in rs.rules.iter() {
-            if rule.prems == 0 || rule.kind != Kind::Eq {
-                continue;
-            }
+        for rule in conds {
             // (the variables of its premises)
             let mut pv = Vec::new();
             let mut c = rule.seq.concl().clone();

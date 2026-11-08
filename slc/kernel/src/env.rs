@@ -162,6 +162,9 @@ pub struct Env {
     /// the bit rules (`bit_rule NAME`: `H.. -> (bit(P, i) <-> φ)`, a word
     /// P's bit), in order. Hints for the proof checker's `bitwise`.
     pub bit_rules: Vec<String>,
+    /// the typing rules (`type_rule NAME`: `all xs. H.. -> F(..) in T`), in
+    /// order. Hints for the proof checker's `types`.
+    pub type_rules: Vec<String>,
     /// the symbols defined by the canonical prelude: those numbered below
     /// this (`ext::pinned`), if it was loaded
     pub prelude_end: Option<usize>,
@@ -225,6 +228,7 @@ impl Env {
             mem_frames: Vec::new(),
             mem_closures: Vec::new(),
             bit_rules: Vec::new(),
+            type_rules: Vec::new(),
             prelude_end: None,
             pinned: Default::default(),
             stmt_index: HashMap::new(),
@@ -338,6 +342,11 @@ impl Env {
     /// the number of global variables (the next global one's id)
     pub fn globals_len(&self) -> usize {
         self.globals.len()
+    }
+
+    /// the current proof's variables made so far
+    pub fn locals_len(&self) -> usize {
+        self.locals.len()
     }
 
     /// A proof begins: its variables local (nested: the outer one's)

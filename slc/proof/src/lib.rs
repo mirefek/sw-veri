@@ -149,8 +149,11 @@ fn run_block(env: &mut Env, lg: &Logic, mut st: State, text: &str, line: usize, 
     let outer = st.facts.len();
     let mut hidden: Vec<(String, usize)> = Vec::new();
     let mut last_step = String::new();
+    // (SLC_LOCALS=N: the steps making more than N variables, reported)
+    let many = std::env::var("SLC_LOCALS").ok().and_then(|v| v.parse::<usize>().ok());
     for (line_no, body_no, step) in all {
         let t0 = std::time::Instant::now();
+        let locals0 = env.locals_len();
         let before = st.facts.len();
         shadow::set_line(line + line_no);
         res = st.step(env, lg, &step, line + line_no, line + body_no).map_err(|e| {
@@ -168,6 +171,12 @@ fn run_block(env: &mut Env, lg: &Logic, mut st: State, text: &str, line: usize, 
             res = Err(hidden_note(e, &step, &hidden));
         }
         last_step = step.clone();
+        if let Some(n) = many {
+            let made = env.locals_len().saturating_sub(locals0);
+            if made > n {
+                eprintln!("step locals: {} variables, {:.3}s, line {}: {}", made, t0.elapsed().as_secs_f64(), line + line_no, step.chars().take(160).collect::<String>());
+            }
+        }
         if let Some(s) = slow {
             let dt = t0.elapsed().as_secs_f64();
             if dt > s {

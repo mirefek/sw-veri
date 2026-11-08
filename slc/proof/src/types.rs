@@ -60,6 +60,56 @@ pub(crate) struct Typer<'a> {
 
 const MAX_DEPTH: usize = 60;
 
+/// A registered typing rule (`type_rule NAME`): the fact with its leading
+/// `all`s at pattern variables, its premises, its conclusion `t in T`
+#[derive(Clone)]
+struct TRule {
+    seq: Seq,
+    pvars: Vec<VarId>,
+    prems: Vec<Term>,
+    t: Term,
+    set: Term,
+}
+
+/// the registered typing rules, built once while the set stays as it is
+/// (their pattern variables global, as the registered simp rules')
+fn type_rules(env: &mut Env, lg: &Logic) -> Vec<TRule> {
+    let n = env.type_rules.len();
+    if let Some(c) = env.ext_cache.borrow().get("types.rules").and_then(|b| b.downcast_ref::<(usize, Vec<TRule>)>()) {
+        if c.0 == n {
+            return c.1.clone();
+        }
+    }
+    let in_ = env.sym_by_name.get("in").copied();
+    let mut out = Vec::new();
+    for name in env.type_rules.clone() {
+        let Some(mut s) = facts::seq_of(env, &name) else { continue };
+        let mut pvars = Vec::new();
+        while let Node::App(q, _) = s.concl().node() {
+            if *q != lg.all {
+                break;
+            }
+            let bn = s.concl().binder_name().unwrap_or("x").to_string();
+            let v = env.new_pattern_var(&bn, 0);
+            let Ok(s2) = Seq::all_elim(env, lg, &s, &Term::var(v, vec![])) else { break };
+            s = s2;
+            pvars.push(v);
+        }
+        let (mut c, mut prems) = (s.concl().clone(), Vec::new());
+        while let Ok((h, b)) = imp_parts(env, &c) {
+            prems.push(h);
+            c = b;
+        }
+        if let Node::App(f, a) = c.node() {
+            if Some(*f) == in_ {
+                out.push(TRule { seq: s.clone(), pvars, prems, t: a[0].clone(), set: a[1].clone() });
+            }
+        }
+    }
+    env.ext_cache.borrow_mut().insert("types.rules", Box::new((n, out.clone())));
+    out
+}
+
 fn sym(env: &Env, n: &str) -> KResult<SymId> {
     env.sym_by_name.get(n).copied().ok_or_else(|| KernelError(format!("types: `{}` is not defined", n)))
 }
@@ -364,6 +414,10 @@ impl<'a> Typer<'a> {
                 return Some(p);
             }
         }
+        // (a registered typing rule whose conclusion is the goal)
+        if let Some(p) = self.by_rule(env, t, set) {
+            return Some(p);
+        }
         // (t's inferred set: the same)
         if let Some((ty, p)) = self.infer(env, t) {
             if ty == *set {
@@ -386,6 +440,47 @@ impl<'a> Typer<'a> {
         if let Some(name) = self.head_name(env, set) {
             if ["bits", "omega", "int"].contains(&name) || self.is(set, self.s.set_select).is_some() {
                 return self.arith(env, goal);
+            }
+        }
+        None
+    }
+
+    /// `t in set` by the first registered rule (`type_rule`) whose
+    /// conclusion matches it, every pattern variable bound: its premises
+    /// memberships by typing, the others known facts
+    fn by_rule(&mut self, env: &mut Env, t: &Term, set: &Term) -> Option<Seq> {
+        if env.type_rules.is_empty() {
+            return None;
+        }
+        for r in type_rules(env, self.lg) {
+            let mut binds = Vec::new();
+            if !pmatch_at(env, &r.t, t, &r.pvars, &mut binds, 0, false) || !pmatch_at(env, &r.set, set, &r.pvars, &mut binds, 0, false) {
+                continue;
+            }
+            if r.pvars.iter().any(|v| !binds.iter().any(|(w, _)| w == v)) {
+                continue;
+            }
+            let mut s = r.seq.clone();
+            for (v, x) in &binds {
+                s = Seq::inst(env, &s, *v, x).ok()?;
+            }
+            let mut ok = true;
+            for _ in 0..r.prems.len() {
+                let (h, _) = imp_parts(env, s.concl()).ok()?;
+                let ph = match self.is(&h, self.s.in_) {
+                    Some(a) => self.check(env, &a[0], &a[1]),
+                    None => self.known.iter().position(|(c, _, _)| *c == h).and_then(|k| self.known_proof(env, k).ok()),
+                };
+                match ph {
+                    Some(p) => s = Seq::mp(env, &s, &p).ok()?,
+                    None => {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if ok {
+                return Some(s);
             }
         }
         None

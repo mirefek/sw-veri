@@ -995,6 +995,13 @@ fn load_mode(
                     p.env.bit_rules.push(name);
                 }
             }
+            // type_rule NAME: the fact NAME (`all xs. H.. -> F(..) in T`) a
+            // rule of the proof checker's typing procedure (a hint, like simp)
+            "type_rule" => {
+                if !p.env.type_rules.contains(&name) {
+                    p.env.type_rules.push(name);
+                }
+            }
             "claim" => {
                 p.params.to_mut().clear();
                 p.expect(":")?;
@@ -1124,6 +1131,12 @@ fn load_mode(
                 p.env.begin_locals();
                 let s = pr.prove(p.env, &req);
                 let kept = p.env.locals_kept(&mark);
+                // (SLC_LOCALS=N: a proof making more than N variables named)
+                if let Some(n) = std::env::var("SLC_LOCALS").ok().and_then(|v| v.parse::<usize>().ok()) {
+                    if p.env.locals_len() > n {
+                        eprintln!("locals {} in the proof of `{}` (line {})", p.env.locals_len(), name, req.line);
+                    }
+                }
                 p.env.end_locals();
                 let s = s.map_err(ctx)?;
                 if let Some(n) = kept {
