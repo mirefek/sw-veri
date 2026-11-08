@@ -127,8 +127,7 @@ The plan, in order (each step measured: speed comes first):
   lists.core, nontrivial_free.core, set_size.core, try_avail.core), where
   a stated `.. by mem(..)` reads them.
 - Proofs short: passages repeated across files factored into lemmas
-  (/tmp-free: a script counting repeated line windows finds them). Left,
-  by count: the call rules' premise bundles in translate_call /
+  (counting repeated windows of lines finds them). Left, by count: the call rules' premise bundles in translate_call /
   translate_nobrk / translate_scall / translate_stop_call (about 25
   statements each repeating the same 5-8 premise lines: an abbreviation
   for the bundle), the instruction rules' `gR` / `he` openings in
