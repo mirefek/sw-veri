@@ -124,12 +124,16 @@ The plan, in order (each step measured: speed comes first):
   ..): about 15 left in fun/ (activate_group.core, alloc_group.core,
   alloc_meta.core, alloc_slot.core, a value just written read back in
   lists.core, nontrivial_free.core, set_size.core, try_avail.core), where
-  a stated `.. by mem(..)` reads them. The C1 engine's lemma premises
-  by `symex` (`simp0()`, `simp_l()`: about 450,000 calls in c1.core,
-  45,000 after the memo, api.rs, 11 s in all): spread over small shapes
-  (`k in dom(fn_update(..))`, record equations, word memberships);
-  `types` tried first per call was no faster (its fact index built each
-  time).
+  a stated `.. by mem(..)` reads them.
+- The C1 engine's lemma premises by `symex` (`simp0()`, `simp_l()`,
+  api.rs; c1.core about 37,000 after the memo): a literal key's `k in
+  dom(fn_update(..))` and `fn_update(..)[k] = v` now by the update lemmas
+  (no search). Left, by time: the `mkprog(..)` existentials of the call
+  rules (about 10 s), `tr.hsub(ite(..))` and its `ite` (about 7 s, 176
+  calls each), small closed goals (`int_lt(12, 34)`: about 4 s; the
+  evaluator tried first was slower overall -- it also took the large
+  closed goals). `types` tried first per call was no faster (its fact
+  index built each time).
 - The elaborated layers (gimple.core, generated definitions) kept in
   memory, elaborated in the checker from the .sl files, as the `steps`
   and `text` lines make their facts. The readable GIMPLE (cfg*.sl) stays
