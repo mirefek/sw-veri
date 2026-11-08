@@ -379,6 +379,19 @@ impl<'a> Typer<'a> {
                 return Seq::rewrite_to(env, &Seq::sym(env, &eq).ok()?, &p, goal).ok();
             }
         }
+        // (a read through an update, `fn_update(r, k, v)[j]`: the value
+        // read -- v, or r[j] for another literal key)
+        if let Some(a) = self.is(t, self.s.app) {
+            if let Some(u) = self.is(&a[0], self.s.fn_update) {
+                if let Some(eq) = self.read_update(env, &u[0], &u[1], &u[2], &a[1]) {
+                    if let Some(e) = self.is(eq.concl(), self.s.eq).map(|x| x[1].clone()) {
+                        if let Some(p) = self.check(env, &e, set) {
+                            return Seq::rewrite_to(env, &Seq::sym(env, &eq).ok()?, &p, goal).ok();
+                        }
+                    }
+                }
+            }
+        }
         if let Some(u) = self.is(set, self.s.univ) {
             return self.univ(env, t, &u[0]);
         }

@@ -107,10 +107,11 @@ The plan, in order (each step measured: speed comes first):
 - Variables reference counted (a name and arity freed with its last
   term, identity by pointer, not a table index). Now a proof's variables
   are dropped only at its end (`Env::begin_locals` .. `end_locals`).
-- An uncached check is 355 s, at most 0.6 GB (was 1407 s, 2.3 GB, before
+- An uncached check is 299 s, at most 0.4 GB (was 1407 s, 2.3 GB, before
   hash-consing, the DAG-aware walks, the projection chains, the intern
-  table's own-entry removal and the cheap symbol lookups). Largest:
-  cfg.core 84 s, the `steps` line 68 s, c1.core 38 s. The refinements
+  table's own-entry removal, the cheap symbol lookups and simp's
+  conditional rules under binders by head). Largest: cfg.core 78 s, the
+  `steps` line 58 s, c1.core 37 s. The refinements
   (proofs/mallocng/machine/cfg.core, 83 s) are still a large part:
   alloc_group's 60 s, of it point 7's walk 10 s (a branch chain of 14
   blocks, each visit through the CFG's `bb < k` dispatch), the labels'
@@ -118,9 +119,12 @@ The plan, in order (each step measured: speed comes first):
   `SLC_CACHE_AS=any GREF_ONLY=alloc_group_ref C1_KEEP_GOING=1
   C1_PHASES=1 C1_PROF=1 SLC_RECHECK=machine/cfg.core scripts/check.sh`
   (about 90 s).
-- proofs/mallocng/fun/alloc_group.core: a proof with 34.8 million
-  variables (`SLC_TIMES`): find which, and why (a search's fresh
-  variables?).
+- Reads through stores by hand: about 48 instances of `mp.rd_out` /
+  `mp.rd_at8` .. with every parameter written (alloc_meta.core,
+  malloc.core) where `mem` reads them; and `have stu := apply(fn_space_univ,
+  .., apply(x86.store_typed, ..))` (a store chain in univ(1), about 20 in
+  translate_*.core): `types` could infer a registered rule's set for
+  `univ(1)` too.
 - The elaborated layers (gimple.core, generated definitions) kept in
   memory, elaborated in the checker from the .sl files, as the `steps`
   and `text` lines make their facts. The readable GIMPLE (cfg*.sl) stays
