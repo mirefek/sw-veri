@@ -3389,28 +3389,57 @@ fn let_inline(v: &Term) -> bool {
 }
 
 fn inst_k(env: &Env, body: &Term, args: &[Term]) -> Term {
-    fn go(env: &Env, t: &Term, args: &[Term], dep: u32) -> Term {
+    // (a part with no bound variable from `dep` up is itself; a shared
+    // node's result at a depth made once -- terms are DAGs)
+    fn go(env: &Env, t: &Term, args: &[Term], dep: u32, memo: &mut crate::term::PtrMap<(usize, u32), Term>) -> Term {
+        if t.bvar_bound() <= dep {
+            return t.clone();
+        }
         let k = args.len() as u32;
-        match t.node() {
+        let key = (t.ptr_id(), dep);
+        let sh = t.shared() && matches!(t.node(), Node::App(..) | Node::Var(..));
+        if sh {
+            if let Some(r) = memo.get(&key) {
+                return r.clone();
+            }
+        }
+        let r = match t.node() {
             Node::BVar(j) if *j < dep => t.clone(),
             Node::BVar(j) if j - dep < k => args[(k - 1 - (j - dep)) as usize].shift(dep, 0, &env.binders_fn()),
             Node::BVar(j) => Term::bvar(j - k),
             Node::Nat(_) | Node::Bytes(_) => t.clone(),
-            Node::Var(_, a) => t.with_args(a.iter().map(|x| go(env, x, args, dep)).collect()),
-            Node::App(s, a) => t.with_args(a.iter().enumerate().map(|(i, x)| go(env, x, args, dep + env.binders_fn()(*s, i))).collect()),
+            Node::Var(_, a) => t.with_args(a.iter().map(|x| go(env, x, args, dep, memo)).collect()),
+            Node::App(s, a) => t.with_args(a.iter().enumerate().map(|(i, x)| go(env, x, args, dep + env.binders_fn()(*s, i), memo)).collect()),
+        };
+        if sh {
+            memo.insert(key, r.clone());
         }
+        r
     }
-    go(env, body, args, 0)
+    go(env, body, args, 0, &mut Default::default())
 }
 
 /// `t` (closed but for schematic variables, like a definition's body) with
 /// variable v of arity k replaced by `value` (k parameters, possibly
 /// referring to enclosing binders of the site).
 fn subst_var_ctx(env: &Env, t: &Term, v: crate::term::VarId, value: &Term, k: u32) -> Term {
-    fn go(env: &Env, t: &Term, v: crate::term::VarId, value: &Term, k: u32, dep: u32) -> Term {
-        match t.node() {
+    // (a part without v is itself; a shared node's result at a depth made
+    // once -- terms are DAGs)
+    #[allow(clippy::too_many_arguments)]
+    fn go(env: &Env, t: &Term, v: crate::term::VarId, value: &Term, k: u32, dep: u32, memo: &mut crate::term::PtrMap<(usize, u32), Term>) -> Term {
+        if !t.may_contain_var(v) {
+            return t.clone();
+        }
+        let key = (t.ptr_id(), dep);
+        let sh = t.shared();
+        if sh {
+            if let Some(r) = memo.get(&key) {
+                return r.clone();
+            }
+        }
+        let r = match t.node() {
             Node::Var(w, a) => {
-                let a: Vec<Term> = a.iter().map(|x| go(env, x, v, value, k, dep)).collect();
+                let a: Vec<Term> = a.iter().map(|x| go(env, x, v, value, k, dep, memo)).collect();
                 if *w == v {
                     // the value's references to the enclosing context move
                     // under the `dep` binders passed on the way
@@ -3420,11 +3449,15 @@ fn subst_var_ctx(env: &Env, t: &Term, v: crate::term::VarId, value: &Term, k: u3
                     t.with_args(a)
                 }
             }
-            Node::App(s, a) => t.with_args(a.iter().enumerate().map(|(i, x)| go(env, x, v, value, k, dep + env.binders_fn()(*s, i))).collect()),
+            Node::App(s, a) => t.with_args(a.iter().enumerate().map(|(i, x)| go(env, x, v, value, k, dep + env.binders_fn()(*s, i), memo)).collect()),
             _ => t.clone(),
+        };
+        if sh {
+            memo.insert(key, r.clone());
         }
+        r
     }
-    go(env, t, v, value, k, 0)
+    go(env, t, v, value, k, 0, &mut Default::default())
 }
 
 /// Two literals that denote different sets (numerals, or byte strings).

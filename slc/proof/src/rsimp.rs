@@ -484,10 +484,30 @@ impl State {
     /// the first rewrite in `t` (innermost first): `u = u'` for a closed
     /// subterm u
     fn site(&self, env: &mut Env, lg: &Logic, t: &Term, rs: &Rules, depth: usize) -> KResult<Option<Seq>> {
+        self.site_in(env, lg, t, rs, depth, &mut sl_kernel::term::PtrSet::default())
+    }
+
+    /// (`none`: the shared nodes found to have no rewrite, in this search --
+    /// a DAG searched as a tree repeats a shared part per path)
+    fn site_in(&self, env: &mut Env, lg: &Logic, t: &Term, rs: &Rules, depth: usize, none: &mut sl_kernel::term::PtrSet<usize>) -> KResult<Option<Seq>> {
+        if t.shared() && none.contains(&t.ptr_id()) {
+            return Ok(None);
+        }
+        if past_deadline() {
+            return err("rsimp: out of time (a diagnostic's limit)");
+        }
+        let r = self.site_here(env, lg, t, rs, depth, none)?;
+        if r.is_none() && t.shared() {
+            none.insert(t.ptr_id());
+        }
+        Ok(r)
+    }
+
+    fn site_here(&self, env: &mut Env, lg: &Logic, t: &Term, rs: &Rules, depth: usize, none: &mut sl_kernel::term::PtrSet<usize>) -> KResult<Option<Seq>> {
         match t.node() {
             Node::App(_, a) | Node::Var(_, a) => {
                 for x in a.iter() {
-                    if let Some(e) = self.site(env, lg, x, rs, depth)? {
+                    if let Some(e) = self.site_in(env, lg, x, rs, depth, none)? {
                         return Ok(Some(e));
                     }
                 }

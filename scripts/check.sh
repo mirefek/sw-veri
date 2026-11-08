@@ -71,4 +71,4 @@ if [ -n "$1" ]; then
   FILES=$(echo $FILES | sed "s| $1 .*| $1|")
 fi
 # (SLC_WRAP: a command the checker runs under, e.g. a profiler)
-$SLC_WRAP $S kernel-check $NOCACHE $FILES 2>&1 | grep -v "^core/\|^proofs/[a-z_0-9/]*.core: .*(cached)\$\|^$B/\|^build/"
+$SLC_WRAP $S kernel-check $NOCACHE $FILES 2>&1 | grep --line-buffered -v "^core/\|^proofs/[a-z_0-9/]*.core: .*(cached)\$\|^$B/\|^build/"

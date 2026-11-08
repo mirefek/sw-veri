@@ -218,7 +218,11 @@ impl<'s, 'a> Ev<'s, 'a> {
         {
             let mut st = self.stats.borrow_mut();
             st[2] += 1;
-            st[5] += size(p);
+            // (a statistic: the input's size as a tree -- exponential in a
+            // DAG's sharing, so only when printed)
+            if std::env::var("EVAL_STATS").is_ok() {
+                st[5] += size(p);
+            }
         }
         let sp = self.sp;
         let s = &sp.s;

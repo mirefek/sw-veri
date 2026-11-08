@@ -61,18 +61,21 @@ a fixed sequence (typing for a membership, rewriting, then taut / arith
 with the facts about the normal form's terms; a conjunction conjunct by
 conjunct). By the shadow (`SLC_SHADOW=rsimp`, scripts/shadow-report.py,
 each call's text logged) scripts/migrate-simp.py moved the calls rsimp
-proves, call by call: simp calls in the proofs 20,052 -> 6,721, rsimp
-13,900 or so. What is left, by the last shadow (the files but
-nominal_size.core, whose shadow runs out of memory):
-- 1,242 calls on a program path (loop hints, `keep`, `lets`): `step`'s;
-- about 4,600 calls rsimp does not prove: runs of programs from facts
-  (`o = ok(..)` from `runs(..)`), evaluation of closed terms (a table's
-  entry, `app(mallocng.size_classes, 20) = 72` -- eval is simp's),
-  arithmetic needing a definition unfolded, the typing gaps below;
+proves, call by call (`keep(..)` dropped: it means nothing to rsimp):
+simp calls in the proofs 20,052 -> 5,777. What is left, by the last
+shadows (the files but nominal_size.core, whose shadow runs out of
+memory):
+- runs of programs from facts (`o = ok(..)` from `runs(..)`, keep
+  calls): `step`'s, proof by proof;
+- goals simp proves with its path reasoning: implications and cases of
+  the facts, witnesses of existentials, contradictions among facts
+  (`false`), memberships and records under premises;
+- evaluation of closed terms (a table's entry): the trusted eval proves
+  only about 25 of them -- an untrusted evaluation is not worth it yet;
 - the fact form `simp(h)` (a fact simplified), not shadowed yet.
 The plan, in order:
-- An untrusted evaluation of closed terms (definitions unfolded, literal
-  operations by the kernel's rules), then the shadow and migration again.
+- The program runs: `step` in place of `simp(.., keep(..))` where a proof
+  runs a program, proof by proof.
 - The typing procedure's gaps (the shadow's failures): `rec_and` states
   (`m in rec_and(Machine, ..)`), program sets (`pair(s, o) in
   set_select(univ(1), ..)`), terms bounded by a definition's arithmetic
@@ -123,7 +126,7 @@ The plan, in order:
 - Variables reference counted (a name and arity freed with its last
   term, identity by pointer, not a table index). Now a proof's variables
   are dropped only at its end (`Env::begin_locals` .. `end_locals`).
-- An uncached check is 594 s, at most 0.9 GB (was 1407 s, 2.3 GB, before
+- An uncached check is 532 s, at most 0.9 GB (was 1407 s, 2.3 GB, before
   hash-consing and the DAG-aware walks). The refinements
   (proofs/mallocng/machine/cfg.core, 160 s) are still the largest part:
   alloc_group's alone 110 s, then

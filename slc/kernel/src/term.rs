@@ -187,6 +187,13 @@ impl Term {
         }
     }
 
+    /// One more than the largest bound-variable index in it, as written
+    /// (binders not subtracted): no bound variable from `d` up when it is
+    /// at most d.
+    pub fn bvar_bound(&self) -> u32 {
+        self.0.bmax
+    }
+
     /// Held more than once (by several parents, or a parent and a caller):
     /// a walk over the DAG may reach it again; a node held once is reached
     /// again only through a parent reached again. Memo tables of a walk

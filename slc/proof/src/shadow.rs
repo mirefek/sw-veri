@@ -72,8 +72,10 @@ impl State {
                 goal.vars(&mut vs);
                 vs.is_empty()
             };
+            // (the trusted eval on these, probed once: about 25 calls it
+            // proves -- not run again, it can take very long)
             if by == "failed" && closed {
-                by = if Seq::eval_goal(env, lg, &[], goal).is_ok() { "failed-eval" } else { "failed-closed" };
+                by = "failed-closed";
             }
             let g: String = Printer::new(env).term(goal).chars().take(160).collect();
             // (the call as written, up to whitespace: where it is in its step)

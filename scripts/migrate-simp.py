@@ -3,9 +3,9 @@
 # slc/proof/src/shadow.rs). Each logged call has its text as written (up
 # to whitespace); a call rsimp proved (rsimp, types or rsimp+arith -- not
 # much slower than simp) is found in its step (the step's line and its
-# continuation lines, more indented) and written `rsimp(`, when exactly one
-# occurrence there has its text and no call rsimp did not prove has it
-# too. Then each changed file is checked (scripts/check.sh FILE, with the
+# continuation lines, more indented) and written `rsimp(`, when every
+# occurrence there of its text is a proven call (none of the calls rsimp
+# did not prove has it). Then each changed file is checked (scripts/check.sh FILE, with the
 # caches) and a step the checker rejects is put back, until the file
 # checks.
 #
@@ -119,10 +119,12 @@ for f in sorted(byfile):
                 if c is not None:
                     occ[norm(c)].append((i, m.start(), c))
         edits = []
+        # (a text whose every occurrence in the step is a proven call: all
+        # renamed -- `simp()` twice in one step, both proven)
         for t, n in good.items():
-            if t in bad or len(occ.get(t, [])) != 1 or n != 1:
+            if t in bad or len(occ.get(t, [])) != n:
                 continue
-            edits.append(occ[t][0])
+            edits.extend(occ[t])
         # (right to left within a line: the offsets stay valid)
         for i, col, c in sorted(edits, key=lambda x: (x[0], -x[1])):
             ls[i] = ls[i][:col] + renamed(c) + ls[i][col + len(c) :]
