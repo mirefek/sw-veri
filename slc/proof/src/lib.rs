@@ -1710,7 +1710,7 @@ impl State {
                 let mut eqs = Vec::new();
                 for p in &ps {
                     if let Node::App(e, a) = p.concl().node() {
-                        if *e == env.builtins.eq && matches!(a[0].node(), Node::App(_, x) if !x.is_empty()) && term_occurs(&a[0], goals.last().unwrap()) {
+                        if *e == env.builtins.eq && matches!(a[0].node(), Node::App(..) | Node::Var(..)) && term_occurs(&a[0], goals.last().unwrap()) {
                             let g2 = replace_term(goals.last().unwrap(), &a[0], &a[1]);
                             if !term_occurs(&a[0], &g2) {
                                 goals.push(g2);
