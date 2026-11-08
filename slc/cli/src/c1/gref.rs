@@ -719,6 +719,22 @@ impl<'e> Gen<'e> {
     /// an innermost closed projection of a constructed tuple or outcome
     /// in t: it, its equation
     fn closed_redex(&mut self, t: &Term) -> Option<(Term, R)> {
+        // (a part found to hold none: none for good -- the search reads the
+        // term alone; by the node's address, the node kept)
+        if !matches!(t.node(), Node::App(_, a) if !a.is_empty()) {
+            return self.closed_redex_at(t);
+        }
+        if self.no_closed.contains_key(&t.ptr_id()) {
+            return None;
+        }
+        let r = self.closed_redex_at(t);
+        if r.is_none() {
+            self.no_closed.insert(t.ptr_id(), t.clone());
+        }
+        r
+    }
+
+    fn closed_redex_at(&mut self, t: &Term) -> Option<(Term, R)> {
         if let Node::App(_, a) = t.node() {
             for x in a.iter() {
                 if let Some(r) = self.closed_redex(x) {

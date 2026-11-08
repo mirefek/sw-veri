@@ -260,6 +260,9 @@ struct Gen<'e> {
     /// (a closed chain of a tuple's projections: its value, its equation,
     /// its length -- for good, gref.rs' proj_chain)
     proj_memo: std::collections::HashMap<Term, Option<(Term, Seq, usize)>>,
+    /// (the nodes holding no closed redex, gref.rs' closed_redex -- for
+    /// good; by address, the node kept so the address stays its own)
+    no_closed: sl_kernel::term::PtrMap<usize, Term>,
     zs: Vec<VarId>,
     qs: Vec<Term>,
     insns: BTreeMap<u128, Insn>,
