@@ -1637,7 +1637,23 @@ impl State {
             "mem" => {
                 let ps = self.proofs(env, lg, args)?;
                 let ps = with_aliases(env, split_conj(env, ps)?);
-                self.mem_goal(env, lg, goal, &ps)
+                // (`mem()`: no facts to try alone)
+                let first = if ps.is_empty() { Err(KernelError("mem: no facts given".into())) } else { self.mem_goal(env, lg, goal, &ps) };
+                match first {
+                    Ok(s) => Ok(s),
+                    // (failing with the facts given: again with the block's
+                    // facts about the goal's terms too -- `mem()` needs no
+                    // list of an address's bounds)
+                    Err(e) => {
+                        let block: Vec<Seq> = self.facts.iter().rev().map(|(_, f)| f.clone()).collect();
+                        let more: Vec<Seq> = rsimp::facts_about(env, goal, &block).into_iter().filter(|f| !ps.iter().any(|p| p.concl() == f.concl())).cloned().collect();
+                        if more.is_empty() {
+                            return Err(e);
+                        }
+                        let all = with_aliases(env, split_conj(env, ps.iter().cloned().chain(more).collect())?);
+                        self.mem_goal(env, lg, goal, &all).map_err(|_| e)
+                    }
+                }
             }
             // cases({k}, {a}, {b}, R, p1, ..): the goal for each value of the
             // variable k in a .. b - 1 (a <= k < b from p.. by arith), by R

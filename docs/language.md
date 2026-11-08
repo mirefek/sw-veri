@@ -773,7 +773,7 @@ premise they stand for.
 | `eval(p..)` | evaluation on concrete data |
 | `bitwise([{n},] p..)` | bits: a word equation of n-bit words bit by bit (extensionality), or a proposition about bits; see "Bits" |
 | `cases({k}, {a}, {b}, R, p..)` | the goal for each value c of the variable k, a <= k < b (numerals; the bounds from p.. by arith), each by R with k read as c in R's terms |
-| `mem(p..)` | memory: an equation of reads (both sides resolved, then equal or by arith), or a predicate of a written memory (views and frames, then a fact) |
+| `mem(p..)` | memory: an equation of reads (both sides resolved, then equal or by arith), or a predicate of a written memory (views and frames, then a fact); the facts p.. failing (or none given, `mem()`), also the block's small facts about the goal's terms -- the addresses' bounds and apartness, the memories' typing |
 
 In `arith`, the facts' equations substitute equals for equals: each term
 is read with its subterms replaced by their class's representative (the

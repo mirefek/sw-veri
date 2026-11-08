@@ -170,6 +170,30 @@ fn arith_leaves(env: &Env, t: &Term, out: &mut Vec<Term>) {
     }
 }
 
+/// the block's facts a memory read may need (`mem` given too few): small,
+/// and about a term of the goal -- an address's bounds and apartness, a
+/// memory's typing (the fact's arithmetic leaves, one of them in the goal)
+pub(crate) fn facts_about<'a>(env: &Env, goal: &Term, facts: &'a [Seq]) -> Vec<&'a Seq> {
+    facts
+        .iter()
+        .filter(|s| small_term(s.concl(), 200))
+        .filter(|s| {
+            let mut ls = Vec::new();
+            prop_leaves(env, s.concl(), &mut ls);
+            ls.iter().any(|l| occurs(l, goal))
+        })
+        .collect()
+}
+
+/// `arith_leaves` of a proposition's atoms (through `and`, `or`, `not`,
+/// implications)
+fn prop_leaves(env: &Env, t: &Term, out: &mut Vec<Term>) {
+    match t.node() {
+        Node::App(s, a) if ["and", "or", "not", "iff"].contains(&env.syms[*s as usize].name.as_str()) || *s == env.builtins.imp => a.iter().for_each(|x| prop_leaves(env, x, out)),
+        _ => arith_leaves(env, t, out),
+    }
+}
+
 fn occurs(x: &Term, t: &Term) -> bool {
     t == x
         || match t.node() {

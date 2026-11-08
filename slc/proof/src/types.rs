@@ -462,13 +462,24 @@ impl<'a> Typer<'a> {
     /// conclusion matches it, every pattern variable bound: its premises
     /// memberships by typing, the others known facts
     fn by_rule(&mut self, env: &mut Env, t: &Term, set: &Term) -> Option<Seq> {
+        self.rule_for(env, t, Some(set)).map(|(_, p)| p)
+    }
+
+    /// t's set by a registered rule whose subject matches t (the set given:
+    /// matching it too; else bound by t alone): the set, the proof
+    fn rule_for(&mut self, env: &mut Env, t: &Term, set: Option<&Term>) -> Option<(Term, Seq)> {
         if env.type_rules.is_empty() {
             return None;
         }
         for r in type_rules(env, self.lg) {
             let mut binds = Vec::new();
-            if !pmatch_at(env, &r.t, t, &r.pvars, &mut binds, 0, false) || !pmatch_at(env, &r.set, set, &r.pvars, &mut binds, 0, false) {
+            if !pmatch_at(env, &r.t, t, &r.pvars, &mut binds, 0, false) {
                 continue;
+            }
+            if let Some(set) = set {
+                if !pmatch_at(env, &r.set, set, &r.pvars, &mut binds, 0, false) {
+                    continue;
+                }
             }
             if r.pvars.iter().any(|v| !binds.iter().any(|(w, _)| w == v)) {
                 continue;
@@ -493,7 +504,8 @@ impl<'a> Typer<'a> {
                 }
             }
             if ok {
-                return Some(s);
+                let set = self.is(s.concl(), self.s.in_)?[1].clone();
+                return Some((set, s));
             }
         }
         None
@@ -920,7 +932,8 @@ impl<'a> Typer<'a> {
             let p = self.check(env, t, &full)?;
             return Some((full, p));
         }
-        None
+        // (a registered typing rule's set)
+        self.rule_for(env, t, None)
     }
 
     // -----------------------------------------------------------------
