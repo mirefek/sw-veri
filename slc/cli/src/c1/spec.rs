@@ -103,8 +103,19 @@ impl<'e> Gen<'e> {
         }
         // (a part of literals only, `sint(32, 2) <= sint(32, 7)`: computed)
         let mut vs = Vec::new();
-        self.expand(g).vars(&mut vs);
+        let ge = self.expand(g);
+        ge.vars(&mut vs);
         if vs.is_empty() {
+            // (evaluated: true, or its negation true; no search)
+            if let (true, Some(api)) = (ge == *g, self.api.as_ref()) {
+                let lg = &api.lg;
+                if let Ok(p) = Seq::eval_goal(self.env, lg, &[], g) {
+                    return Some((true, vec![p]));
+                }
+                if let Ok(p) = Seq::eval_goal(self.env, lg, &[], &self.mk("not", vec![g.clone()])) {
+                    return Some((false, vec![p]));
+                }
+            }
             let simp = RP::Simp(true, vec![], vec![], false);
             if let Ok(p) = self.evp(&simp, g, &[]) {
                 return Some((true, vec![p]));
