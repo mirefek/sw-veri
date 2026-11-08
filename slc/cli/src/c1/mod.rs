@@ -257,6 +257,9 @@ struct Gen<'e> {
     /// comparison only, `eq_nf_bits` -- its normal forms memoized apart)
     nf_bits: bool,
     nf_bits_memo: std::collections::HashMap<Term, (Term, Option<Seq>)>,
+    /// (a closed chain of a tuple's projections: its value, its equation,
+    /// its length -- for good, gref.rs' proj_chain)
+    proj_memo: std::collections::HashMap<Term, Option<(Term, Seq, usize)>>,
     zs: Vec<VarId>,
     qs: Vec<Term>,
     insns: BTreeMap<u128, Insn>,

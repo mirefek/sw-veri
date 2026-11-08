@@ -21,7 +21,8 @@ struct Cache {
     /// the checker's identity: its kernel and automation's
     base: String,
     /// (SLC_CACHE_AS=ID, while developing the checker: every entry as the
-    /// checker ID's -- trusting that the changes left them valid)
+    /// checker ID's -- trusting that the changes left them valid; `any`:
+    /// each entry as its own checker's)
     as_id: Option<String>,
 }
 
@@ -33,7 +34,7 @@ impl Cache {
 
     /// the identity of the checker parts a file's contents `src` rest on
     fn checker(&self, src: &str) -> String {
-        if let Some(id) = &self.as_id {
+        if let Some(id) = self.as_id.as_ref().filter(|id| *id != "any") {
             return id.clone();
         }
         let mut id = self.base.clone();
@@ -65,6 +66,14 @@ impl Cache {
     /// f's statements, if its entry holds for f's contents `src`
     fn lookup(&self, f: &std::path::Path, src: &str, prefix: &str, first: bool) -> Option<String> {
         let text = std::fs::read_to_string(self.entry(f)).ok()?;
+        // (SLC_CACHE_AS=any: the entry's own checker taken as this one's --
+        // the same trust, for every engine's entries at once)
+        if self.as_id.as_deref() == Some("any") {
+            let own = text.lines().nth(1)?.strip_prefix("// checker ")?;
+            let mine = format!("// checker {}\n", self.checker(src));
+            let h = self.header(src, prefix, first).replacen(&mine, &format!("// checker {}\n", own), 1);
+            return text.strip_prefix(&h).map(|s| s.to_string());
+        }
         text.strip_prefix(&self.header(src, prefix, first)).map(|s| s.to_string())
     }
 

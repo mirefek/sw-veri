@@ -440,7 +440,12 @@ impl<'e> Gen<'e> {
     /// ... one in the part `sub` of it (a value about to be substituted, the
     /// block's head: not the other blocks of the dispatch)
     fn proj_step_in(&mut self, lo: &Term, sub: &Term) -> Result<Option<(Term, Seq)>, String> {
-        let Some((r, eq)) = self.closed_redex(sub) else { return Ok(None) };
+        // (a chain of a tuple's projections first, as a whole)
+        let found = match self.proj_chain_in(sub, &mut sl_kernel::term::PtrSet::default()) {
+            Some((r, _, eq)) => Some((r, eq)),
+            None => self.closed_redex(sub),
+        };
+        let Some((r, eq)) = found else { return Ok(None) };
         let ab = self.abstract_(lo, &r, 0);
         let l = self.lam(&ab, &["o", "x"], &["o", "x"]).ok_or("a projection's context")?;
         let eqc = self.run(&eq, &[])?.concl().clone();
@@ -651,6 +656,63 @@ impl<'e> Gen<'e> {
             }
         }
         Ok(None)
+    }
+
+    /// the outermost closed chain of two or more projections of a
+    /// constructed tuple in t (`fst(snd(pair(a, pair(b, c))))`): it, its
+    /// value, its equation (fst_pair / snd_pair at the tuple, g.fst_to /
+    /// g.snd_to up the chain: each step on the chain's own terms)
+    fn proj_chain_in(&mut self, t: &Term, seen: &mut sl_kernel::term::PtrSet<usize>) -> Option<(Term, Term, R)> {
+        if !seen.insert(t.ptr_id()) {
+            return None;
+        }
+        if self.env.loose_depth_m(t) == 0 {
+            if let Some((v, eq, n)) = self.proj_chain(t) {
+                if n >= 2 {
+                    return Some((t.clone(), v, R::S(eq)));
+                }
+            }
+        }
+        if let Node::App(_, a) = t.node() {
+            for x in a.iter() {
+                if let Some(r) = self.proj_chain_in(x, seen) {
+                    return Some(r);
+                }
+            }
+        }
+        None
+    }
+
+    /// t (closed) a projection `fst(u)` / `snd(u)` of a constructed tuple,
+    /// through further projections in u: its value, its equation, the
+    /// chain's length (memoized: the same reads recur on every way)
+    fn proj_chain(&mut self, t: &Term) -> Option<(Term, Seq, usize)> {
+        if let Some(r) = self.proj_memo.get(t) {
+            return r.clone();
+        }
+        let r = self.proj_chain_new(t);
+        self.proj_memo.insert(t.clone(), r.clone());
+        r
+    }
+
+    fn proj_chain_new(&mut self, t: &Term) -> Option<(Term, Seq, usize)> {
+        let (first, u) = match (self.app(t, "fst", 1), self.app(t, "snd", 1)) {
+            (Some(x), _) => (true, x[0].clone()),
+            (_, Some(x)) => (false, x[0].clone()),
+            _ => return None,
+        };
+        let pick = |p: &[Term]| if first { p[0].clone() } else { p[1].clone() };
+        if let Some(pp) = self.app(&u, "pair", 2).map(|p| p.to_vec()) {
+            let lemma = if first { "fst_pair" } else { "snd_pair" };
+            let eq = self.run(&R::Inst(lemma.into(), vec![("a", pp[0].clone()), ("b", pp[1].clone())]), &[]).ok()?;
+            return Some((pick(&pp), eq, 1));
+        }
+        let (v, eq, n) = self.proj_chain(&u)?;
+        let pv = self.app(&v, "pair", 2)?.to_vec();
+        let lemma = if first { "g.fst_to" } else { "g.snd_to" };
+        let r = mp(R::Inst(lemma.into(), vec![("x", u), ("a", pv[0].clone()), ("b", pv[1].clone())]), vec![s(&eq)]);
+        let eq2 = self.run(&r, &[]).ok()?;
+        Some((pick(&pv), eq2, n + 1))
     }
 
     /// an innermost closed projection of a constructed tuple or outcome

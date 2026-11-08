@@ -171,10 +171,11 @@ pub struct Env {
     pub stmt_index: HashMap<String, String>,
     /// (terms checked well-formed, at a depth: they stay so, the
     /// environment only growing -- each checked once)
-    wf_ok: std::cell::RefCell<std::collections::HashSet<(Term, u32)>>,
+    /// (keyed by the terms' own hashes: a cheap hasher, `PtrHasher`)
+    wf_ok: std::cell::RefCell<crate::term::PtrSet<(Term, u32)>>,
     /// (terms' loose depths under this environment's binders, computed
     /// once)
-    ld_memo: std::cell::RefCell<HashMap<Term, u32>>,
+    ld_memo: std::cell::RefCell<crate::term::PtrMap<Term, u32>>,
 }
 
 impl Env {
@@ -427,6 +428,10 @@ impl Env {
     /// `t.loose_depth(..)` under this environment's binders, each compound
     /// term's computed once
     pub fn loose_depth_m(&self, t: &Term) -> u32 {
+        // (no bound variable at all: closed, no lookup)
+        if t.bvar_bound() == 0 {
+            return 0;
+        }
         match t.node() {
             Node::BVar(i) => i + 1,
             Node::Var(_, a) | Node::App(_, a) if a.is_empty() => 0,
@@ -456,7 +461,7 @@ impl Env {
     /// the node itself, not its structure: equal terms may carry other
     /// labels. Its keys are t's subterms, alive throughout.)
     fn inst_m(&self, t: &Term, args: &[Term], depth: u32, memo: &mut crate::term::PtrMap<(usize, u32), Term>) -> Term {
-        if self.loose_depth_m(t) <= depth {
+        if t.bvar_bound() <= depth || self.loose_depth_m(t) <= depth {
             return t.clone();
         }
         let k = args.len() as u32;

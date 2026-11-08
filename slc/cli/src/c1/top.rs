@@ -127,6 +127,7 @@ impl<'e> Gen<'e> {
             nf_memo: Default::default(),
             nf_bits: false,
             nf_bits_memo: Default::default(),
+            proj_memo: Default::default(),
             val_of: Default::default(),
             zs: Vec::new(),
             qs: Vec::new(),
