@@ -148,7 +148,10 @@ For a first reading, docs/overview.md is the better start. The sections:
   facts too when the goal alone is not enough. `type_rule NAME` registers
   a typing lemma for `types` (`x86.store_typed`: a chain of stores typed
   from its first memory, 15 hand-chained typing facts now `types(h)`).
-  The uncached check 1407 s, 2.3 GB -> 299 s, 0.4 GB: hash-consed terms
+  `mem()` reads through stores with the block's facts about the
+  addresses (18 hand-written read chains replaced). The step theorems of
+  the binary are instances of one lemma, `x86.step_one`.
+  The uncached check 1407 s, 2.3 GB -> 263 s, 0.4 GB: hash-consed terms
   whose table entries go with their nodes, DAG-aware walks (a memo keyed
   by address keeps its keys alive), a tuple's projection chains reduced
   as a whole in the refinement walk, cheap variable tests and symbol

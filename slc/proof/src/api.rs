@@ -39,11 +39,16 @@ pub enum A {
 pub struct Api {
     st: State,
     pub lg: Logic,
+    /// (`G::Simp` without loops or kept definitions, from facts without
+    /// hypotheses: the goal and the facts' statements -> the theorem, made
+    /// once. A variable id is never reused, so a theorem kept stays about
+    /// the same variables.)
+    simp_memo: std::cell::RefCell<std::collections::HashMap<(Term, Vec<Term>), Seq>>,
 }
 
 impl Api {
     pub fn new(env: &Env, fixed: Vec<(String, VarId)>) -> KResult<Api> {
-        Ok(Api { st: State::new(fixed, Vec::new(), None), lg: Logic::new(env)? })
+        Ok(Api { st: State::new(fixed, Vec::new(), None), lg: Logic::new(env)?, simp_memo: Default::default() })
     }
 
     /// a fixed variable more (a `fix`)
@@ -62,9 +67,18 @@ impl Api {
         match g {
             G::By(s) => self.st.check(env, s, goal),
             G::Simp(facts, keep, unroll) => {
+                let memo = !unroll && keep.is_empty() && facts.iter().all(|f| f.hyps().is_empty());
+                let key = memo.then(|| (goal.clone(), facts.iter().map(|f| f.concl().clone()).collect::<Vec<_>>()));
+                if let Some(s) = key.as_ref().and_then(|k| self.simp_memo.borrow().get(k).cloned()) {
+                    return Ok(s);
+                }
                 let loops = if unroll { vec![LoopHint { inv: Term::app(env.builtins.eq, vec![Term::bvar(0), Term::bvar(0)]), var: None, unroll: true }] } else { Vec::new() };
                 let refs: Vec<&Seq> = facts.iter().collect();
-                Seq::simp_goal(env, lg, &refs, goal, &loops, &keep)
+                let s = Seq::simp_goal(env, lg, &refs, goal, &loops, &keep)?;
+                if let Some(k) = key {
+                    self.simp_memo.borrow_mut().insert(k, s.clone());
+                }
+                Ok(s)
             }
             G::Taut(mut ps) => {
                 let syms = sym_facts(env, &ps, goal)?;

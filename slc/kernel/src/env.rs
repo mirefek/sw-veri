@@ -180,6 +180,8 @@ pub struct Env {
     /// (terms' loose depths under this environment's binders, computed
     /// once)
     ld_memo: std::cell::RefCell<crate::term::PtrMap<Term, u32>>,
+    /// (`ksym_lit`: a literal name's symbol, by the literal's address)
+    ksym_lits: std::cell::RefCell<crate::term::PtrMap<(usize, usize), SymId>>,
 }
 
 impl Env {
@@ -189,6 +191,20 @@ impl Env {
     pub fn ksym(&self, name: &str) -> Option<SymId> {
         let s = *self.sym_by_name.get(name)?;
         self.is_ksym(s).then_some(s)
+    }
+
+    /// `ksym` of a name in the program text (a literal): remembered by the
+    /// literal's address -- a `'static` string is never freed, so the
+    /// address stays its own -- once found (a name is declared once, and
+    /// becomes the extensions' at most once, `prelude_end`)
+    pub fn ksym_lit(&self, name: &'static str) -> Option<SymId> {
+        let key = (name.as_ptr() as usize, name.len());
+        if let Some(s) = self.ksym_lits.borrow().get(&key) {
+            return Some(*s);
+        }
+        let s = self.ksym(name)?;
+        self.ksym_lits.borrow_mut().insert(key, s);
+        Some(s)
     }
 
     /// s a symbol `ksym` resolves its name to
@@ -234,6 +250,7 @@ impl Env {
             stmt_index: HashMap::new(),
             wf_ok: Default::default(),
             ld_memo: Default::default(),
+            ksym_lits: Default::default(),
             builtins: Builtins {
                 imp: 0,
                 eq: 0,

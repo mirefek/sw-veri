@@ -96,10 +96,11 @@ The plan, in order (each step measured: speed comes first):
     semantics by `symex` for its own addressing form. Instead: one lemma
     per instruction shape with the effective address a parameter, each
     form by its address equation (as `tr.rsp_bd_ea`);
-  - the step theorems (1069 encodings: the `steps` line 65 s rechecked,
-    100 s in an uncached check -- why the difference is not known yet),
-    after each change of the binary: mostly `symex` unfolding
-    `exec_insn` per encoding, then the decoder's `members`;
+  - the `steps` line (35 s, after each change of the binary; the step
+    theorems are x86.step_one's instances now): the interpreter decoding
+    each address (`decode_facts`, about 6 s), the per-address `at_`
+    theorems (a `symex` of `exec_body` each, about 6 s), the members of
+    each encoding's decoding;
   - the loops' label claims (`lab_all`): each label's claim is the whole
     premise instantiated there, about 1.5 s per label in alloc_group's
     56, though only the heads' and exits' are not vacuous. Split on the
@@ -107,11 +108,11 @@ The plan, in order (each step measured: speed comes first):
 - Variables reference counted (a name and arity freed with its last
   term, identity by pointer, not a table index). Now a proof's variables
   are dropped only at its end (`Env::begin_locals` .. `end_locals`).
-- An uncached check is 299 s, at most 0.4 GB (was 1407 s, 2.3 GB, before
+- An uncached check is 263 s, at most 0.4 GB (was 1407 s, 2.3 GB, before
   hash-consing, the DAG-aware walks, the projection chains, the intern
   table's own-entry removal, the cheap symbol lookups and simp's
-  conditional rules under binders by head). Largest: cfg.core 78 s, the
-  `steps` line 58 s, c1.core 37 s. The refinements
+  conditional rules under binders by head, x86.step_one). Largest: cfg.core 76 s, the
+  `steps` line 34 s, c1.core 33 s. The refinements
   (proofs/mallocng/machine/cfg.core, 83 s) are still a large part:
   alloc_group's 60 s, of it point 7's walk 10 s (a branch chain of 14
   blocks, each visit through the CFG's `bb < k` dispatch), the labels'
@@ -119,12 +120,13 @@ The plan, in order (each step measured: speed comes first):
   `SLC_CACHE_AS=any GREF_ONLY=alloc_group_ref C1_KEEP_GOING=1
   C1_PHASES=1 C1_PROF=1 SLC_RECHECK=machine/cfg.core scripts/check.sh`
   (about 90 s).
-- Reads through stores by hand: about 48 instances of `mp.rd_out` /
-  `mp.rd_at8` .. with every parameter written (alloc_meta.core,
-  malloc.core) where `mem` reads them; and `have stu := apply(fn_space_univ,
-  .., apply(x86.store_typed, ..))` (a store chain in univ(1), about 20 in
-  translate_*.core): `types` could infer a registered rule's set for
-  `univ(1)` too.
+- Reads through stores by hand: about 30 left (`have r := apply(mp.rd_at8[..])`
+  unstated, or inside `subst({y. ..}, ..)` case constructions:
+  fun/lists.core, set_size.core, nontrivial_free.core, enframe.core),
+  where a stated `.. by mem()` reads them. The C1 engine's lemma premises
+  by `symex` (`simp0()`, `simp_l()`: about 450,000 calls in c1.core,
+  11 s) -- most mention the state, so the memo (api.rs) saves little:
+  `types` / arithmetic directly for the common shapes.
 - The elaborated layers (gimple.core, generated definitions) kept in
   memory, elaborated in the checker from the .sl files, as the `steps`
   and `text` lines make their facts. The readable GIMPLE (cfg*.sl) stays
