@@ -315,6 +315,8 @@ pub fn kernel_check(args: &[String]) -> CResult {
             eprintln!("{:8.2}s {:6} MB (peak {} MB, virtual {} MB, {} variables in a proof at most) {}", t0.elapsed().as_secs_f64(), rss, kb("VmHWM:"), kb("VmPeak:"), env.peak_locals, f.display());
             env.peak_locals = 0;
         }
+        // (C1_RULES: the engines' steps of the file by rule)
+        crate::c1::rules_report(&f.display().to_string());
     }
     // what the claims and conditional theorems still rest on
     let mut status = Vec::new();

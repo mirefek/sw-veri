@@ -248,9 +248,11 @@ struct Gen<'e> {
     canon_memo: std::cell::RefCell<std::collections::HashMap<Term, Term>>,
     /// (the subterms searched for a redex -- at a depth --, an equation of
     /// a term with itself, a whole field: none there, for good)
-    no_redex: std::cell::RefCell<std::collections::HashSet<(Term, u32)>>,
-    no_refl: std::cell::RefCell<std::collections::HashSet<(Term, u32)>>,
-    no_field: std::cell::RefCell<std::collections::HashSet<Term>>,
+    /// (by the node's address -- no deep comparison of equal copies --, the
+    /// node kept so the address stays its own)
+    no_redex: std::cell::RefCell<sl_kernel::term::PtrMap<(usize, u32), Term>>,
+    no_refl: std::cell::RefCell<sl_kernel::term::PtrMap<(usize, u32), Term>>,
+    no_field: std::cell::RefCell<sl_kernel::term::PtrMap<usize, Term>>,
     /// (the normal forms made, nf.rs: for good -- a name's meaning is fixed)
     nf_memo: std::collections::HashMap<Term, (Term, Option<Seq>)>,
     /// (N seeing through bitwise operations' names too: a low byte's
@@ -263,6 +265,9 @@ struct Gen<'e> {
     /// (the nodes holding no closed redex, gref.rs' closed_redex -- for
     /// good; by address, the node kept so the address stays its own)
     no_closed: sl_kernel::term::PtrMap<usize, Term>,
+    /// (the nodes holding no false equation of constructed outcomes at a
+    /// depth, spec.rs' ctor_false -- for good, the node kept)
+    no_ctor: std::cell::RefCell<sl_kernel::term::PtrMap<(usize, u32), Term>>,
     zs: Vec<VarId>,
     qs: Vec<Term>,
     insns: BTreeMap<u128, Insn>,

@@ -312,6 +312,20 @@ impl<'e> Gen<'e> {
     /// exc_ok_ne, ok_exc_ne (core/records.core), g.exc_raise_brk or g.exc_ret_brk: it
     /// (at the body), the lemma
     fn ctor_false(&self, t: &Term, depth: u32) -> Option<(Term, &'static str)> {
+        // (a part found to hold none: none for good, as `redex`'s -- by the
+        // node's address and depth, the node kept)
+        let big = matches!(t.node(), Node::App(_, a) if !a.is_empty());
+        if big && self.no_ctor.borrow().contains_key(&(t.ptr_id(), depth)) {
+            return None;
+        }
+        let r = self.ctor_false_at(t, depth);
+        if big && r.is_none() {
+            self.no_ctor.borrow_mut().insert((t.ptr_id(), depth), t.clone());
+        }
+        r
+    }
+
+    fn ctor_false_at(&self, t: &Term, depth: u32) -> Option<(Term, &'static str)> {
         if let Some(e) = self.app(t, "eq", 2) {
             if self.ctor_eq(&e[0], &e[1]) == Some(false) {
                 let lab = |x: &Term| self.app(x, "exc", 2).and_then(|y| self.app(&y[1], "pair", 2).map(|p| p[0].clone()));
@@ -349,12 +363,12 @@ impl<'e> Gen<'e> {
 
     fn redex(&self, t: &Term, depth: u32) -> Option<(&'static str, Term, Term, Term)> {
         let _p = super::prof::g("redex");
-        if self.no_redex.borrow().contains(&(t.clone(), depth)) {
+        if self.no_redex.borrow().contains_key(&(t.ptr_id(), depth)) {
             return None;
         }
         let r = self.redex_in(t, depth);
         if r.is_none() && matches!(t.node(), Node::App(_, a) if !a.is_empty()) {
-            self.no_redex.borrow_mut().insert((t.clone(), depth));
+            self.no_redex.borrow_mut().insert((t.ptr_id(), depth), t.clone());
         }
         r
     }
@@ -395,12 +409,12 @@ impl<'e> Gen<'e> {
     /// An equation of a term (of x0 only) with itself in the rest's body:
     /// it, its side (at the body)
     fn refl_redex(&self, t: &Term, depth: u32) -> Option<(Term, Term)> {
-        if self.no_refl.borrow().contains(&(t.clone(), depth)) {
+        if self.no_refl.borrow().contains_key(&(t.ptr_id(), depth)) {
             return None;
         }
         let r = self.refl_redex_in(t, depth);
         if r.is_none() && matches!(t.node(), Node::App(_, a) if !a.is_empty()) {
-            self.no_refl.borrow_mut().insert((t.clone(), depth));
+            self.no_refl.borrow_mut().insert((t.ptr_id(), depth), t.clone());
         }
         r
     }
@@ -429,12 +443,12 @@ impl<'e> Gen<'e> {
     /// (`int_mod(int_div(b, 1), 2^n)`, the normal form): it, n, b
     fn whole_field(&self, t: &Term) -> Option<(Term, u128, Term)> {
         let _p = super::prof::g("whole_field");
-        if self.no_field.borrow().contains(t) {
+        if self.no_field.borrow().contains_key(&t.ptr_id()) {
             return None;
         }
         let r = self.whole_field_in(t);
         if r.is_none() && matches!(t.node(), Node::App(_, a) if !a.is_empty()) {
-            self.no_field.borrow_mut().insert(t.clone());
+            self.no_field.borrow_mut().insert(t.ptr_id(), t.clone());
         }
         r
     }
