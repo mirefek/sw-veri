@@ -78,10 +78,10 @@
 //! D: the goal's head). Lets likewise: a fact proves a goal the same up to
 //! lets, a let reduced only where the two differ (`Seq::conv_lets`).
 //!
-//! Simplification: `rsimp(e1, .., D1, .. [, only])` (Lean-like, see
+//! Simplification: `simp(e1, .., D1, .. [, only])` (Lean-like, see
 //! rsimp.rs): rewriting left to right with the facts and definitions given
 //! and the registered rules (`simp NAME` declarations), to `true`; on a
-//! fact, `rsimp(h, ..)`; as a step, `rsimp e1, .. [in h]` (the goal kept,
+//! fact, `simp(h, ..)`; as a step, `simp e1, .. [in h]` (the goal kept,
 //! simplified, unless it became `true`). The older `simp` (symbolic
 //! execution, closing paths by taut / arith) stays as it is.
 
@@ -156,7 +156,7 @@ fn run_block(env: &mut Env, lg: &Logic, mut st: State, text: &str, line: usize, 
         res = st.step(env, lg, &step, line + line_no, line + body_no).map_err(|e| {
             if e.0.starts_with("line ") { e } else { KernelError(format!("line {}: {}", line + line_no, e.0)) }
         });
-        let replaces = matches!(step.split_whitespace().next(), Some("unfold" | "zeta" | "fold_let" | "flip" | "rsimp"));
+        let replaces = matches!(step.split_whitespace().next(), Some("unfold" | "zeta" | "fold_let" | "flip" | "simp"));
         if res.is_ok() && !replaces && st.facts.len() > before {
             for (n, _) in &st.facts[before..] {
                 if !n.starts_with("__") && n != "_" && st.facts[..outer].iter().any(|(m, _)| m == n) && !hidden.iter().any(|(m, _)| m == n) {
@@ -760,7 +760,7 @@ struct State {
 }
 
 /// Rules that take their statement from the goal.
-const GOAL_RULES: &[&str] = &["taut", "arith", "types", "simp", "rsimp", "lists", "induct", "ex_intro", "defs", "clauses", "sel", "eval", "mem", "bitwise", "cases", "disj", "spec_ret", "divergence", "runs_univ", "div_body"];
+const GOAL_RULES: &[&str] = &["taut", "arith", "types", "symex", "simp", "lists", "induct", "ex_intro", "defs", "clauses", "sel", "eval", "mem", "bitwise", "cases", "disj", "spec_ret", "divergence", "runs_univ", "div_body"];
 
 /// `a -> b`: (a, b)
 fn imp_parts(env: &Env, t: &Term) -> KResult<(Term, Term)> {
@@ -1295,14 +1295,14 @@ impl State {
                 }
                 None => return err("expected `flip` or `flip in h`"),
             },
-            // rsimp [e1, ..] [in h]: the goal (or the fact h) simplified with
-            // the rules (see `rsimp`); a goal simplified to `true` is proven
-            "rsimp" => {
+            // simp [e1, ..] [in h]: the goal (or the fact h) simplified with
+            // the rules (see `simp`); a goal simplified to `true` is proven
+            "simp" => {
                 let (rules, h) = match split_top_kw(rest, "in") {
                     Some((a, b)) => (a.trim(), Some(b.trim())),
                     None => (rest.trim(), None),
                 };
-                let args = match parse_pe(&format!("rsimp({})", rules))? {
+                let args = match parse_pe(&format!("simp({})", rules))? {
                     PE::Rule(_, a) => a,
                     _ => unreachable!(),
                 };
@@ -1314,7 +1314,7 @@ impl State {
                         self.facts.push((h.to_string(), s));
                     }
                     None => {
-                        let g = self.goal.clone().ok_or_else(|| KernelError("rsimp: no current goal here".into()))?;
+                        let g = self.goal.clone().ok_or_else(|| KernelError("simp: no current goal here".into()))?;
                         let e = self.rsimp_eq(env, lg, &g, &rs, 0)?;
                         let n = match e.concl().node() {
                             Node::App(_, a) => a[1].clone(),
@@ -1322,7 +1322,7 @@ impl State {
                         };
                         match self.closes(env, lg, &n, &rs) {
                             Some(p) => self.last = Some(Seq::rewrite(env, &Seq::sym(env, &e)?, &p)?),
-                            None if n == g => return err("rsimp: no rule applies to the goal"),
+                            None if n == g => return err("simp: no rule applies to the goal"),
                             None => {
                                 self.frames.push(Frame::Rewrite(g, e));
                                 self.goal = Some(n);
@@ -1561,9 +1561,9 @@ impl State {
             return self.check(env, s, goal);
         };
         match name.as_str() {
-            // rsimp(e1, .., D1, .. [, only]): the goal rewritten with the
+            // simp(e1, .., D1, .. [, only]): the goal rewritten with the
             // rules to `true` (or a known fact)
-            "rsimp" => {
+            "simp" => {
                 let rs = self.rsimp_rules(env, lg, args)?;
                 self.rsimp_goal(env, lg, goal, &rs).map(|(s, _)| s)
             }
@@ -1659,13 +1659,15 @@ impl State {
                 let ps = split_conj(env, ps)?;
                 self.bitwise_goal(env, lg, goal, &ps, width)
             }
-            // simp(p1, ..): the goal, simplified, from the simplified premises
-            // (symbolic execution of `runs`), then taut or arith
+            // symex(p1, ..): the goal, simplified, from the simplified
+            // premises (symbolic execution of `runs`, by a search over the
+            // simplifier's rules: slow where nothing is executed -- use
+            // `simp` there), then taut or arith
             // Loops need invariants: a term `{l0 l. I}` (the loop's first
             // and current state), optionally followed by a variant `{l. m}`;
             // or `unroll`: loops without one are unrolled (when their
             // iterations are decided, e.g. on concrete data)
-            "simp" => {
+            "symex" => {
                 let mut facts = Vec::new();
                 let mut loops: Vec<LoopHint> = Vec::new();
                 let mut keep = Vec::new();
@@ -1707,10 +1709,10 @@ impl State {
                             Ok(inv) => loops.push(LoopHint { inv, var: None, unroll: false }),
                             Err(_) => {
                                 let m = parse_value(env, t, &self.scope, 1)
-                                    .map_err(|e| KernelError(format!("simp: `{{{}}}` is neither an invariant `{{l0 l. I}}` nor a variant `{{l. m}}`: {}", t, e.0)))?;
+                                    .map_err(|e| KernelError(format!("symex: `{{{}}}` is neither an invariant `{{l0 l. I}}` nor a variant `{{l. m}}`: {}", t, e.0)))?;
                                 match loops.last_mut() {
                                     Some(h) if h.var.is_none() => h.var = Some(m),
-                                    _ => return err(format!("simp: the variant `{{{}}}` must follow its invariant `{{l0 l. I}}`", t)),
+                                    _ => return err(format!("symex: the variant `{{{}}}` must follow its invariant `{{l0 l. I}}`", t)),
                                 }
                             }
                         },
@@ -2781,13 +2783,13 @@ impl State {
                 Some(s)
             };
             let rok = run(self, env, "__rok", "(gc.regs_ok(__rg, __ra) by taut(__rl, __rln, __rf3))".into());
-            let an = run(self, env, "__an", format!("(seq_len(__ra) = {} by simp())", n));
+            let an = run(self, env, "__an", format!("(seq_len(__ra) = {} by symex())", n));
             let rn = an.as_ref().and_then(|_| run(self, env, "__rn", "trans(__rln, __an)".into()));
             if let Some(rn) = &rn {
                 facts.push(rn.clone());
                 if n <= 6 {
                     if let Some(d) = run(self, env, "__rd",
-                        "(__rg in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(__rl, (ord_le(seq_len(__rg), 6) by defs(arith(__rn, (seq_len(__rg) in omega by simp(__rn))), ord_le)), keep(ord_le)))".into())
+                        "(__rg in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by symex(__rl, (ord_le(seq_len(__rg), 6) by defs(arith(__rn, (seq_len(__rg) in omega by symex(__rn))), ord_le)), keep(ord_le)))".into())
                     {
                         facts.push(d);
                         if let Some(d2) = run(self, env, "__rd2", "(__rg in abi.ARGS by defs(__rd, abi.ARGS))".into()) {
@@ -2795,7 +2797,7 @@ impl State {
                         }
                     }
                 }
-                if let Some(c) = run(self, env, "__rc", format!("(ord_le({}, seq_len(__rg)) by defs(simp(__rn), ord_le))", n)) {
+                if let Some(c) = run(self, env, "__rc", format!("(ord_le({}, seq_len(__rg)) by defs(symex(__rn), ord_le))", n)) {
                     facts.push(c);
                 }
             }
@@ -2807,7 +2809,7 @@ impl State {
                     let bt = Term::app(in_, vec![x.clone(), Term::app(env.sym_by_name["bits"], vec![w.clone()])]);
                     let Some(xb) = using.iter().find(|g| g.concl() == &bt) else { continue };
                     self.facts.push((format!("__xb{}", i), xb.clone()));
-                    let text = format!("apply(gc.reg_at[regs := __rg, args := __ra, i := {i}, w := {w}, x := __rx{i}], __rok, simp(), simp(__an), at({{__ra[{i}]}}), simp(), __xb{i})", i = i, w = ws[i]);
+                    let text = format!("apply(gc.reg_at[regs := __rg, args := __ra, i := {i}, w := {w}, x := __rx{i}], __rok, symex(), symex(__an), at({{__ra[{i}]}}), symex(), __xb{i})", i = i, w = ws[i]);
                     if let Some(q) = run(self, env, &format!("__q{}", i), text) {
                         eqs.push(q);
                     }
@@ -3074,7 +3076,7 @@ impl State {
                             Seq::rewrite(env, &Seq::sym(env, &ex_e)?, &withs[i])?
                         }
                     }
-                    None => match self.by(env, lg, &ex_t, &parse_pe("ex_intro({0}, simp())")?) {
+                    None => match self.by(env, lg, &ex_t, &parse_pe("ex_intro({0}, symex())")?) {
                         Ok(ne) => ne,
                         Err(_) => break,
                     },
@@ -3665,7 +3667,7 @@ impl State {
         let ths = self.mem_discharge(env, lg, &Term::app(thread_ok, vec![s_app(w, b"vm"), s_app(w, b"fs_base")]), using, 0)?;
         let hw = self.mem_discharge(env, lg, &Term::app(in_, vec![w.clone(), Term::app(world, vec![])]), using, 0)?;
         let rex = self.step_regs_ex(env, lg, args, using)?;
-        let hl = self.by(env, lg, &Term::app(int_le, vec![Term::app(seq_len, vec![args.clone()]), Term::nat(sl_kernel::Nat::from_u64(6))]), &parse_pe("simp()")?)?;
+        let hl = self.by(env, lg, &Term::app(int_le, vec![Term::app(seq_len, vec![args.clone()]), Term::nat(sl_kernel::Nat::from_u64(6))]), &parse_pe("symex()")?)?;
         let mut pre = vec![ths, hw];
         if let Some(v) = &mem {
             pre.push(self.mem_discharge(env, lg, &Term::app(in_, vec![v.clone(), Term::app(vm_t, vec![])]), using, 0)?);
@@ -4106,7 +4108,7 @@ impl State {
             r.reset();
             return Ok(r.clone());
         }
-        let rules = "rsimp(eq_self, not_true, not_false, not_not, true_and, and_true, false_and, and_false, true_or, or_true, false_or, or_false, \
+        let rules = "simp(eq_self, not_true, not_false, not_not, true_and, and_true, false_and, and_false, true_or, or_true, false_or, or_false, \
             fst_pair, snd_pair, letin_eq, out_state_ok, out_value_ok, out_state_exc, out_value_exc, fst_ok, fst_exc, fst_diverge, \
             app_update_same, app_update_other, fn_update_twice, only)";
         let args = match parse_pe(rules)? {
@@ -4129,7 +4131,7 @@ impl State {
             r.reset();
             return Ok(r.clone());
         }
-        let args = match parse_pe("rsimp(g.sval64_lit, only)")? {
+        let args = match parse_pe("simp(g.sval64_lit, only)")? {
             PE::Rule(_, a) => a,
             _ => unreachable!(),
         };
@@ -4486,14 +4488,14 @@ impl State {
                             _ => err("list_ext takes four proofs"),
                         }
                     }
-                    // simp(p): a simplified consequence of p (runs of a program
-                    // replaced by the conditions on its outcome)
-                    "simp" if args.len() == 1 => {
+                    // symex(p): a simplified consequence of p (runs of a
+                    // program replaced by the conditions on its outcome)
+                    "symex" if args.len() == 1 => {
                         let p = self.proof_arg(env, lg, a0)?;
                         Ok(Seq::simp(env, lg, &p))
                     }
-                    // rsimp(h, e1, ..): the fact h simplified
-                    "rsimp" => {
+                    // simp(h, e1, ..): the fact h simplified
+                    "simp" => {
                         let h = self.proof_arg(env, lg, a0)?;
                         let rs = self.rsimp_rules(env, lg, &args[1.min(args.len())..])?;
                         self.rsimp_fact(env, lg, h, &rs)

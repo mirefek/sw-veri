@@ -89,7 +89,7 @@ impl Rules {
 /// `name`'s instance at `ts` (its schematic variables in the order they
 /// appear)
 fn lemma(env: &Env, name: &str, ts: &[Term]) -> KResult<Seq> {
-    let mut s = facts::seq_of(env, name).ok_or_else(|| KernelError(format!("rsimp: `{}` (core/logic.core) is not loaded", name)))?;
+    let mut s = facts::seq_of(env, name).ok_or_else(|| KernelError(format!("simp: `{}` (core/logic.core) is not loaded", name)))?;
     let mut vs = Vec::new();
     s.concl().vars(&mut vs);
     for (v, t) in vs.iter().zip(ts) {
@@ -238,10 +238,10 @@ impl State {
                     rs.given.push(s.clone());
                     match self.rule(env, lg, &name, s) {
                         Some(r) => rs.rules.push(r),
-                        None => return err(format!("rsimp: `{}` is no rewrite rule", name)),
+                        None => return err(format!("simp: `{}` is no rewrite rule", name)),
                     }
                 }
-                _ => return err("rsimp takes facts and definitions"),
+                _ => return err("simp takes facts and definitions"),
             }
         }
         if !only {
@@ -494,7 +494,7 @@ impl State {
             return Ok(None);
         }
         if past_deadline() {
-            return err("rsimp: out of time (a diagnostic's limit)");
+            return err("simp: out of time (a diagnostic's limit)");
         }
         let r = self.site_here(env, lg, t, rs, depth, none)?;
         if r.is_none() && t.shared() {
@@ -671,7 +671,7 @@ impl State {
     fn normalize(&self, env: &mut Env, lg: &Logic, mut s: Seq, focus: &dyn Fn(&Term) -> Term, rs: &Rules, depth: usize) -> KResult<Seq> {
         for _ in 0..LIMIT {
             if past_deadline() {
-                return err("rsimp: out of time (a diagnostic's limit)");
+                return err("simp: out of time (a diagnostic's limit)");
             }
             if !rs.defs.is_empty() {
                 let u = unfold_all(env, s.concl(), &rs.defs);
@@ -710,7 +710,7 @@ impl State {
                 return Ok(s);
             }
         }
-        err(format!("rsimp: more than {} rewrites (do the rules loop?)", LIMIT))
+        err(format!("simp: more than {} rewrites (do the rules loop?)", LIMIT))
     }
 
     /// `goal = N`, N its normal form
@@ -743,7 +743,7 @@ impl State {
             Some(p) => p,
             None => {
                 let pp = Printer::new(env);
-                return err(format!("rsimp: the goal simplifies to `{}`", pp.short(&n)));
+                return err(format!("simp: the goal simplifies to `{}`", pp.short(&n)));
             }
         };
         Seq::rewrite(env, &Seq::sym(env, &e)?, &pn)
@@ -780,7 +780,7 @@ impl State {
         };
         rs.reset();
         let e = self.rsimp_eq(env, lg, goal, rs, 0)?;
-        let n = eq_parts(env, e.concl()).ok_or_else(|| KernelError("rsimp: not an equation".into()))?.1;
+        let n = eq_parts(env, e.concl()).ok_or_else(|| KernelError("simp: not an equation".into()))?.1;
         let rel: Vec<Seq> = relevant_facts(env, &n, &rs.given).into_iter().cloned().collect();
         let mut more: Vec<Seq> = Vec::new();
         for f in rel {

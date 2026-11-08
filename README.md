@@ -169,7 +169,8 @@ edited proof is checked again on its own, in about a second.
 
 Both claims are proven: the first milestone is reached. Next steps are
 in `docs/todo.md`:
-- next, usability and speed: `rsimp` replacing `simp`, faster checks
+- next, usability and speed: faster checks; `simp` (rewriting) the
+  default rule, `symex` (symbolic execution) only for program runs
   (trusted kernel extensions where they pay off), less bookkeeping in
   proofs;
 - a witness that some run reaches `main`;

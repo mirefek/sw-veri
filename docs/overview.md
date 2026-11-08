@@ -172,7 +172,7 @@ example, proofs/mallocng/fun/alloc_slot.core or try_avail.core.
   to the kernel's rules. The symbols they read by name are pinned
   (`ext/pinned.rs`): the canonical prelude's (its text embedded in the
   kernel), a few layer definitions with fixed bodies (`store_le`, `le`,
-  `bytes_at`, `x86.apart`), and the loop theorems simp relies on with fixed
+  `bytes_at`, `x86.apart`), and the loop theorems symex relies on with fixed
   statements.
 - The model (`spec/`): x86-64 and Linux, written in SL, assumed to describe
   the real machine.
@@ -486,6 +486,7 @@ the musl build (`scripts/build-musl.sh -O0`) skip without it; with
   DWARF, build/locmap_O0.core). It guides the engine and is not trusted.
 - **normal form (N)**: the one form values are written in during C1
   (`slc/cli/src/c1/nf.rs`), so that comparing two values is a match.
-- **`step`, `mem`, `rsimp`, `arith`**: proof-language tactics: run a
+- **`step`, `mem`, `simp`, `arith`**: proof-language tactics: run a
   program, read memory through stores, rewrite, linear arithmetic
-  (docs/language.md §13).
+  (docs/language.md §13). `symex` is the older path simplifier (symbolic
+  execution, a trusted search), for program runs only.

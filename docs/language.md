@@ -366,10 +366,10 @@ its C1 by `tr.implements_abi_g` (proofs/abi_ghost.core; for every G whose
 fields are none of the machine's or the world's, `abi.ghost_ok`).
 
 In such a refinement the ghost part rides along without bookkeeping:
-`simp` reads a field of `union2(s, h)` in the part that has it and pushes
+`symex` reads a field of `union2(s, h)` in the part that has it and pushes
 an update into it (a part lacks a field by its construction or by a known
-`dom(h) = D`), and computes `with_ghost(ok(s, v), h) = ok(union2(s, h), v)`
-(likewise `exc`; a divergence is itself). Binding commutes with a ghost
+`dom(h) = D`); `with_ghost(ok(s, v), h) = ok(union2(s, h), v)` (likewise
+`exc`; a divergence is itself) is a registered `simp` rule. Binding commutes with a ghost
 extension (`g.bind_ghost`), so a C function value's wrapper refines when
 its procedure does (`g.fun_res_ghost`, as `g.fun_res`), and a contract's
 runs are introduced by its two cases (`ct.contract_ovf`,
@@ -416,7 +416,7 @@ lemma name(params): φ          an open lemma: theorems using it are conditional
 theorem name(params): φ proof ... qed
 theorem name proof ... qed     proves an earlier claim or lemma
 irreducible name               implicit unfolding keeps `name` folded
-simp name                      registers an equation for rsimp
+simp name                      registers an equation for simp
 mem_view name                  registers a memory view (below, "Memory")
 mem_frame name                 registers a memory frame
 mem_closure name               registers a memory closure
@@ -494,7 +494,7 @@ refine L [with f..]       the goal by L backward: L's conclusion matched with th
 zeta x [, {k}..] [in h]   the let x's variable its value (all or the k-th occurrences)
 fold_let x [, {t}] [, {k}..] [in h]   the let x's value back to x, or a new let x of t
 flip [in h]               turn the equation / disequation around
-rsimp e1, .. [in h]       simplify the goal (or h) with rsimp
+simp e1, .. [in h]        simplify the goal (or h) with simp
 print P                   show what P proves, then (on their own lines) its hypotheses and the goal
 goal [N]                  show the current goal, the variables in scope and the named facts (the
                           last N), a name bound again marked `(shadowed)`
@@ -532,7 +532,7 @@ Arguments are proof expressions, terms `{t}`, occurrence selections
 
 **Lets.** `letin(a, x. f)` keeps the name written at its binder (term
 metadata, like labels): messages print it, and `zeta` / `fold_let` /
-`simp(.., lets(..))` select a let by it. A let without a written name is
+`symex(.., lets(..))` select a let by it. A let without a written name is
 selected by the name it is printed with (`x3`); the first let so named
 counts (outer before inner, left to right). A new let made by `fold_let`
 goes around the whole statement, so its value must be closed. A fact proves a goal
@@ -740,10 +740,10 @@ bound like `p + n + 4 <= e + w` brings in n's and w's facts.
 | `at({L[i]}, p..)` | the element at i of a list expression (or of a defined list constant's); a list known by `X in list_type(T)` among p.. is a piece, a known concatenation also whole when its own pieces are not all known (as `seq_len` in `arith`) |
 | `list_ext(ha, hb, hl, he)` | list extensionality |
 | `members({S}, h..)` | the members of S on concrete data |
-| `rsimp(h, e.., [only])` | h simplified |
+| `simp(h, e.., [only])` | h simplified |
 | `mem_read({t}, p..)` | `t = r`: t's reads resolved through their memories' writes (facts p..) |
 | `mem_bytes({bytes_at(M, b, m)}, p..)` | the kernel's `mem_read`: one read through M's writes |
-| `simp(h, ..)` | h's paths (symbolic execution) |
+| `symex(h)` | h's paths (symbolic execution) |
 
 A higher-order parameter applied to distinct bound variables (`k(s1, v)`)
 matches any term over them. Other parameters are given explicitly.
@@ -758,13 +758,13 @@ premise they stand for.
 |---|---|
 | `taut(p..)` | a propositional tautology from the premises; `a = b` is also `b = a`, and `a != b` is `!(a = b)` |
 | `arith(p..)` | propositional logic plus linear arithmetic over integers: words mod 2^n with symbolic widths, `*`, `/`, `%` by constants (numerals, or powers of numerals: `pow2(64)`, `int_pow(2, 32)`); products of non-constants as monomials (`a * (b + c)` is `a b + a c`), a product of nonnegatives nonnegative, `x = m q + r` for `/`, `%` by a symbolic m > 0, `pow2(k + 1)` as `2 pow2(k)` |
-| `rsimp(e.., D.., [only])` | left-to-right rewriting to `true` with the facts, definitions and registered `simp` rules; a rule's premise that is a membership by `types`, `!(a = b)` of distinct literals by their bytes or numerals |
+| `simp(e.., D.., [only])` | left-to-right rewriting to `true` with the facts, definitions and registered `simp` rules; a rule's premise that is a membership by `types`, `!(a = b)` of distinct literals by their bytes or numerals |
 | `types(p..)` | a membership `t in T` (or `k in dom(r)`, `is_fun(r)`) by the forms of t and T, from the facts given and the block's: universes by t's constructors and literals, a record's fields from its type, updates of a typed record, function values, word operations by their width, numbers by arith over the atoms' inferred sets; determined, each step a lemma (slc/proof/src/types.rs) |
-| `simp(p.., keep(P..), {l0 l. I}, {l. m})` | the path simplifier, below |
+| `symex(p.., keep(P..), {l0 l. I}, {l. m})` | the path simplifier (symbolic execution), below |
 | `defs(p, D..)` | p proves the goal with D unfolded |
 | `ex_intro({w}.., p)` | witnesses for `ex` |
 | `disj({k}, p)` | the goal's k-th disjunct (as written, from 1) by p |
-| `spec_ret({w}.., f..)` | a contract body's instance: its letins, each choice and `ex` by the next witness, each property, equation and conjunct by taut, else simp, from the facts; a goal `runs(P, s, o)` (P a defined `mkprog`): its relation so, `pair(s, o) in univ(1)` from the facts |
+| `spec_ret({w}.., f..)` | a contract body's instance: its letins, each choice and `ex` by the next witness, each property, equation and conjunct by taut, else symex, from the facts; a goal `runs(P, s, o)` (P a defined `mkprog`): its relation so, `pair(s, o) in univ(1)` from the facts |
 | `divergence([GU, GS])` | a spec function diverges nowhere it does not raise: `tr.div_raises(F)`, or `tr.div_raises_g(G, F)` given G's members in univ(1) (GU, `mp.g_univ`) and a world and ghost part joined (GS, `mp.gS`); by F's shape (`ct.fun_divg`, `_v`, `_v0`), its runs' universe (`runs_univ()`) and its contract's body (`div_body(GS)`: `ct.contract_div` / `_div0`, the body by the `ct.dv_*` lemma that fits) |
 | `sel(p)` | `z in set_select(S, x. P)` from `z in S && P(z)` |
 | `lists(p..)` | equal list expressions (same pieces) |
@@ -812,12 +812,16 @@ first. This applies to:
 - a stated `assume`;
 - destructuring and `all_elim`.
 
-**rsimp** is Lean-like: it rewrites left to right only, with the given
+**simp** is Lean-like: it rewrites left to right only, with the given
 equations and definitions and the registered `simp` rules (`only`
-excludes the registered ones).
+excludes the registered ones). Untrusted: each rewrite is a kernel step.
+As a goal rule it is a fixed sequence: a conjunction conjunct by
+conjunct; a membership by `types` first; then rewriting to `true` (or a
+fact); then taut / arith with the facts that mention the normal form's
+atoms.
 - A conditional rule's premises are discharged by:
   1. known facts;
-  2. nested rsimp;
+  2. nested simp;
   3. arith on the relevant facts.
 - Ground arithmetic and literal (in)equalities are evaluated.
 - Under binders (`rewrite_under`: each binder's extensionality, choice's
@@ -828,7 +832,9 @@ excludes the registered ones).
   of `ok` and `exc`, `fst` of `ok` / `exc` / `diverge`; core/records.core).
 - `RSIMP_TRACE=1` prints every rewrite.
 
-**simp** is the path simplifier, used for symbolic execution of programs.
+**symex** is the path simplifier, used for symbolic execution of programs
+(a trusted extension, slc/kernel/src/ext/simp.rs; it searches, so it is
+slow where nothing is executed: use `simp` there).
 - It turns `runs(P, s, o)` into P's paths, with the existentials pulled
   out and equations solved.
 - It closes each path by taut / arith. It finds witnesses for the goal's
@@ -886,8 +892,8 @@ arith: not shown; a consistent case:
 | `SLC_TIMES=1` | each file's check time |
 | `STEP_SLOW=secs` | slow proof steps, with lines |
 | `SLC_TIDY=1` | `assume`s restating the goal (`scripts/tidy_proofs.py` removes them) |
-| `SIMP_SLOW=secs`, `SIMP_TIME=1` | slow `simp` calls; time per phase |
-| `RSIMP_TRACE=1` | rsimp's rewrites and premise attempts |
+| `SIMP_SLOW=secs`, `SIMP_TIME=1` | slow `symex` calls; time per phase |
+| `RSIMP_TRACE=1` | simp's rewrites and premise attempts |
 
 ### Conventions
 

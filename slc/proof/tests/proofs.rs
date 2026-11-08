@@ -57,30 +57,30 @@ theorem u(A, x): (A.metas).last = pair(x, x)[A].k.l -> app(app(A, \"metas\"), \"
     rejected("theorem t(A, g): A.metas[g] = A.metas\nproof\n  show eq_refl[a := A.metas]\nqed\n", "A.metas[g]");
 }
 
-/// rsimp: rewriting left to right with the facts given (an equation, a
+/// simp: rewriting left to right with the facts given (an equation, a
 /// proposition as `true`, a negation's proposition as `false`), the
 /// definitions given, and the registered rules (core/logic.core's
 /// propositional ones, `ite_t` with its premise from a fact); numerals
 /// evaluated; also under binders; on a fact, and as a step.
 #[test]
-fn rsimp_rewrites_left_to_right() {
+fn simp_rewrites_left_to_right() {
     let lib = format!("{}{}", core_file("logic.core"), core_file("sets.core"));
     let base = check(&lib).unwrap();
     let ok = [
-        "theorem t(x, q): x in q -> (true && x in q) || q = 1\nproof\n  assume h\n  show by rsimp(h)\nqed\n",
-        "theorem t(x, y): x = 3 -> y = x -> y = 3\nproof\n  assume h g\n  show by rsimp(g, h)\nqed\n",
-        "theorem t(c, a, b): c -> ite(c, a, b) = a\nproof\n  assume h\n  show by rsimp(h)\nqed\n",
-        "def both(a, b) := a && b\ntheorem t(x, s, q): x in s -> both(x in s, q = 1) = (q = 1)\nproof\n  assume h\n  show by rsimp(both, h)\nqed\n",
-        "theorem t(x, s, q): x in s -> !(q = 1) -> (x in s && !(q = 1)) || false\nproof\n  assume h g\n  rsimp h, g\nqed\n",
-        "theorem t(x): x = 3 -> all z. z = x -> z = 3\nproof\n  assume h\n  show by rsimp(h)\nqed\n",
-        "theorem t(a, b, c): a = b -> b = c -> a = c\nproof\n  assume h g\n  have k := rsimp(h, g)\n  show k\nqed\n",
-        "theorem t: int_lt(int_add(pow2(3), 1), 10) && int_mod(17, 5) = 2\nproof\n  show by rsimp()\nqed\n",
+        "theorem t(x, q): x in q -> (true && x in q) || q = 1\nproof\n  assume h\n  show by simp(h)\nqed\n",
+        "theorem t(x, y): x = 3 -> y = x -> y = 3\nproof\n  assume h g\n  show by simp(g, h)\nqed\n",
+        "theorem t(c, a, b): c -> ite(c, a, b) = a\nproof\n  assume h\n  show by simp(h)\nqed\n",
+        "def both(a, b) := a && b\ntheorem t(x, s, q): x in s -> both(x in s, q = 1) = (q = 1)\nproof\n  assume h\n  show by simp(both, h)\nqed\n",
+        "theorem t(x, s, q): x in s -> !(q = 1) -> (x in s && !(q = 1)) || false\nproof\n  assume h g\n  simp h, g\nqed\n",
+        "theorem t(x): x = 3 -> all z. z = x -> z = 3\nproof\n  assume h\n  show by simp(h)\nqed\n",
+        "theorem t(a, b, c): a = b -> b = c -> a = c\nproof\n  assume h g\n  have k := simp(h, g)\n  show k\nqed\n",
+        "theorem t: int_lt(int_add(pow2(3), 1), 10) && int_mod(17, 5) = 2\nproof\n  show by simp()\nqed\n",
     ];
     for t in ok {
         assert_eq!(check(&format!("{}{}", lib, t)), Ok(base + 1), "{}", t);
     }
     // only the rules given (`only`); what is left is shown
-    rejected(&format!("{}theorem t(x, y): x = y -> true && x = y\nproof\n  assume h\n  show by rsimp(only, h)\nqed\n", lib), "the goal simplifies to `true && y = y`");
+    rejected(&format!("{}theorem t(x, y, z): x = y -> true && int_lt(x, z)\nproof\n  assume h\n  show by simp(only, h)\nqed\n", lib), "the goal simplifies to `true && int_lt(y, z)`");
 }
 
 /// Small conveniences: messages fold a proof's `let`s back (and implicit
@@ -107,7 +107,7 @@ fn folded_messages_rest_patterns_and_symmetric_taut() {
 }
 
 /// Words and integers: arith reads word operations of a symbolic width
-/// (their definitions, the remainder of a small value); rsimp turns a word
+/// (their definitions, the remainder of a small value); simp turns a word
 /// sum without wrap-around into the integer one (`bits_add_nowrap`), its
 /// bounds shown by arith from the facts about its terms.
 #[test]
@@ -117,7 +117,7 @@ fn words_and_integers() {
     let ok = [
         "theorem t(n, a, b): n in omega -> a in bits(n) -> b in bits(n) -> bits_add(n, a, b) in bits(n)\nproof\n  assume hn ha hb\n  show by arith(hn, ha, hb)\nqed\n",
         "theorem t(n, a, b): a in bits(n) -> b in bits(n) -> int_le(b, a) -> bits_sub(n, a, b) = int_sub(a, b)\nproof\n  assume ha hb hl\n  show by arith(ha, hb, hl)\nqed\n",
-        "theorem t(p): p in bits(64) -> int_lt(p, 1000) -> bits_add(64, p, 8) = int_add(p, 8)\nproof\n  assume hp hl\n  show by rsimp()\nqed\n",
+        "theorem t(p): p in bits(64) -> int_lt(p, 1000) -> bits_add(64, p, 8) = int_add(p, 8)\nproof\n  assume hp hl\n  show by simp()\nqed\n",
         "theorem t(p): p in bits(64) -> int_lt(int_add(p, 8), int_pow(2, 64)) -> int_add(p, 8) in bits(64)\nproof\n  assume hp hl\n  show by arith(hp, hl)\nqed\n",
         // (the block's memberships of the goal's terms: arith's without naming them)
         "theorem t(x): x in omega -> int_lt(x, 4) -> int_lt(2, x) -> x = 3\nproof\n  assume hx h1 h2\n  show by arith(h1, h2)\nqed\n",
@@ -139,7 +139,7 @@ fn flip_turns_equations_around() {
         "theorem t(a, b): !(a = b) -> !(b = a)\nproof\n  assume h\n  show flip(h)\nqed\n",
         "theorem t(c): (all x y. x in c -> int_add(x, y) = int_add(y, x)) -> all x y. x in c -> int_add(y, x) = int_add(x, y)\nproof\n  assume h\n  show flip(h)\nqed\n",
         "theorem t(a, b): a = b -> b = a\nproof\n  assume h\n  flip\n  show h\nqed\n",
-        "theorem t(x, y): y = 3 -> y = x -> 3 = x\nproof\n  assume h g\n  flip in g\n  flip\n  show by rsimp(g, h)\nqed\n",
+        "theorem t(x, y): y = 3 -> y = x -> 3 = x\nproof\n  assume h g\n  flip in g\n  flip\n  show by simp(g, h)\nqed\n",
     ];
     for t in ok {
         assert_eq!(check(&format!("{}{}", lib, t)), Ok(base + 1), "{}", t);
@@ -350,9 +350,15 @@ fn set_select_membership_steps() {
 
 /// Loads the prelude and the libraries up to core/nat.core, then `src`.
 fn check_nat(src: &str) -> Result<usize, String> {
+    check_after(&["logic.core", "sets.core", "nat.core"], src)
+}
+
+/// After the libraries `libs` (in the chain's order, proofs/chain: a file's
+/// proofs use the rewrite rules registered before it).
+fn check_after(libs: &[&str], src: &str) -> Result<usize, String> {
     let mut env = Env::new();
     load(&mut env, &core_file("prelude.core"), true).unwrap();
-    for f in ["logic.core", "sets.core", "nat.core"] {
+    for f in libs {
         load_with(&mut env, &core_file(f), false, Some(&mut ScriptProver)).unwrap();
     }
     load_with(&mut env, src, false, Some(&mut ScriptProver)).map(|r| r.theorems.len()).map_err(|e| e.0)
@@ -362,7 +368,7 @@ fn check_nat(src: &str) -> Result<usize, String> {
 fn check_loop(src: &str) -> Result<(usize, Vec<String>), String> {
     let mut env = Env::new();
     load(&mut env, &core_file("prelude.core"), true).unwrap();
-    for f in ["logic.core", "sets.core", "nat.core", "loop.core"] {
+    for f in ["logic.core", "sets.core", "nat.core", "records.core", "list.core", "loop.core"] {
         load_with(&mut env, &core_file(f), false, Some(&mut ScriptProver)).unwrap();
     }
     load_with(&mut env, src, false, Some(&mut ScriptProver)).map(|r| (r.theorems.len(), r.conditional)).map_err(|e| e.0)
@@ -421,19 +427,19 @@ fn extension_soundness_holes_stay_closed() {
         "def x86_64_linux.store_le(b, a, n, v) := empty\n",
         "def gimple.bytes_at(vm, a, n) := 7\n",
         // simp's matching: no bound variable escapes
-        "theorem cap(x y. r): (all x. ex y. r(x, y)) -> ex y. r(y, y)\nproof\n  assume h\n  show by simp(h)\nqed\n",
-        "theorem refl_le: all z. int_le(z, z)\nproof\n  fix z\n  show by arith()\nqed\ntheorem c2: ex x. all z. int_le(x, z)\nproof\n  show by simp(refl_le)\nqed\n",
+        "theorem cap(x y. r): (all x. ex y. r(x, y)) -> ex y. r(y, y)\nproof\n  assume h\n  show by symex(h)\nqed\n",
+        "theorem refl_le: all z. int_le(z, z)\nproof\n  fix z\n  show by arith()\nqed\ntheorem c2: ex x. all z. int_le(x, z)\nproof\n  show by symex(refl_le)\nqed\n",
         // bits of a negative width: empty
-        "theorem b: ex x. x in bits(int_neg(1))\nproof\n  show by simp()\nqed\n",
+        "theorem b: ex x. x in bits(int_neg(1))\nproof\n  show by symex()\nqed\n",
         // a store's bytes: at addresses (64 bits) only
-        "def x86_64_linux.store_le(b, a, n, v) := fn_build(bits(64), x. ite(int_lt(bits_sub(64, x, a), n), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), app(b, x)))\ntheorem r: app(x86_64_linux.store_le(empty, 0, 1, 1), 18446744073709551616) = 1\nproof\n  show by simp()\nqed\n",
+        "def x86_64_linux.store_le(b, a, n, v) := fn_build(bits(64), x. ite(int_lt(bits_sub(64, x, a), n), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), app(b, x)))\ntheorem r: app(x86_64_linux.store_le(empty, 0, 1, 1), 18446744073709551616) = 1\nproof\n  show by symex()\nqed\n",
         // sign extension to fewer bits, a slice beyond the word
-        "theorem s: bits_sext(16, 8, 300) = 300\nproof\n  show by simp()\nqed\n",
-        "theorem s: bits_set_slice(8, 0, 15, 0, 300) = 300\nproof\n  show by simp()\nqed\n",
+        "theorem s: bits_sext(16, 8, 300) = 300\nproof\n  show by symex()\nqed\n",
+        "theorem s: bits_set_slice(8, 0, 15, 0, 300) = 300\nproof\n  show by symex()\nqed\n",
         // a set that holds is not `true`
-        "theorem l(x): x -> x = true\nproof\n  assume h\n  show by simp(h)\nqed\n",
+        "theorem l(x): x -> x = true\nproof\n  assume h\n  show by symex(h)\nqed\n",
         // ok(s, v) is a pair (members' matching)
-        "theorem m: false\nproof\n  have m := members({set_select(omega, n. n = 0 && (ex a b. ok(5, 6) = pair(a, b)))})\n  have i := all_elim(m, {0})\n  have e: ok(5, 6) = pair(0, pair(5, 6)) by defs(refl({pair(0, pair(5, 6))}), ok, tag)\n  have x: ex a b. ok(5, 6) = pair(a, b) by ex_intro({0}, {pair(5, 6)}, e)\n  have o: 0 in omega by simp()\n  have z: 0 in set_select(omega, n. n = 0 && (ex a b. ok(5, 6) = pair(a, b))) by sel(taut(o, refl({0}), x))\n  show by taut(i, z)\nqed\n",
+        "theorem m: false\nproof\n  have m := members({set_select(omega, n. n = 0 && (ex a b. ok(5, 6) = pair(a, b)))})\n  have i := all_elim(m, {0})\n  have e: ok(5, 6) = pair(0, pair(5, 6)) by defs(refl({pair(0, pair(5, 6))}), ok, tag)\n  have x: ex a b. ok(5, 6) = pair(a, b) by ex_intro({0}, {pair(5, 6)}, e)\n  have o: 0 in omega by symex()\n  have z: 0 in set_select(omega, n. n = 0 && (ex a b. ok(5, 6) = pair(a, b))) by sel(taut(o, refl({0}), x))\n  show by taut(i, z)\nqed\n",
     ];
     for src in bad {
         assert!(check_all(src).is_err(), "accepted:\n{}", src);
@@ -580,17 +586,17 @@ def prog(p) := mkprog(s o. ex x. ((p = 0 && x = exc(pair(s, empty), pair(\"ret\"
 theorem t0(s, o): runs(prog(0), s, o) -> o = ok(s, empty)
 proof
   assume h: runs(prog(0), s, o)
-  show by simp(h)
+  show by symex(h)
 qed
 theorem t1(s, o, p): runs(prog(p), s, o) -> !(p = 0) -> ex v. o = ok(s, v) && v = 7
 proof
   assume h: runs(prog(p), s, o)
   assume n: !(p = 0)
-  show by simp(h, n)
+  show by symex(h, n)
 qed
 theorem t2(a, b, c, d): (ok(a, b) = exc(c, d) -> false) && (ok(a, b) = ok(c, d) -> a = c) && letin(3, x. x = 3)
 proof
-  show by simp()
+  show by symex()
 qed
 ";
     assert_eq!(check(src), Ok(3));
@@ -599,18 +605,18 @@ qed
 #[test]
 fn simp_does_not_overreach() {
     // running a program cannot be concluded without typing (univ membership)
-    rejected("theorem x(a, b): runs(mkprog(s o. true), a, b)\nproof\n  show by simp()\nqed\n", "simp");
+    rejected("theorem x(a, b): runs(mkprog(s o. true), a, b)\nproof\n  show by symex()\nqed\n", "symex");
     // nor from a negated `runs` (the one-way step is not used there)
-    rejected("theorem x(a, b): !runs(mkprog(s o. true), a, b) -> false\nproof\n  assume h: !runs(mkprog(s o. true), a, b)\n  show by simp(h)\nqed\n", "simp");
+    rejected("theorem x(a, b): !runs(mkprog(s o. true), a, b) -> false\nproof\n  assume h: !runs(mkprog(s o. true), a, b)\n  show by symex(h)\nqed\n", "symex");
     // equal literals are not distinct; constructor arguments are not mixed up
-    rejected("theorem x: \"ab\" = \"ab\" -> false\nproof\n  assume h: \"ab\" = \"ab\"\n  show by simp(h)\nqed\n", "simp");
-    rejected("theorem x(a, b, c, d): pair(a, b) = pair(c, d) -> a = d\nproof\n  assume h: pair(a, b) = pair(c, d)\n  show by simp(h)\nqed\n", "simp");
+    rejected("theorem x: \"ab\" = \"ab\" -> false\nproof\n  assume h: \"ab\" = \"ab\"\n  show by symex(h)\nqed\n", "symex");
+    rejected("theorem x(a, b, c, d): pair(a, b) = pair(c, d) -> a = d\nproof\n  assume h: pair(a, b) = pair(c, d)\n  show by symex(h)\nqed\n", "symex");
     // a path that does not imply the goal is reported
-    rejected("theorem x(p, o, s): runs(mkprog(s o. o = ok(s, 1) || o = ok(s, 2)), s, o) -> o = ok(s, 1)\nproof\n  assume h: runs(mkprog(s o. o = ok(s, 1) || o = ok(s, 2)), s, o)\n  show by simp(h)\nqed\n", "1 path left");
+    rejected("theorem x(p, o, s): runs(mkprog(s o. o = ok(s, 1) || o = ok(s, 2)), s, o) -> o = ok(s, 1)\nproof\n  assume h: runs(mkprog(s o. o = ok(s, 1) || o = ok(s, 2)), s, o)\n  show by symex(h)\nqed\n", "1 path left");
     // records: updates at the same keys compare field by field; an update
     // on one side only is not the identity (the base may lack the key)
-    assert_eq!(check("theorem x(s, a, b, c): fn_update(fn_update(fn_update(s, \"x\", a), \"y\", b), \"x\", c) = fn_update(fn_update(s, \"y\", b), \"x\", c)\nproof\n  show by simp()\nqed\n"), Ok(1));
-    rejected("theorem x(s, a): fn_update(s, \"x\", a) = fn_update(fn_update(s, \"x\", a), \"y\", app(s, \"y\"))\nproof\n  show by simp()\nqed\n", "simp");
+    assert_eq!(check("theorem x(s, a, b, c): fn_update(fn_update(fn_update(s, \"x\", a), \"y\", b), \"x\", c) = fn_update(fn_update(s, \"y\", b), \"x\", c)\nproof\n  show by symex()\nqed\n"), Ok(1));
+    rejected("theorem x(s, a): fn_update(s, \"x\", a) = fn_update(fn_update(s, \"x\", a), \"y\", app(s, \"y\"))\nproof\n  show by symex()\nqed\n", "symex");
 }
 
 #[test]
@@ -621,20 +627,20 @@ theorem t0(r, a, b, v): (r = ok(a, 1) || r = exc(a, 2)) -> r = ok(b, v) -> v = 1
 proof
   assume h: r = ok(a, 1) || r = exc(a, 2)
   assume hr: r = ok(b, v)
-  show by simp(h, hr)
+  show by symex(h, hr)
 qed
 theorem t1(f, x, y): (all z. !(ex p. pair(p, z) in f && p = x)) -> pair(x, y) in f -> false
 proof
   assume hn: all z. !(ex p. pair(p, z) in f && p = x)
   assume h: pair(x, y) in f
-  show by simp(hn, h)
+  show by symex(hn, h)
 qed
 ";
     assert_eq!(check(src), Ok(2));
     // an instance must match every conjunct
-    rejected("theorem x(f, g, x, y): (all z. !(ex p. pair(p, z) in f && p in g)) -> pair(x, y) in f -> false\nproof\n  assume hn: all z. !(ex p. pair(p, z) in f && p in g)\n  assume h: pair(x, y) in f\n  show by simp(hn, h)\nqed\n", "simp");
+    rejected("theorem x(f, g, x, y): (all z. !(ex p. pair(p, z) in f && p in g)) -> pair(x, y) in f -> false\nproof\n  assume hn: all z. !(ex p. pair(p, z) in f && p in g)\n  assume h: pair(x, y) in f\n  show by symex(hn, h)\nqed\n", "symex");
     // different values: v is not determined to be 1
-    rejected("theorem x(r, a, b, v): (r = ok(a, 1) || r = ok(a, 2)) -> r = ok(b, v) -> v = 1\nproof\n  assume h: r = ok(a, 1) || r = ok(a, 2)\n  assume hr: r = ok(b, v)\n  show by simp(h, hr)\nqed\n", "1 path left");
+    rejected("theorem x(r, a, b, v): (r = ok(a, 1) || r = ok(a, 2)) -> r = ok(b, v) -> v = 1\nproof\n  assume h: r = ok(a, 1) || r = ok(a, 2)\n  assume hr: r = ok(b, v)\n  show by symex(h, hr)\nqed\n", "1 path left");
 }
 
 #[test]
@@ -656,7 +662,7 @@ fn the_bit_library_checks() {
 
 #[test]
 fn the_loop_library_checks() {
-    let n = check_nat(&core_file("loop.core")).unwrap();
+    let n = check_after(&["logic.core", "sets.core", "nat.core", "records.core", "list.core"], &core_file("loop.core")).unwrap();
     assert_eq!(n, 27);
 }
 
@@ -665,7 +671,7 @@ const COUNT: &str = "def count := mkprog(s o. while_rel(pair(s, 0), l. int_lt(sn
 
 fn count_thm(goal: &str, hints: &str) -> String {
     format!(
-        "{}theorem t(s, o): runs(count, s, o) -> {}\nproof\n  assume h: runs(count, s, o)\n  show by simp(h{})\nqed\n",
+        "{}theorem t(s, o): runs(count, s, o) -> {}\nproof\n  assume h: runs(count, s, o)\n  show by symex(h{})\nqed\n",
         COUNT, goal, hints
     )
 }
@@ -707,7 +713,7 @@ fn simp_thm(hyps: &[&str], goal: &str) -> String {
     let stmt: String = hyps.iter().map(|h| format!("({}) -> ", h)).collect();
     let assumes: String = hyps.iter().enumerate().map(|(i, h)| format!("  assume h{}: {}\n", i, h)).collect();
     let names: Vec<String> = (0..hyps.len()).map(|i| format!("h{}", i)).collect();
-    format!("theorem t(f, g, x): {}{}\nproof\n{}  show by simp({})\nqed\n", stmt, goal, assumes, names.join(", "))
+    format!("theorem t(f, g, x): {}{}\nproof\n{}  show by symex({})\nqed\n", stmt, goal, assumes, names.join(", "))
 }
 
 #[test]
@@ -731,16 +737,16 @@ fn facts_are_used_as_rules() {
 fn address_arithmetic_is_total() {
     // (x + 5) - x = 5 and x - x = 0 in 64 bits, for any set x (arithmetic
     // reads x as its value)
-    assert_eq!(check_nat("theorem t(x): bits_sub(64, bits_add(64, x, 5), x) = 5\nproof\n  show by simp()\nqed\n"), Ok(1));
-    assert_eq!(check_nat("theorem t(x): bits_sub(64, x, x) = 0\nproof\n  show by simp()\nqed\n"), Ok(1));
+    assert_eq!(check_nat("theorem t(x): bits_sub(64, bits_add(64, x, 5), x) = 5\nproof\n  show by symex()\nqed\n"), Ok(1));
+    assert_eq!(check_nat("theorem t(x): bits_sub(64, x, x) = 0\nproof\n  show by symex()\nqed\n"), Ok(1));
     // but x + 0 is x only for a 64-bit x
-    let src = "theorem t(x): x in bits(64) -> bits_add(64, x, 0) = x\nproof\n  assume h: x in bits(64)\n  show by simp(h)\nqed\n";
+    let src = "theorem t(x): x in bits(64) -> bits_add(64, x, 0) = x\nproof\n  assume h: x in bits(64)\n  show by symex(h)\nqed\n";
     assert_eq!(check_nat(src), Ok(1));
-    rejected("theorem t(x): bits_add(64, x, 0) = x\nproof\n  show by simp()\nqed\n", "simp");
+    rejected("theorem t(x): bits_add(64, x, 0) = x\nproof\n  show by symex()\nqed\n", "symex");
     // words with the same base and different offsets differ
-    assert_eq!(check_nat("theorem t(x): x in bits(64) -> x = bits_add(64, x, 8) -> false\nproof\n  assume h: x in bits(64)\n  assume e: x = bits_add(64, x, 8)\n  show by simp(h, e)\nqed\n"), Ok(1));
+    assert_eq!(check_nat("theorem t(x): x in bits(64) -> x = bits_add(64, x, 8) -> false\nproof\n  assume h: x in bits(64)\n  assume e: x = bits_add(64, x, 8)\n  show by symex(h, e)\nqed\n"), Ok(1));
     // ... but a set that is not known to be a word may be anything
-    rejected("theorem t(x): x = bits_add(64, x, 0) -> false\nproof\n  assume e: x = bits_add(64, x, 0)\n  show by simp(e)\nqed\n", "simp");
+    rejected("theorem t(x): x = bits_add(64, x, 0) -> false\nproof\n  assume e: x = bits_add(64, x, 0)\n  show by symex(e)\nqed\n", "symex");
 }
 
 #[test]
@@ -761,7 +767,7 @@ fn rules_do_not_overreach() {
 
 #[test]
 fn leftover_paths_are_reported_as_facts() {
-    let src = "theorem t(p, o, s): runs(mkprog(s o. o = ok(s, 1) || o = ok(s, 2) || o = ok(s, 3)), s, o) -> o = ok(s, 1)\nproof\n  assume h: runs(mkprog(s o. o = ok(s, 1) || o = ok(s, 2) || o = ok(s, 3)), s, o)\n  show by simp(h)\nqed\n";
+    let src = "theorem t(p, o, s): runs(mkprog(s o. o = ok(s, 1) || o = ok(s, 2) || o = ok(s, 3)), s, o) -> o = ok(s, 1)\nproof\n  assume h: runs(mkprog(s o. o = ok(s, 1) || o = ok(s, 2) || o = ok(s, 3)), s, o)\n  show by symex(h)\nqed\n";
     let e = check(src).unwrap_err();
     assert!(e.contains("2 paths left"), "{}", e);
     assert!(e.contains("path 1: o = ok(s, ") && e.contains("path 2: "), "{}", e);
@@ -769,13 +775,13 @@ fn leftover_paths_are_reported_as_facts() {
 
 #[test]
 fn simp_computes_on_numerals() {
-    let src = "theorem t: int_add(3, 4) = 7 && bits_and(8, 195, 15) = 3 && bits_add(64, 18446744073709551615, 2) = 1 && int_lt(3, 4) && !int_le(5, 4) && bit(5, 2) && 255 in bits(8) && !(256 in bits(8)) && 3 in set_select(omega, x. int_lt(x, 5))\nproof\n  show by simp()\nqed\n";
+    let src = "theorem t: int_add(3, 4) = 7 && bits_and(8, 195, 15) = 3 && bits_add(64, 18446744073709551615, 2) = 1 && int_lt(3, 4) && !int_le(5, 4) && bit(5, 2) && 255 in bits(8) && !(256 in bits(8)) && 3 in set_select(omega, x. int_lt(x, 5))\nproof\n  show by symex()\nqed\n";
     assert_eq!(check(src), Ok(1));
     // negative integers, Euclidean division, words of negatives
-    let src = "theorem t: int_sub(3, 5) = int_neg(2) && int_lt(int_neg(2), 0) && int_div(int_neg(7), 2) = int_neg(4) && int_mod(int_neg(7), 2) = 1 && bits_of_int(8, int_neg(1)) = 255 && sint(8, 255) = int_neg(1) && !(int_neg(1) in omega)\nproof\n  show by simp()\nqed\n";
+    let src = "theorem t: int_sub(3, 5) = int_neg(2) && int_lt(int_neg(2), 0) && int_div(int_neg(7), 2) = int_neg(4) && int_mod(int_neg(7), 2) = 1 && bits_of_int(8, int_neg(1)) = 255 && sint(8, 255) = int_neg(1) && !(int_neg(1) in omega)\nproof\n  show by symex()\nqed\n";
     assert_eq!(check(src), Ok(1));
     for bad in ["int_add(3, 4) = 8", "bits_and(8, 195, 15) = 4", "bit(5, 1)", "256 in bits(8)", "7 in set_select(omega, x. int_lt(x, 5))", "int_mod(int_neg(7), 2) = int_neg(1)"] {
-        rejected(&format!("theorem x: {}\nproof\n  show by simp()\nqed\n", bad), "simp");
+        rejected(&format!("theorem x: {}\nproof\n  show by symex()\nqed\n", bad), "symex");
     }
 }
 
@@ -901,7 +907,7 @@ theorem t4(a, b, c): a -> b -> c -> a && b && c\nproof\n  assume ha hb hc\n  sho
 /// simp normalizes its equations by each other: chains of equations.
 #[test]
 fn simp_chains_equations() {
-    let ok = "theorem t7(c, m, w, p): app(p, app(c, \"os\")) = 1 -> app(c, \"os\") = app(m, \"os\") -> app(w, \"os\") = app(m, \"os\") -> app(p, app(w, \"os\")) = 1\nproof\n  assume h e1 e2\n  show by simp(h, e1, e2)\nqed\n";
+    let ok = "theorem t7(c, m, w, p): app(p, app(c, \"os\")) = 1 -> app(c, \"os\") = app(m, \"os\") -> app(w, \"os\") = app(m, \"os\") -> app(p, app(w, \"os\")) = 1\nproof\n  assume h e1 e2\n  show by symex(h, e1, e2)\nqed\n";
     assert_eq!(check_nat(ok), Ok(1));
 }
 
@@ -975,7 +981,7 @@ theorem z5(a, b, c): a = b -> letin(c, z. letin(a, x. x = b))\nproof\n  assume h
 theorem z6(a, b): letin(a, x. x = b && x = x) -> a = b\nproof\n  assume h\n  zeta x in h\n  show := h.1\nqed\n\
 theorem z7(a, b): letin(a, x. x = b) -> a = b\nproof\n  assume h\n  show := h\nqed\n\
 theorem z8(v): (all y. ex z. app(z, y) = v) -> (all y. ex z. letin(v, x. letin(y, u. app(z, u) = x)))\nproof\n  assume h\n  show := h\nqed\n\
-theorem s1(a, b): letin(a, x. x = b && x = x) -> a = b\nproof\n  assume h\n  show by simp(h, lets(expand(x), keep(y)))\nqed\n";
+theorem s1(a, b): letin(a, x. x = b && x = x) -> a = b\nproof\n  assume h\n  show by symex(h, lets(expand(x), keep(y)))\nqed\n";
     assert_eq!(check_all(ok), Ok(9));
     let n = 40;
     let chain = |last: &str, upto: usize| {
@@ -998,7 +1004,7 @@ theorem c3(a, b): {p2} -> {p}\nproof\n  assume h\n  show := h\nqed\n"
     rejected("theorem b(v): (ex z. z = v) -> (ex z. letin(v, x. x = z))\nproof\n  assume h\n  show := h\nqed\n", "not");
     rejected("theorem b(a, b): letin(a, x. x = b) -> a = b\nproof\n  assume h\n  show := zeta(h, q)\nqed\n", "no let `q`");
     rejected("theorem b(a, b): letin(a, x. x = b) -> a = b\nproof\n  assume h\n  show := zeta(h, x, {2})\nqed\n", "no occurrence 2");
-    match check_all("theorem b(a, b): letin(a, x. x = b && x = x) -> a = b\nproof\n  assume h\n  show by simp(h, lets(keep(x)))\nqed\n") {
+    match check_all("theorem b(a, b): letin(a, x. x = b && x = x) -> a = b\nproof\n  assume h\n  show by symex(h, lets(keep(x)))\nqed\n") {
         Ok(_) => panic!("a kept let looked through"),
         Err(e) => assert!(e.contains("path left"), "{}", e),
     }

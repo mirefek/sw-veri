@@ -3,6 +3,9 @@
 What the verification of musl's allocator has reached, by area. Each
 item is a short summary of finished work; details are in the files named.
 
+Names: in the older items below, `simp` is the path simplifier, now
+called `symex`, and `rsimp` the rewriter, now called `simp`.
+
 This is a detailed record, written for someone working on the proofs.
 For a first reading, docs/overview.md is the better start. The sections:
 - **The model and the claim**: the x86-64 and Linux model, its testing

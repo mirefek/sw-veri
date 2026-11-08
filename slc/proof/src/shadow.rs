@@ -1,5 +1,6 @@
-//! The simp shadow (a diagnostic, not a rule): with `SLC_SHADOW=1`, each
-//! `simp` goal is also tried by the determined procedures, and reported
+//! The symex shadow (a diagnostic, not a rule): with `SLC_SHADOW=1`, each
+//! `symex` goal (the searching simplifier, formerly `simp`) is also tried
+//! by the determined procedures (`simp`, formerly `rsimp`), and reported
 //! on stderr:
 //!
 //! `shadow <TAB> line <TAB> simp ok|failed <TAB> secs <TAB> rsimp <TAB> secs
@@ -79,7 +80,7 @@ impl State {
             }
             let g: String = Printer::new(env).term(goal).chars().take(160).collect();
             // (the call as written, up to whitespace: where it is in its step)
-            let text = format!("simp({})", super::args_text(args)).replace(['\t', '\n'], " ");
+            let text = format!("symex({})", super::args_text(args)).replace(['\t', '\n'], " ");
             eprintln!("shadow-r\t{}\t{}\t{:.4}\t{}\t{:.4}\t{}\t{}", LINE.with(|l| l.get()), call, simp_t, by, t0.elapsed().as_secs_f64(), g.replace(['\t', '\n'], " "), text);
             return;
         }
@@ -107,7 +108,7 @@ impl State {
                 let e = self.rsimp_eq(env, lg, goal, &rs, 0)?;
                 let n = match e.concl().node() {
                     Node::App(_, x) => x[1].clone(),
-                    _ => return err("rsimp: not an equation"),
+                    _ => return err("simp: not an equation"),
                 };
                 let mut more: Vec<Seq> = Vec::new();
                 for f in facts {

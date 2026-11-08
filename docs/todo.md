@@ -31,76 +31,56 @@ each file's time and memory, `C1_STATS=1` for each refinement's,
 scripts/sample-stacks.py (with check.sh's `SLC_WRAP`) for where the time
 goes.
 
-### 1.1 `rsimp` as the default, `simp` retired
+### 1.1 `simp` the default rule, `symex` only for program runs
 
-`simp` is still called about 20,000 times in the proofs, `rsimp` about
-730 times. `simp` is a trusted extension of about 6,000 lines
-(slc/kernel/src/ext/simp.rs) with search inside; `rsimp` is untrusted
-(each step a kernel rule). Retiring simp shrinks the trusted base and
-makes each step readable; it is not for speed -- simp is cheap.
+The goal is usability: one intuitive name that is fast wherever it is
+used, not the removal of trusted code. The two simplifiers are now named
+by what they do:
+- `simp` (formerly `rsimp`, slc/proof/src/rsimp.rs, untrusted): Lean-like
+  rewriting with the given facts, definitions and registered `simp`
+  rules; as a goal rule a fixed sequence (a conjunction conjunct by
+  conjunct, typing for a membership, rewriting, then taut / arith with
+  the facts about the normal form's atoms). Fast and predictable.
+- `symex` (formerly `simp`, slc/kernel/src/ext/simp.rs, trusted, about
+  6,000 lines): the path simplifier, for symbolic execution of program
+  runs. It searches, so it is slow where nothing is executed.
 
-What simp does now (`SLC_SHADOW=1`, the first 6,085 goal calls, up to
-proofs/mallocng/code/lists.core):
-- 29 s of simp in all, 27 s of it in the 738 calls with loop hints,
-  `keep` or `lets` -- executing program paths (`step`'s job);
-- of the other 5,347: rsimp proves 1,622 alone, 1,254 more with taut or
-  arith after it, eval 324; 2,147 neither. Those are typing and
-  membership facts (963: `x in bits(64)`, `fn_update(..) in univ(1)`,
-  `M in x86_64_linux.Vm`), equations of records and outcomes (585:
-  `o = ok(fn_update(..))`, fields read through updates), `k in dom(w)`
-  and contradictions of literals (389), orders (114);
-- rsimp was about 60 times slower per call than simp where both prove:
-  mostly its registered rules rebuilt at every call (now built once,
-  `Env::ext_cache`; mallocng/init.core 65 s -> 52 s).
-
-The typing procedure (`types`, slc/proof/src/types.rs; rsimp's premises
-and closing use it, and distinct literals by their bytes or numerals)
-proves 7,055 of the 8,047 membership goals simp proves in the chain
-(`SLC_SHADOW=types`), at about 0.1 ms each. `rsimp` as a goal rule is now
-a fixed sequence (typing for a membership, rewriting, then taut / arith
-with the facts about the normal form's terms; a conjunction conjunct by
-conjunct). By the shadow (`SLC_SHADOW=rsimp`, scripts/shadow-report.py,
-each call's text logged) scripts/migrate-simp.py moved the calls rsimp
-proves, call by call (`keep(..)` dropped: it means nothing to rsimp):
-simp calls in the proofs 20,052 -> 5,777. What is left, by the last
+`symex` calls in the proofs: 5,777 (were 20,052 before scripts/migrate-
+simp.py moved the calls `simp` proves as fast, by the shadow's log,
+`SLC_SHADOW=rsimp`, scripts/shadow-report.py). What is left, by the last
 shadows (the files but nominal_size.core, whose shadow runs out of
 memory):
 - runs of programs from facts (`o = ok(..)` from `runs(..)`, keep
   calls): `step`'s, proof by proof;
-- goals simp proves with its path reasoning: implications and cases of
+- goals symex proves with its path reasoning: implications and cases of
   the facts, witnesses of existentials, contradictions among facts
   (`false`), memberships and records under premises;
 - evaluation of closed terms (a table's entry): the trusted eval proves
-  only about 25 of them -- an untrusted evaluation is not worth it yet;
-- the fact form `simp(h)` (a fact simplified), not shadowed yet.
-The plan, in order:
-- The program runs: `step` in place of `simp(.., keep(..))` where a proof
-  runs a program, proof by proof.
+  only about 25 of them;
+- the fact form `symex(h)` (a fact simplified), not shadowed yet.
+
+The plan, in order (each step measured: speed comes first):
+- The program runs: `step` in place of `symex(.., keep(..))` where a
+  proof runs a program, proof by proof.
 - The typing procedure's gaps (the shadow's failures): `rec_and` states
   (`m in rec_and(Machine, ..)`), program sets (`pair(s, o) in
   set_select(univ(1), ..)`), terms bounded by a definition's arithmetic
   (`page_of(x) in set_select(omega, ..)`), facts under premises.
-- The outcome equations as registered rsimp rules (pair and outcome
-  injectivity), and a normal order of updates at distinct keys.
-- rsimp's speed: the rules indexed by their left side's head (only those
-  that can match a node tried).
-- Then simp's call sites moved, file by file, by the shadow's data (a
-  call rsimp proves, as fast: renamed); simp's program-path calls to
-  `step`; the shadow given a per-call time limit so it covers the chain.
-- The machine's semantics (proofs/linux_sys.core) by `rsimp` instead of
-  hand lemmas. A dispatch's live case is `rsimp(h, tag)` already. A
+- The outcome equations as registered `simp` rules (pair and outcome
+  injectivity), and a normal order of updates at distinct keys (`symex`
+  does not normalize them either; `mp.clear_perm` swaps four times by
+  hand).
+- `simp`'s speed: the rules indexed by their left side's head (only
+  those that can match a node tried).
+- The machine's semantics (proofs/linux_sys.core) by `simp` instead of
+  hand lemmas. A dispatch's live case is `simp(h, tag)` already. A
   statement's known outcome through the elaborator's sequencing forms
   (the outcomes' parts and their kinds' disequalities registered,
   core/records.core) should be too. Then the hand lemmas `lx.top_*`,
   `lx.blk_*`, `lx.ib_*`, `lx.istep_*`, `lx.tlp_*` and `lx.lp_brk` go.
-- eff.rs' last `simp`: a stack call's argument count (`seq_len(list) =
-  n`, `tr.eff_call1_s`), by the list lemmas or `rsimp` through the proof
+- eff.rs' last `symex`: a stack call's argument count (`seq_len(list) =
+  n`, `tr.eff_call1_s`), by the list lemmas or `simp` through the proof
   API.
-- Record updates in another order (`fn_update` with distinct keys): simp
-  does not normalize them; `mp.clear_perm` swaps four times by hand.
-- Then the files with the most calls (translate.core, alloc_meta.core,
-  alloc_group.core, translate_store_loop.core, malloc.core: 450 to 900
-  each), and `simp` removed from the proof language.
 
 ### 1.2 Speed
 
@@ -113,7 +93,7 @@ The plan, in order:
   - the x86 instruction lemmas (proofs/x86_insn.core, about 30 s
     uncached: `lock_or32_b` 5.5 s, `cas32_b` 3.6 s, the [rsp + d]
     read-modify-writes about 1.5 s each). Each unfolds the instruction's
-    semantics by `simp` for its own addressing form. Instead: one lemma
+    semantics by `symex` for its own addressing form. Instead: one lemma
     per instruction shape with the effective address a parameter, each
     form by its address equation (as `tr.rsp_bd_ea`);
   - the step theorems (about 70 ms each, 1069 encodings: about 80 s of

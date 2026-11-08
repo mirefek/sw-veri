@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-# Moves simp call sites to rsimp, by a simp shadow's log (SLC_SHADOW=rsimp,
-# slc/proof/src/shadow.rs). Each logged call has its text as written (up
-# to whitespace); a call rsimp proved (rsimp, types or rsimp+arith -- not
-# much slower than simp) is found in its step (the step's line and its
-# continuation lines, more indented) and written `rsimp(`, when every
+# Moves symex call sites (the searching simplifier) to simp, by a shadow's
+# log (SLC_SHADOW=rsimp, slc/proof/src/shadow.rs). Each logged call has its
+# text as written (up to whitespace); a call simp proved (labels rsimp,
+# types or rsimp+arith -- not much slower than symex) is found in its step
+# (the step's line and its continuation lines, more indented) and written
+# `simp(`, when every
 # occurrence there of its text is a proven call (none of the calls rsimp
 # did not prove has it). Then each changed file is checked (scripts/check.sh FILE, with the
 # caches) and a step the checker rejects is put back, until the file
@@ -32,17 +33,17 @@ for line in open(log):
         if len(p) < 8:
             continue
         by = p[4]
-        # (much slower than simp: over 10 times its time and 20 ms)
+        # (much slower than symex: over 10 times its time and 20 ms)
         if by in GOOD and float(p[5]) > max(10 * float(p[3]), 0.02):
             by = "slow"
         calls[(f, int(p[1]))].append((by, p[7]))
 
-SIMP = re.compile(r"(?<![A-Za-z0-9_.])simp\(")
+SIMP = re.compile(r"(?<![A-Za-z0-9_.])symex\(")
 norm = lambda s: re.sub(r"\s+", "", s)
 
 
 def call_at(text, i):
-    """the balanced call starting at text[i] (`simp(`), or None"""
+    """the balanced call starting at text[i] (`symex(`), or None"""
     d = 0
     for j in range(i, len(text)):
         c = text[j]
@@ -56,9 +57,9 @@ def call_at(text, i):
 
 
 def renamed(call):
-    """`simp(..)` as `rsimp(..)`, its `keep(..)` arguments dropped (rsimp
+    """`symex(..)` as `simp(..)`, its `keep(..)` arguments dropped (simp
     unfolds only what it is given)"""
-    inner = call[len("simp(") : -1]
+    inner = call[len("symex(") : -1]
     parts, d, cur = [], 0, ""
     for c in inner:
         if c in "([{":
@@ -73,7 +74,7 @@ def renamed(call):
     if cur.strip() or parts:
         parts.append(cur)
     parts = [p for p in parts if not p.strip().startswith("keep(")]
-    return "rsimp(" + ",".join(parts).strip() + ")" if parts else "rsimp()"
+    return "simp(" + ",".join(parts).strip() + ")" if parts else "simp()"
 
 
 def region(ls, i):

@@ -3780,7 +3780,7 @@ impl Simp<'_> {
             if rounds == 5000 && std::env::var("SIMP_DEBUG").is_ok() {
                 let pr = crate::syntax::Printer::new(self.env);
                 for l in &p.lits {
-                    eprintln!("simp: settle loops on {}", pr.term(l).chars().take(3000).collect::<String>());
+                    eprintln!("symex: settle loops on {}", pr.term(l).chars().take(3000).collect::<String>());
                 }
             }
             let mut lits = Vec::new();
@@ -5078,7 +5078,7 @@ impl Simp<'_> {
                     let near = relevant(&p.lits, h);
                     let r = lg.arith(self.env, &near, h).is_ok() || (near.len() < p.lits.len() && lg.arith(self.env, &p.lits, h).is_ok());
                     if !r && std::env::var("SIMP_DEBUG").is_ok() {
-                        eprintln!("simp: not shown {}", crate::syntax::Printer::new(self.env).term(h).chars().take(200).collect::<String>());
+                        eprintln!("symex: not shown {}", crate::syntax::Printer::new(self.env).term(h).chars().take(200).collect::<String>());
                     }
                     lap(3, &mut t);
                     r
@@ -5125,7 +5125,7 @@ impl Simp<'_> {
     fn extend(&self, lg: &Logic, p: &Path, c: Term, fresh: &mut u32) -> crate::env::KResult<Vec<Path>> {
         // (the path's literals are in normal form already: only the new
         // fact is split, each of its paths added to them)
-        let ps = self.paths(&lg.simp_fact(self.env, &c), fresh).ok_or_else(|| crate::env::KernelError("simp: too many paths".into()))?;
+        let ps = self.paths(&lg.simp_fact(self.env, &c), fresh).ok_or_else(|| crate::env::KernelError("symex: too many paths".into()))?;
         Ok(ps
             .into_iter()
             .map(|mut q| {
@@ -5156,7 +5156,7 @@ impl Simp<'_> {
             }
             let others: Vec<Term> = p.lits.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, l)| l.clone()).collect();
             let replace = |out: Term, fresh: &mut u32| -> crate::env::KResult<Option<Vec<Path>>> {
-                let ps = self.paths(&lg.simp_fact(self.env, &out), fresh).ok_or_else(|| crate::env::KernelError("simp: too many paths".into()))?;
+                let ps = self.paths(&lg.simp_fact(self.env, &out), fresh).ok_or_else(|| crate::env::KernelError("symex: too many paths".into()))?;
                 Ok(Some(
                     ps.into_iter()
                         .map(|mut q| {
@@ -5513,7 +5513,7 @@ impl Logic {
             Err(_) if !LET_EAGER.with(|e| e.get()) => {
                 let r = attempt(true);
                 if r.is_ok() && std::env::var("SIMP_LET_TRACE").is_ok() {
-                    eprintln!("simp: proven only with every let reduced: {}", crate::syntax::Printer::new(env).term(goal).chars().take(300).collect::<String>());
+                    eprintln!("symex: proven only with every let reduced: {}", crate::syntax::Printer::new(env).term(goal).chars().take(300).collect::<String>());
                 }
                 r
             }
@@ -5561,7 +5561,7 @@ impl Logic {
         if opened {
             match self.prove_paths(env, &prem, &g, hints, &mut fresh) {
                 Ok(()) => return Ok(()),
-                Err(e) if std::env::var("SIMP_INTRO").is_ok() => eprintln!("simp: after introduction: {}", e.0),
+                Err(e) if std::env::var("SIMP_INTRO").is_ok() => eprintln!("symex: after introduction: {}", e.0),
                 Err(_) => {}
             }
         }
@@ -5628,7 +5628,7 @@ impl Logic {
         }
         cs.retain(|c| matches!(c.node(), Node::App(i, _) if is(*i, sp.s.in_)));
         let g = self.simp_eqv_known(env, goal, &cs);
-        let mut work = sp.paths(&prem, fresh).ok_or_else(|| crate::env::KernelError("simp: too many paths".into()))?;
+        let mut work = sp.paths(&prem, fresh).ok_or_else(|| crate::env::KernelError("symex: too many paths".into()))?;
         if std::env::var("SIMP_TIME").is_ok() {
             eprintln!("simp time [facts, goal+paths]: {:?}, {:?}", t1 - t0, t1.elapsed());
         }
@@ -5652,7 +5652,7 @@ impl Logic {
         while let Some(p) = work.pop() {
             npaths += 1;
             if timing && npaths % 50 == 0 {
-                eprintln!("simp: {} paths, {} queued, {} literals; {:?}", npaths, work.len(), p.lits.len(), tm);
+                eprintln!("symex: {} paths, {} queued, {} literals; {:?}", npaths, work.len(), p.lits.len(), tm);
             }
             lap(6, &mut tm);
             let Some(p) = sp.settle(p) else {
@@ -5823,9 +5823,9 @@ impl Logic {
             if std::env::var("SIMP_GOAL").is_ok() {
                 let pr = crate::syntax::Printer::new(env);
                 for (a, b) in &eqs {
-                    eprintln!("simp: equation on the path: {} = {}", pr.term(a), pr.term(b));
+                    eprintln!("symex: equation on the path: {} = {}", pr.term(a), pr.term(b));
                 }
-                eprintln!("simp: goal on the path: {}", pr.term(&g));
+                eprintln!("symex: goal on the path: {}", pr.term(&g));
             }
             // the checks below without the held disjunctions (undecided,
             // they cannot close the path; fewer premises is sound); the path
@@ -5888,11 +5888,11 @@ impl Logic {
             lap(5, &mut tm);
             if let Some(c) = ch {
                 if std::env::var("SIMP_DEBUG").is_ok() {
-                    eprintln!("simp: new fact {}", crate::syntax::Printer::new(env).term(&c).chars().take(3000).collect::<String>());
+                    eprintln!("symex: new fact {}", crate::syntax::Printer::new(env).term(&c).chars().take(3000).collect::<String>());
                 }
                 steps += 1;
                 if steps > MAX_PATHS {
-                    return Err(crate::env::KernelError("simp: too many paths".into()));
+                    return Err(crate::env::KernelError("symex: too many paths".into()));
                 }
                 work.extend(sp.extend(self, &full, c, fresh)?);
                 continue;
@@ -5903,14 +5903,14 @@ impl Logic {
                 let pr = crate::syntax::Printer::new(env);
                 let width = if std::env::var("SIMP_DEBUG").is_ok_and(|v| v == "full") { usize::MAX } else { 400 };
                 for l in &p.lits {
-                    eprintln!("simp: literal {}", pr.term(l).chars().take(width).collect::<String>());
+                    eprintln!("symex: literal {}", pr.term(l).chars().take(width).collect::<String>());
                 }
-                return Err(crate::env::KernelError("simp: stopped (SIMP_DEBUG, long path)".into()));
+                return Err(crate::env::KernelError("symex: stopped (SIMP_DEBUG, long path)".into()));
             }
             if let Some(ps) = sp.loop_step(self, &full, hints, fresh, &mut why)? {
                 steps += 1;
                 if steps > MAX_PATHS {
-                    return Err(crate::env::KernelError("simp: too many paths".into()));
+                    return Err(crate::env::KernelError("symex: too many paths".into()));
                 }
                 work.extend(ps);
                 continue;
@@ -5945,7 +5945,7 @@ impl Logic {
                 {
                     steps += 1;
                     if steps > MAX_PATHS {
-                        return Err(crate::env::KernelError("simp: too many paths".into()));
+                        return Err(crate::env::KernelError("symex: too many paths".into()));
                     }
                     work.extend(sp.extend(self, &full, c, fresh)?);
                     work.extend(sp.extend(self, &full, nc, fresh)?);
@@ -5973,7 +5973,7 @@ impl Logic {
         if left > 0 {
             let more = if left > MAX_REPORTED { format!("\n  ({} more)", left - MAX_REPORTED) } else { String::new() };
             return Err(crate::env::KernelError(format!(
-                "simp: {} path{} left (prove each as a fact -- keeping only the hypotheses it needs -- and pass it to simp):{}{}",
+                "symex: {} path{} left (prove each as a fact -- keeping only the hypotheses it needs -- and pass it to simp):{}{}",
                 left,
                 if left == 1 { "" } else { "s" },
                 report,
