@@ -447,11 +447,40 @@ impl<'e> Gen<'e> {
             None => self.closed_redex(sub),
         };
         let Some((r, eq)) = found else { return Ok(None) };
-        let ab = self.abstract_(lo, &r, 0);
-        let l = self.lam(&ab, &["o", "x"], &["o", "x"]).ok_or("a projection's context")?;
-        let eqc = self.run(&eq, &[])?.concl().clone();
-        let v = self.app(&eqc, "eq", 2).ok_or("a projection's equation")?[1].clone();
-        self.low_by(mp(R::Inst("g.low_rw".into(), vec![("l", l), ("a", r), ("b", v)]), vec![p(eq)])).map(Some)
+        let eqs = self.run(&eq, &[])?;
+        let v = self.app(eqs.concl(), "eq", 2).ok_or("a projection's equation")?[1].clone();
+        // (the further redexes of the part, as they come, taken in the same
+        // step: their equations on their own terms, the lower term rewritten
+        // by the kernel once per equation, one composition for all)
+        let (mut lo2, mut sub2) = (self.replace_t(lo, &r, &v), self.replace_t(sub, &r, &v));
+        let mut more = Vec::new();
+        while more.len() < 64 {
+            let next = match self.proj_chain_in(&sub2, &mut sl_kernel::term::PtrSet::default()) {
+                Some((r, _, eq)) => Some((r, eq)),
+                None => self.closed_redex(&sub2),
+            };
+            let Some((r2, eq2)) = next else { break };
+            let e2 = self.run(&eq2, &[])?;
+            let v2 = self.app(e2.concl(), "eq", 2).ok_or("a projection's equation")?[1].clone();
+            lo2 = self.replace_t(&lo2, &r2, &v2);
+            sub2 = self.replace_t(&sub2, &r2, &v2);
+            more.push(e2);
+        }
+        if more.is_empty() {
+            let ab = self.abstract_(lo, &r, 0);
+            let l = self.lam(&ab, &["o", "x"], &["o", "x"]).ok_or("a projection's context")?;
+            return self.low_by(mp(R::Inst("g.low_rw".into(), vec![("l", l), ("a", r), ("b", v)]), vec![s(&eqs)])).map(Some);
+        }
+        // all o. lo(o) -> lo2(o): lo(o) assumed, rewritten by each equation
+        let ov = self.var("lo");
+        let body = lo.instantiate_params(std::slice::from_ref(&ov), &self.env.binders_fn());
+        let h = self.assume(&body)?;
+        let mut cur = Seq::rewrite(self.env, &eqs, &h).map_err(|e| e.0)?;
+        for e in &more {
+            cur = Seq::rewrite(self.env, e, &cur).map_err(|e| e.0)?;
+        }
+        let imp = self.close(cur, &[body], &[Self::var_id(&ov)])?;
+        self.low_by(R::S(imp)).map(Some)
     }
 
     /// One step of the CFG's side on its own: a block's let, nesting,
