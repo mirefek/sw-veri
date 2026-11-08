@@ -591,34 +591,47 @@ fn flip_seq(env: &mut Env, lg: &Logic, s: &Seq) -> KResult<Seq> {
 }
 
 fn nes_of(t: &Term, ne: Option<SymId>, out: &mut Vec<Term>) {
+    nes_in(t, ne, out, &mut Default::default())
+}
+
+/// (a shared node visited once)
+fn nes_in(t: &Term, ne: Option<SymId>, out: &mut Vec<Term>, seen: &mut sl_kernel::term::PtrSet<usize>) {
+    if t.shared() && !seen.insert(t.ptr_id()) {
+        return;
+    }
     if let Node::App(s, a) = t.node() {
         if Some(*s) == ne && !out.contains(t) {
             out.push(t.clone());
         }
-        a.iter().for_each(|x| nes_of(x, ne, out));
+        a.iter().for_each(|x| nes_in(x, ne, out, seen));
     }
 }
 
 /// `a = b -> b = a` for the closed equations occurring both ways among
 /// the premises and the goal (also as `a != b`)
 fn sym_facts(env: &Env, ps: &[Seq], goal: &Term) -> KResult<Vec<Seq>> {
-    fn eqs(env: &Env, t: &Term, ne: Option<SymId>, out: &mut Vec<(Term, Term)>) {
+    // (a shared node visited once; the loose depth memoized)
+    fn eqs(env: &Env, t: &Term, ne: Option<SymId>, out: &mut Vec<(Term, Term)>, seen: &mut sl_kernel::term::PtrSet<usize>) {
+        if t.shared() && !seen.insert(t.ptr_id()) {
+            return;
+        }
         if let Node::App(s, a) = t.node() {
-            if (*s == env.builtins.eq || Some(*s) == ne) && a.len() == 2 && t.loose_depth(&env.binders_fn()) == 0 && a[0] != a[1] {
+            if (*s == env.builtins.eq || Some(*s) == ne) && a.len() == 2 && env.loose_depth_m(t) == 0 && a[0] != a[1] {
                 let e = (a[0].clone(), a[1].clone());
                 if !out.contains(&e) {
                     out.push(e);
                 }
             }
-            a.iter().for_each(|x| eqs(env, x, ne, out));
+            a.iter().for_each(|x| eqs(env, x, ne, out, seen));
         }
     }
     let ne = env.sym_by_name.get("ne").copied();
     let mut all = Vec::new();
+    let mut seen = Default::default();
     for p in ps {
-        eqs(env, p.concl(), ne, &mut all);
+        eqs(env, p.concl(), ne, &mut all, &mut seen);
     }
-    eqs(env, goal, ne, &mut all);
+    eqs(env, goal, ne, &mut all, &mut seen);
     let mut out = Vec::new();
     // (`a != b`: `!(a = b)`, both ways)
     let mut nes = Vec::new();

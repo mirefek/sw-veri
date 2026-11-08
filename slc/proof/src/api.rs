@@ -170,11 +170,7 @@ impl Api {
         // (simultaneously: through fresh variables, unless no value has a
         // variable instantiated -- then one after the other is the same)
         let targets: Vec<VarId> = vs.iter().copied().filter(|v| binds.iter().any(|(n, _)| env.var(*v).name == *n)).collect();
-        let direct = binds.iter().all(|(_, value)| {
-            let mut ws = Vec::new();
-            value.vars(&mut ws);
-            !ws.iter().any(|w| targets.contains(w))
-        });
+        let direct = binds.iter().all(|(_, value)| !targets.iter().any(|w| value.has_var(*w)));
         for (vname, value) in binds {
             let cands: Vec<VarId> = vs.iter().copied().filter(|v| env.var(*v).name == *vname).collect();
             let v = match cands.as_slice() {

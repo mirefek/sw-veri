@@ -1016,7 +1016,42 @@ impl<'e> Gen<'e> {
             eprintln!("c1 step {} {} {:.3}s{}", self.steps, self.head_name(r), t0.elapsed().as_secs_f64(), if res.is_err() { " (failed)" } else { "" });
             return res;
         }
+        // (C1_RULES: each step's rule counted and timed -- inclusive of
+        // the steps it runs -- reported by `rules_report`)
+        if rules_on() {
+            let t0 = std::time::Instant::now();
+            let res = self.ev(r, slots);
+            let name = self.head_name(r);
+            RULES.with(|m| {
+                let mut m = m.borrow_mut();
+                let e = m.entry(name).or_insert((0, 0.0));
+                e.0 += 1;
+                e.1 += t0.elapsed().as_secs_f64();
+            });
+            return res;
+        }
         self.ev(r, slots)
+    }
+}
+
+thread_local! {
+    static RULES: std::cell::RefCell<std::collections::HashMap<String, (u64, f64)>> = Default::default();
+}
+
+fn rules_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("C1_RULES").is_ok())
+}
+
+/// (C1_RULES) the rules counted since the last report, the slowest first
+pub(crate) fn rules_report(what: &str) {
+    if !rules_on() {
+        return;
+    }
+    let mut v: Vec<(String, (u64, f64))> = RULES.with(|m| m.borrow_mut().drain().collect());
+    v.sort_by(|a, b| b.1 .1.total_cmp(&a.1 .1));
+    for (n, (c, t)) in v.iter().take(25) {
+        eprintln!("c1 rules {}: {:8.3}s {:8} {}", what, t, c, n);
     }
 }
 

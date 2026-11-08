@@ -178,8 +178,9 @@ pub struct Env {
     /// (keyed by the terms' own hashes: a cheap hasher, `PtrHasher`)
     wf_ok: std::cell::RefCell<crate::term::PtrSet<(Term, u32)>>,
     /// (terms' loose depths under this environment's binders, computed
-    /// once)
-    ld_memo: std::cell::RefCell<crate::term::PtrMap<Term, u32>>,
+    /// once; by the node's address -- no deep comparison of equal copies --,
+    /// the node kept in the entry, so the address stays its own)
+    ld_memo: std::cell::RefCell<crate::term::PtrMap<usize, (Term, u32)>>,
     /// (`ksym_lit`: a literal name's symbol, by the literal's address)
     ksym_lits: std::cell::RefCell<crate::term::PtrMap<(usize, usize), SymId>>,
 }
@@ -469,14 +470,20 @@ impl Env {
             Node::BVar(i) => i + 1,
             Node::Var(_, a) | Node::App(_, a) if a.is_empty() => 0,
             Node::Var(_, a) | Node::App(_, a) => {
-                if let Some(d) = self.ld_memo.borrow().get(t) {
+                if let Some((_, d)) = self.ld_memo.borrow().get(&t.ptr_id()) {
                     return *d;
                 }
                 let d = match t.node() {
                     Node::App(s, _) => a.iter().enumerate().map(|(i, x)| self.loose_depth_m(x).saturating_sub(self.syms[*s as usize].binders[i])).max().unwrap_or(0),
                     _ => a.iter().map(|x| self.loose_depth_m(x)).max().unwrap_or(0),
                 };
-                self.ld_memo.borrow_mut().insert(t.clone(), d);
+                let mut m = self.ld_memo.borrow_mut();
+                // (a cache: emptied past a million entries, the nodes it
+                // keeps alive not piling up within a long proof)
+                if m.len() >= 1 << 20 {
+                    m.clear();
+                }
+                m.insert(t.ptr_id(), (t.clone(), d));
                 d
             }
             _ => 0,

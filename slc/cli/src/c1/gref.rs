@@ -28,6 +28,7 @@ pub fn refines(env: &mut Env, name: &str, low: &str, high: &str) -> Result<Seq, 
     drop(g);
     // (its terms not kept alive by the environment's caches)
     env.clear_term_caches();
+    super::rules_report(name);
     // (C1_STATS=1: each refinement's time and the resident memory after it)
     if std::env::var("C1_STATS").is_ok_and(|v| v == "1") {
         let rss = std::fs::read_to_string("/proc/self/statm").ok().and_then(|s| s.split_whitespace().nth(1)?.parse::<u64>().ok()).map_or(0, |p| p * 4096 / (1 << 20));

@@ -18,6 +18,8 @@ import gdb, os, subprocess
 INTERVAL = float(os.environ.get("SAMPLE_INTERVAL", "2"))
 DELAY = float(os.environ.get("SAMPLE_DELAY", "20"))
 OUT = os.environ["SAMPLE_OUT"]
+# (frames recorded per stack: deep recursions need many to show their caller)
+DEPTH = int(os.environ.get("SAMPLE_DEPTH", "400"))
 out = open(OUT, "w")
 me = os.getpid()
 
@@ -30,7 +32,7 @@ def record():
         f = gdb.newest_frame()
         i = 0
         out.write("=== sample\n")
-        while f is not None and i < 120:
+        while f is not None and i < DEPTH:
             n = f.name() or "?"
             sal = f.find_sal()
             loc = "%s:%d" % (os.path.basename(sal.symtab.filename), sal.line) if sal.symtab else ""
