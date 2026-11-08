@@ -109,14 +109,15 @@ The plan, in order (each step measured: speed comes first):
 - Variables reference counted (a name and arity freed with its last
   term, identity by pointer, not a table index). Now a proof's variables
   are dropped only at its end (`Env::begin_locals` .. `end_locals`).
-- An uncached check is about 220 s (run-to-run noise about 10 s), at
-  most 0.45 GB (was 1407 s, 2.3 GB, before hash-consing, the DAG-aware
-  walks and memos, the projection chains, the intern table's own-entry
-  removal, the cheap symbol lookups, simp's conditional rules under
-  binders by head, x86.step_one, arith's facts without the branching ones
-  first). Largest: cfg.core 39 s, c1.core 31 s, the `steps` line 35 s. alloc_group's refinement is 28 s: 84,000
-  `g.low_rw` rewrites and 50,000 `g.ref_low` compositions, each a lemma
-  instance over the whole lower term (`C1_RULES=1` counts them). Profile
+- An uncached check is about 210 s (run-to-run noise about 10 s, more
+  under load), at most 0.45 GB (was 1407 s, 2.3 GB, before hash-consing,
+  the DAG-aware walks and memos, the projection chains, the intern
+  table's own-entry removal, the cheap symbol lookups, simp's conditional
+  rules under binders by head, x86.step_one, arith's facts without the
+  branching ones first, the engine's map facts by the update lemmas and
+  remembered). Largest: cfg.core 38 s, the `steps` line 35 s, c1.core
+  21 s. alloc_group's refinement is 20 s, its rule instances about 3 s
+  of it (`C1_RULES=1` counts them), the rest the walk itself. Profile
   with `SLC_CACHE_AS=any GREF_ONLY=alloc_group_ref C1_KEEP_GOING=1
   C1_PHASES=1 C1_PROF=1 C1_RULES=1 SLC_RECHECK=machine/cfg.core
   scripts/check.sh` (about 40 s).
