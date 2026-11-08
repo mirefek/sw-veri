@@ -409,21 +409,17 @@ impl Cx {
         let in_c = self.tm(env, "ph_a in ph_b", &[&c, dec])?;
         let dcx = self.expand(env, &self.all_elim(env, &d, &[c.clone()])?, &["iff"])?;
         let dc = self.simp_goal(env, &[&dcx], &in_c, &[])?;
-        // ne: !(dec = empty)
-        let is_empty = self.tm(env, "ph_a = empty", &[dec])?;
-        let e = Seq::assume(env, is_empty.clone()).map_err(ke)?;
-        let ce = Seq::rewrite(env, &e, &dc).map_err(ke)?;
-        let em = self.api.inst(env, self.fact(env, "empty_mem")?, &[("x", c.clone())]).map_err(ke)?;
-        let f = self.term(env, "false")?;
-        let ne0 = Seq::taut(env, lg, &[&ce, &em], &f).map_err(ke)?.discharge(env, &is_empty).map_err(ke)?;
-        let not_empty = self.tm(env, "!(ph_a = empty)", &[dec])?;
-        let ne = Seq::taut(env, lg, &[&ne0], &not_empty).map_err(ke)?;
         // ty: c in cart(omega, univ(1))
         let cty = self.tm(env, "ph_a in cart(omega, univ(1))", &[&c])?;
         let ty = Seq::eval_goal(env, lg, &[], &cty).map_err(ke)?;
-        // runs(exec_insn(len, insn), m, o)
-        let goal = self.tm(env, "runs(x86_64_linux.exec_insn(ph_a, ph_b), m, o)", &[&len, &insn])?;
-        let mut s = self.simp_goal(env, &[&h, &d1, &dc, &ne, &ty], &goal, &["x86_64_linux.exec_insn"])?;
+        // runs(exec_insn(len, insn), m, o): x86.step_one at this decoding
+        // (proven once, proofs/x86.core -- not the step unfolded per encoding)
+        let (mt, ot) = (self.term(env, "m")?, self.term(env, "o")?);
+        let one = self.api.inst(env, self.fact(env, "x86.step_one")?, &[("m", mt), ("o", ot), ("n", len.clone()), ("i", insn.clone())]).map_err(ke)?;
+        let mut s = one;
+        for p in [&h, &d1, &dc, &ty] {
+            s = Seq::mp(env, &s, p).map_err(ke)?;
+        }
         s = s.discharge(env, h.concl()).map_err(ke)?;
         for &(k, _) in bytes.iter().rev() {
             s = s.discharge(env, hs[k].concl()).map_err(ke)?;
