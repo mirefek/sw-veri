@@ -6,6 +6,108 @@
 
 use super::*;
 
+/// `k in dom(fn_update(.. fn_update(f, j, v) ..))`, k and the keys passed
+/// literals: by `tr.dom_upd` at the update at k, `tr.dom_keep` past the
+/// others (their keys distinct literals, by evaluation); None if not of
+/// that form
+fn dom_member(env: &Env, lg: &Logic, goal: &Term) -> Option<Seq> {
+    let g = |n: &str| env.sym_by_name.get(n).copied();
+    let (dom, fn_update) = (g("dom")?, g("fn_update")?);
+    let Node::App(i, a) = goal.node() else { return None };
+    if *i != lg.in_ || a.len() != 2 {
+        return None;
+    }
+    let k = &a[0];
+    let lit = |t: &Term| matches!(t.node(), Node::Nat(_) | Node::Bytes(_));
+    if !lit(k) {
+        return None;
+    }
+    let Node::App(d, m) = a[1].node() else { return None };
+    if *d != dom || m.len() != 1 {
+        return None;
+    }
+    // the updates from the outside in, to the one at k
+    let mut chain = Vec::new();
+    let mut cur = m[0].clone();
+    loop {
+        let Node::App(u, b) = cur.node() else { return None };
+        if *u != fn_update || b.len() != 3 || !lit(&b[1]) {
+            return None;
+        }
+        let (f, j, v) = (b[0].clone(), b[1].clone(), b[2].clone());
+        chain.push((f.clone(), j.clone(), v));
+        if j == *k {
+            break;
+        }
+        cur = f;
+    }
+    let upd = facts::seq_of(env, "tr.dom_upd")?;
+    let keep = facts::seq_of(env, "tr.dom_keep")?;
+    let (f, j, v) = chain.pop()?;
+    let inst = |s: &Seq, ts: &[&Term]| ts.iter().try_fold(s.clone(), |s, t| Seq::all_elim(env, lg, &s, t)).ok();
+    let mut s = inst(&upd, &[&f, &j, &v])?;
+    while let Some((f, j, v)) = chain.pop() {
+        let ne = Term::app(g("not")?, vec![Term::app(env.builtins.eq, vec![k.clone(), j.clone()])]);
+        let hne = Seq::eval_goal(env, lg, &[], &ne).ok()?;
+        let h = inst(&keep, &[&f, k, &j, &v])?;
+        s = Seq::mp(env, &Seq::mp(env, &h, &s).ok()?, &hne).ok()?;
+    }
+    (s.concl() == goal).then_some(s)
+}
+
+/// `app(fn_update(.. fn_update(f, k, v) ..), k) = v`, k and the keys passed
+/// literals: by `app_update_other` past the other keys (distinct literals,
+/// by evaluation) and `app_update_same` at k; None if not of that form or
+/// the value read is not the goal's right side
+fn map_lookup(api: &Api, env: &mut Env, goal: &Term) -> Option<Seq> {
+    let lg = &api.lg;
+    let g = |n: &str| env.sym_by_name.get(n).copied();
+    let (app, fn_update, not) = (g("app")?, g("fn_update")?, g("not")?);
+    let Node::App(e, a) = goal.node() else { return None };
+    if *e != env.builtins.eq || a.len() != 2 {
+        return None;
+    }
+    let Node::App(ap, b) = a[0].node() else { return None };
+    if *ap != app || b.len() != 2 {
+        return None;
+    }
+    let k = &b[1];
+    let lit = |t: &Term| matches!(t.node(), Node::Nat(_) | Node::Bytes(_));
+    if !lit(k) {
+        return None;
+    }
+    let (k, top) = (k.clone(), b[0].clone());
+    let other = facts::seq_of(env, "app_update_other")?;
+    let same = facts::seq_of(env, "app_update_same")?;
+    // app(m, k) = .. step by step, from the outside in
+    let mut acc: Option<Seq> = None;
+    let mut cur = top;
+    loop {
+        let Node::App(u, c) = cur.node() else { return None };
+        if *u != fn_update || c.len() != 3 || !lit(&c[1]) {
+            return None;
+        }
+        let (f, j, v) = (c[0].clone(), c[1].clone(), c[2].clone());
+        let step = if j == k {
+            api.inst(env, same.clone(), &[("f", f.clone()), ("k", j.clone()), ("v", v)]).ok()?
+        } else {
+            let ne = Term::app(not, vec![Term::app(env.builtins.eq, vec![k.clone(), j.clone()])]);
+            let hne = Seq::eval_goal(env, lg, &[], &ne).ok()?;
+            let h = api.inst(env, other.clone(), &[("f", f.clone()), ("k", j.clone()), ("v", v), ("x", k.clone())]).ok()?;
+            Seq::mp(env, &h, &hne).ok()?
+        };
+        acc = Some(match acc {
+            None => step,
+            Some(s) => Seq::trans(env, &s, &step).ok()?,
+        });
+        if j == k {
+            break;
+        }
+        cur = f;
+    }
+    acc.filter(|s| s.concl() == goal)
+}
+
 /// A justification of a goal (a premise, when it is one).
 pub enum G {
     /// a proof of it (fitted: its free variables matched, implicit unfolding)
@@ -70,6 +172,11 @@ impl Api {
                 let memo = !unroll && keep.is_empty() && facts.iter().all(|f| f.hyps().is_empty());
                 let key = memo.then(|| (goal.clone(), facts.iter().map(|f| f.concl().clone()).collect::<Vec<_>>()));
                 if let Some(s) = key.as_ref().and_then(|k| self.simp_memo.borrow().get(k).cloned()) {
+                    return Ok(s);
+                }
+                // (a literal key of a map built by updates at literal keys: by
+                // the updates, no search)
+                if let Some(s) = dom_member(env, lg, goal).or_else(|| map_lookup(self, env, goal)) {
                     return Ok(s);
                 }
                 let loops = if unroll { vec![LoopHint { inv: Term::app(env.builtins.eq, vec![Term::bvar(0), Term::bvar(0)]), var: None, unroll: true }] } else { Vec::new() };
