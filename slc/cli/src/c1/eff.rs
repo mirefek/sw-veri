@@ -1104,6 +1104,10 @@ impl<'e> Eff<'e> {
 /// `f[0 := a]` (de Bruijn: the variable bound at the top of `f`, at depth
 /// k within it, replaced by `a` shifted by k; the others above it lowered)
 fn beta(env: &Env, f: &Term, a: &Term, k: u32) -> Term {
+    // (no bound variable from k up: f itself)
+    if f.bvar_bound() <= k {
+        return f.clone();
+    }
     let bf = env.binders_fn();
     match f.node() {
         Node::BVar(i) if *i == k => a.shift(k, 0, &bf),

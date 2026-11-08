@@ -807,10 +807,35 @@ pub fn unfold_all_bounded(env: &Env, t: &Term, syms: &[SymId], budget: usize) ->
 }
 
 fn unfold_all_in(env: &Env, t: &Term, syms: &[SymId], budget: &mut usize) -> Option<Term> {
+    unfold_all_m(env, t, syms, budget, &mut crate::term::PtrMap::default())
+}
+
+/// (`memo`: a shared node's result and the visits it took, made once -- a
+/// repeat charges the budget the same visits, so the bounded form answers
+/// as the tree walk would. Keyed by the node's address, the node kept in
+/// the entry: an unfolded body's nodes would otherwise die during the walk
+/// and their addresses go to other nodes.)
+type UnfoldMemo = crate::term::PtrMap<usize, (Term, Term, usize)>;
+
+fn unfold_all_m(env: &Env, t: &Term, syms: &[SymId], budget: &mut usize, memo: &mut UnfoldMemo) -> Option<Term> {
+    if t.shared() {
+        if let Some((_, r, n)) = memo.get(&t.ptr_id()) {
+            *budget = budget.checked_sub(*n)?;
+            return Some(r.clone());
+        }
+        let before = *budget;
+        let r = unfold_all_node(env, t, syms, budget, memo)?;
+        memo.insert(t.ptr_id(), (t.clone(), r.clone(), before - *budget));
+        return Some(r);
+    }
+    unfold_all_node(env, t, syms, budget, memo)
+}
+
+fn unfold_all_node(env: &Env, t: &Term, syms: &[SymId], budget: &mut usize, memo: &mut UnfoldMemo) -> Option<Term> {
     *budget = budget.checked_sub(1)?;
     match t.node() {
         Node::App(s, args) => {
-            let args: Vec<Term> = args.iter().map(|a| unfold_all_in(env, a, syms, budget)).collect::<Option<Vec<_>>>()?;
+            let args: Vec<Term> = args.iter().map(|a| unfold_all_m(env, a, syms, budget, memo)).collect::<Option<Vec<_>>>()?;
             if syms.contains(s) {
                 if let SymKind::Defined { params, body } = &env.syms[*s as usize].kind {
                     let bf = env.binders_fn();
@@ -824,7 +849,7 @@ fn unfold_all_in(env: &Env, t: &Term, syms: &[SymId], budget: &mut usize) -> Opt
                         b = if open(p, a) { subst_open(env, &b, *p, a, 0) } else { b.subst_var(*p, a, &bf) };
                     }
                     // (the occurrence's label, if any, on the unfolded body)
-                    let r = unfold_all_in(env, &b, syms, budget)?;
+                    let r = unfold_all_m(env, &b, syms, budget, memo)?;
                     return Some(match t.label() {
                         Some(l) => r.with_label(Some(l.into())),
                         None => r,
@@ -833,7 +858,7 @@ fn unfold_all_in(env: &Env, t: &Term, syms: &[SymId], budget: &mut usize) -> Opt
             }
             Some(t.with_args(args))
         }
-        Node::Var(_, args) => Some(t.with_args(args.iter().map(|a| unfold_all_in(env, a, syms, budget)).collect::<Option<Vec<_>>>()?)),
+        Node::Var(_, args) => Some(t.with_args(args.iter().map(|a| unfold_all_m(env, a, syms, budget, memo)).collect::<Option<Vec<_>>>()?)),
         _ => Some(t.clone()),
     }
 }

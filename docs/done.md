@@ -146,9 +146,10 @@ For a first reading, docs/overview.md is the better start. The sections:
   taut / arith), `symex` the path simplifier for program runs (formerly
   `simp`); 14,000 calls moved to `simp`. `defs(R(p..), D..)` unfolds R's
   facts too when the goal alone is not enough. The uncached check 1407 s,
-  2.3 GB -> 424 s, 0.6 GB: hash-consed terms whose table entries go with
-  their nodes, DAG-aware walks, a tuple's projection chains reduced as a
-  whole in the refinement walk, cheap variable tests.
+  2.3 GB -> 355 s, 0.6 GB: hash-consed terms whose table entries go with
+  their nodes, DAG-aware walks (a memo keyed by address keeps its keys
+  alive), a tuple's projection chains reduced as a whole in the
+  refinement walk, cheap variable tests and symbol lookups.
 
 ## The levels
 

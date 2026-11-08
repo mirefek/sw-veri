@@ -107,9 +107,10 @@ The plan, in order (each step measured: speed comes first):
 - Variables reference counted (a name and arity freed with its last
   term, identity by pointer, not a table index). Now a proof's variables
   are dropped only at its end (`Env::begin_locals` .. `end_locals`).
-- An uncached check is 424 s, at most 0.6 GB (was 1407 s, 2.3 GB, before
-  hash-consing, the DAG-aware walks, the projection chains and the
-  intern table's own-entry removal). The refinements
+- An uncached check is 355 s, at most 0.6 GB (was 1407 s, 2.3 GB, before
+  hash-consing, the DAG-aware walks, the projection chains, the intern
+  table's own-entry removal and the cheap symbol lookups). Largest:
+  cfg.core 84 s, the `steps` line 68 s, c1.core 38 s. The refinements
   (proofs/mallocng/machine/cfg.core, 83 s) are still a large part:
   alloc_group's 60 s, of it point 7's walk 10 s (a branch chain of 14
   blocks, each visit through the CFG's `bb < k` dispatch), the labels'

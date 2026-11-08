@@ -108,7 +108,8 @@ pub const LOCAL_END: VarId = 2_900_000_000;
 
 pub struct Env {
     pub syms: Vec<SymInfo>,
-    pub sym_by_name: HashMap<String, SymId>,
+    /// (a cheap hasher: looked up by the extensions all the time)
+    pub sym_by_name: HashMap<String, SymId, std::hash::BuildHasherDefault<crate::term::PtrHasher>>,
     /// the variables' names, each once (by its index in `var_slots`)
     var_names: Vec<String>,
     var_name_ids: HashMap<String, u32>,
@@ -165,7 +166,7 @@ pub struct Env {
     /// this (`ext::pinned`), if it was loaded
     pub prelude_end: Option<usize>,
     /// the layer definitions with their pinned bodies (`ext::pinned`)
-    pub pinned: std::collections::HashSet<SymId>,
+    pub pinned: crate::term::PtrSet<SymId>,
     /// the recorded facts' statements, up to their variables' names (a
     /// theorem stating what one before it states is noted: `ext::facts`)
     pub stmt_index: HashMap<String, String>,
@@ -184,20 +185,26 @@ impl Env {
     /// none (another file's symbol of that name means something else).
     pub fn ksym(&self, name: &str) -> Option<SymId> {
         let s = *self.sym_by_name.get(name)?;
-        (self.pinned.contains(&s) || self.prelude_end.is_some_and(|e| (s as usize) < e)).then_some(s)
+        self.is_ksym(s).then_some(s)
+    }
+
+    /// s a symbol `ksym` resolves its name to
+    fn is_ksym(&self, s: SymId) -> bool {
+        self.prelude_end.is_some_and(|e| (s as usize) < e) || self.pinned.contains(&s)
     }
 
     /// A symbol's name, for dispatch in a trusted extension: the name only
     /// if the symbol is what `ksym` resolves it to, else "" (no rule's).
+    /// (A name is declared once -- `add_sym` -- so it always resolves to
+    /// its own symbol: no lookup.)
     pub fn kname(&self, s: SymId) -> &str {
-        let name = self.syms[s as usize].name.as_str();
-        if self.ksym(name) == Some(s) { name } else { "" }
+        if self.is_ksym(s) { self.syms[s as usize].name.as_str() } else { "" }
     }
 
     pub fn new() -> Env {
         let mut env = Env {
             syms: Vec::new(),
-            sym_by_name: HashMap::new(),
+            sym_by_name: Default::default(),
             var_names: Vec::new(),
             var_name_ids: HashMap::new(),
             globals: Vec::new(),
