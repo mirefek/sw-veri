@@ -12,6 +12,13 @@ use super::*;
 
 mod gloop;
 
+thread_local! {
+    /// the callees' refinements proven in this run (closed theorems), by
+    /// (low procedure, high procedure): each walked once, whichever
+    /// refinement calls it first
+    static CALLEE_REFS: std::cell::RefCell<std::collections::HashMap<(String, String), Seq>> = Default::default();
+}
+
 pub fn refines(env: &mut Env, name: &str, low: &str, high: &str) -> Result<Seq, String> {
     // (GREF_ONLY=NAME, for debugging with C1_KEEP_GOING=1: that refinement
     // alone, the others skipped)
@@ -253,15 +260,22 @@ impl<'e> Gen<'e> {
         }
         let (nl, nh) = (self.env.syms[*sl as usize].name.clone(), self.env.syms[*sh as usize].name.clone());
         let key = (nl.clone(), nh.clone());
-        let pr = match self.grefs.get(&key) {
-            Some(pr) => pr.clone(),
+        let pr = match self.grefs.get(&key).cloned().or_else(|| CALLEE_REFS.with(|c| c.borrow().get(&key).cloned())) {
+            Some(pr) => pr,
             None => {
                 self.trace(|| format!("ref: callee {} refines {}", nl, nh));
                 let (sg, sw, slf) = (self.gref.take(), self.w.clone(), std::mem::take(&mut self.lf));
                 let pr = self.proc_ref(&nl, &nh, al.len());
                 (self.gref, self.w, self.lf) = (sg, sw, slf);
                 let pr = pr?;
-                self.grefs.insert(key, pr.clone());
+                self.grefs.insert(key.clone(), pr.clone());
+                // (a closed theorem -- no free variable, no hypothesis: kept
+                // for the other refinements of the run)
+                let mut vs = Vec::new();
+                pr.concl().vars(&mut vs);
+                if vs.is_empty() && pr.hyps().is_empty() {
+                    CALLEE_REFS.with(|c| c.borrow_mut().insert(key, pr.clone()));
+                }
                 pr
             }
         };
