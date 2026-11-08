@@ -1013,24 +1013,35 @@ impl<'e> Gen<'e> {
     pub(super) fn set_lf(&mut self, st: &St) -> Result<(), String> {
         let mut lf = vec![self.lf0.clone().expect("the literal facts")];
         lf.extend(st.lfx.iter().cloned());
-        let mut deep = self.deep_doms(&st.rs);
-        deep.extend(self.deep_doms(&st.hst));
-        for d in deep {
-            lf.push(self.ev(&d, &[])?);
+        for m in [st.rs.clone(), st.hst.clone()] {
+            for k in self.deep_keys(&m) {
+                if let Some(s) = self.dom_seq(&m, k)? {
+                    lf.push(s);
+                }
+            }
         }
         self.lf = lf;
         Ok(())
     }
 
     /// `k in dom(m)` for the map m, by its updates: k's own (`tr.dom_upd`)
-    /// under the later ones (`tr.dom_keep`) -- None for a key not in it
-    pub(super) fn dom_pf(&self, m: &Term, k: u128) -> Option<R> {
-        let (parent, r, pv) = upd_parts(self, m)?;
-        if nat(&r) == Some(k) {
-            return Some(R::Mp(Box::new(f("tr.dom_upd")), vec![t(&parent), t(&r), t(&pv)]));
+    /// under the later ones (`tr.dom_keep`), each map's remembered (the
+    /// maps of successive states share their lower updates); None for a
+    /// key not in it
+    fn dom_seq(&mut self, m: &Term, k: u128) -> Result<Option<Seq>, String> {
+        let key = (m.clone(), k);
+        if let Some(s) = self.dom_memo.get(&key) {
+            return Ok(Some(s.clone()));
         }
-        let inner = self.dom_pf(&parent, k)?;
-        Some(mpf("tr.dom_keep", vec![t(&parent), t(&lit(k)), t(&r), t(&pv), p(inner), simp0()]))
+        let Some((parent, r, pv)) = upd_parts(self, m) else { return Ok(None) };
+        let s = if nat(&r) == Some(k) {
+            self.ev(&R::Mp(Box::new(f("tr.dom_upd")), vec![t(&parent), t(&r), t(&pv)]), &[])?
+        } else {
+            let Some(inner) = self.dom_seq(&parent, k)? else { return Ok(None) };
+            self.ev(&mpf("tr.dom_keep", vec![t(&parent), t(&lit(k)), t(&r), t(&pv), s(&inner), simp0()]), &[])?
+        };
+        self.dom_memo.insert(key, s.clone());
+        Ok(Some(s))
     }
 
     /// `!(k in dom(m))` for a key not in the map m, by its updates
@@ -1047,9 +1058,9 @@ impl<'e> Gen<'e> {
         Some(mpf("tr.dom_out", vec![t(&parent), t(&lit(k)), t(&r), t(&pv), p(inner), simp0()]))
     }
 
-    /// the keys two updates or more below the top of the map m: their `in
-    /// dom` facts (simp(L) shows the others)
-    fn deep_doms(&self, m: &Term) -> Vec<R> {
+    /// the keys two updates or more below the top of the map m (their `in
+    /// dom` facts made; simp(L) shows the others)
+    fn deep_keys(&self, m: &Term) -> Vec<u128> {
         let mut seen = Vec::new();
         let mut out = Vec::new();
         let (mut cur, mut depth) = (m.clone(), 0);
@@ -1058,7 +1069,7 @@ impl<'e> Gen<'e> {
                 if !seen.contains(&k) {
                     seen.push(k);
                     if depth >= 2 {
-                        out.extend(self.dom_pf(m, k));
+                        out.push(k);
                     }
                 }
             }

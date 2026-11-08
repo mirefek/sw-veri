@@ -172,6 +172,7 @@ impl<'e> Gen<'e> {
             lf: Vec::new(),
             hints,
             lf0: None,
+            dom_memo: Default::default(),
             callees: Vec::new(),
             lbase: empty.clone(),
             lcode: empty,

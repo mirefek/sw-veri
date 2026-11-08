@@ -341,6 +341,9 @@ struct Gen<'e> {
     /// deep `in dom` facts)
     lf: Vec<Seq>,
     lf0: Option<Seq>,
+    /// `k in dom(m)` proven, by (m, k): the maps of successive states share
+    /// their lower updates
+    dom_memo: std::collections::HashMap<(Term, u128), Seq>,
     /// the hints (`c1 .. using L, ..`): N's equations beyond its own
     /// (nf.rs), facts `all xs. H.. -> l = r`, l's instances rewritten to
     /// r's (the premises closed facts, by evaluation)
