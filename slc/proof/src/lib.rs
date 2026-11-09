@@ -2433,12 +2433,25 @@ impl State {
     /// each of its bindings alone, dropped -- `apply(L', args..)` proving the
     /// same: reported `inst-audit LINE KIND L BINDING`
     fn audit_inst(&self, env: &mut Env, lg: &Logic, args: &[Arg], s: &Seq, kind: &str, goal: Option<&Term>) {
-        let Some(Arg::Proof(PE::Inst(base, binds))) = args.first() else { return };
         let same = |st: &State, env: &mut Env, a0: PE| -> bool {
             let mut a2 = args.to_vec();
             a2[0] = Arg::Proof(a0);
             matches!(st.apply_to(env, lg, &a2, goal), Ok(x) if x.concl() == s.concl() && x.hyps() == s.hyps())
         };
+        // (`all_elim(L, {t}..)` as the proof: `apply(L, ..)` infers the
+        // terms -- reported as `inst-audit <TAB> line <TAB> kind <TAB> L
+        // <TAB> *elim`)
+        if let Some(Arg::Proof(PE::Rule(r, ea))) = args.first() {
+            if r == "all_elim" && ea.len() >= 2 && ea[1..].iter().all(|a| matches!(a, Arg::Term(_))) {
+                if let Arg::Proof(base) = &ea[0] {
+                    if same(self, env, base.clone()) {
+                        eprintln!("inst-audit\t{}\t{}\t{}\t*elim", shadow::line(), kind, pe_text(base));
+                    }
+                }
+            }
+            return;
+        }
+        let Some(Arg::Proof(PE::Inst(base, binds))) = args.first() else { return };
         let name = pe_text(base);
         let line = shadow::line();
         if same(self, env, (**base).clone()) {
