@@ -486,6 +486,10 @@ step x.., h.. from P with f.. [using u..]   a run of readable GIMPLE inverted st
 show P / show φ by R(..)  the result (else the last `have`); the block's last step
 show [φ] proof ... qed    a sub-proof with its own scope (also `have h: φ proof ... qed`)
 have c: case k of P proof ... qed   a sub-proof of P's k-th disjunct (as written) -> the goal
+cases P / cases from F    the goal split: into P and !P, or F's disjuncts (as written); the cases
+                          follow in order, the goal proven after the last (by taut from them)
+case h proof ... qed      the next case: its condition assumed as h, the goal the split's (also
+                          `case h by R`, `case h := P`; `case h: φ ..` states the condition, checked)
 let N := t / let N(a) := t   an abbreviation to the end of the block (`:= loop_body(h)`: h's loop's body;
                           `let K(x) := rest(h)`: for h `ex x. A(x) && K(x)`, its K)
 unfold [D..] [in h]       unfold definitions in the goal (or fact h)

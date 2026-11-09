@@ -306,7 +306,7 @@ fn close(env: &mut Env, lg: &Logic, st: State) -> KResult<Seq> {
 
 impl State {
     fn new(scope: Vec<(String, VarId)>, facts: Vec<(String, Seq)>, goal: Option<Term>) -> State {
-        State { scope, facts, frames: Vec::new(), last: None, discharged: Default::default(), goal, lets: Vec::new(), mem_cache: Default::default(), scratch: Default::default() }
+        State { scope, facts, frames: Vec::new(), last: None, discharged: Default::default(), goal, lets: Vec::new(), mem_cache: Default::default(), scratch: Default::default(), split: None }
     }
 }
 
@@ -818,6 +818,17 @@ struct State {
     mem_cache: std::cell::RefCell<mem::MemCache>,
     /// a goal rule's own intermediate facts, by name (`divergence`)
     scratch: std::cell::RefCell<Vec<(String, Seq)>>,
+    /// `cases ..`: the split under way
+    split: Option<Split>,
+}
+
+/// `cases P` / `cases from F`: the goal split -- its cases (P, !P, or F's
+/// disjuncts), F, and the proofs of `case_k -> goal` so far
+struct Split {
+    goal: Term,
+    conds: Vec<Term>,
+    disj: Option<Seq>,
+    done: Vec<Seq>,
 }
 
 /// Rules that take their statement from the goal.
@@ -1052,12 +1063,48 @@ impl State {
         err(format!("unknown fact `{}`", name))
     }
 
+    /// the split's next case: `name` its condition assumed, the body proving
+    /// the split's goal (`case_k -> goal`); after the last case the goal
+    /// itself, by taut from the cases (and F's disjunction)
+    fn case_step(&mut self, env: &mut Env, lg: &Logic, name: &str, body: &str, line: usize) -> KResult<()> {
+        let sp = self.split.as_ref().ok_or_else(|| KernelError("`case` without a `cases` before it".into()))?;
+        let k = sp.done.len();
+        let cond = sp.conds.get(k).cloned().ok_or_else(|| KernelError(format!("case {}: the split has {} cases", name, sp.conds.len())))?;
+        // (`case h: φ`: the condition stated, as `assume h: φ` checks it)
+        let (n, stated) = match name.split_once(':') {
+            Some((n, f)) => (n.trim(), Some(f.trim())),
+            None => (name, None),
+        };
+        if n.is_empty() || n.contains(char::is_whitespace) {
+            return err("expected `case h proof` or `case h: φ proof`: one name for the case's condition");
+        }
+        let g = Term::app(env.builtins.imp, vec![cond, sp.goal.clone()]);
+        let child = State::new(self.scope.clone(), self.facts.clone(), Some(g.clone()));
+        let text = match stated {
+            Some(f) => format!("assume {}: {}\n{}", n, f, body),
+            None => format!("assume {}\n{}", n, body),
+        };
+        let s = run_block(env, lg, child, &text, line, |env, s| self.check(env, s, &g))?;
+        let sp = self.split.as_mut().unwrap();
+        sp.done.push(s);
+        if sp.done.len() == sp.conds.len() {
+            let sp = self.split.take().unwrap();
+            let refs: Vec<&Seq> = sp.disj.iter().chain(sp.done.iter()).collect();
+            self.last = Some(Seq::taut(env, lg, &refs, &sp.goal)?);
+        }
+        Ok(())
+    }
+
     /// one step at `line` (a sub-proof's body from `body_line`)
     fn step(&mut self, env: &mut Env, lg: &Logic, step: &str, line: usize, body_line: usize) -> KResult<()> {
         // `have NAME: φ proof .. qed` / `show [φ] proof .. qed`: a sub-proof of
         // φ with its own assume / fix / obtain steps, closed at its `qed`
         if let Some((header, body)) = step.split_once('\n') {
             let (kw, rest) = header.split_once(' ').unwrap_or((header, ""));
+            // `case h proof .. qed`: the split's next case
+            if kw == "case" {
+                return self.case_step(env, lg, rest.trim(), body, body_line.saturating_sub(1));
+            }
             let (name, goal) = match kw {
                 "have" => {
                     let (n, g) = rest.split_once(':').ok_or_else(|| KernelError("expected `have name: φ proof`".into()))?;
@@ -1095,6 +1142,41 @@ impl State {
         }
         let (kw, rest) = step.split_once(' ').unwrap_or((step, ""));
         match kw {
+            // cases P / cases from F: the goal split into P and !P, or F's
+            // disjuncts (as written); the cases follow (`case h ..`), the
+            // goal proven after the last
+            "cases" => {
+                if self.split.is_some() {
+                    return err("cases: the cases of the split before not all given");
+                }
+                let goal = self.goal.clone().ok_or_else(|| KernelError("cases: no current goal here".into()))?;
+                let (conds, disj) = match rest.trim().strip_prefix("from ") {
+                    Some(f) => {
+                        let f = self.eval(env, lg, &parse_pe(f.trim())?)?;
+                        let ds = disj_parts(env, f.concl());
+                        if ds.len() < 2 {
+                            return err(format!("cases from ..: `{}` is not a disjunction", Printer::new(env).short(f.concl())));
+                        }
+                        (ds, Some(f))
+                    }
+                    None => {
+                        let p = self.term(env, rest)?;
+                        let not = env.sym_by_name.get("not").copied().ok_or_else(|| KernelError("no `not`".into()))?;
+                        (vec![p.clone(), Term::app(not, vec![p])], None)
+                    }
+                };
+                self.split = Some(Split { goal, conds, disj, done: Vec::new() });
+            }
+            // case h by R / case h := P: a case in one step
+            "case" => {
+                let rest = rest.trim();
+                let (name, body) = match (split_top_kw(rest, "by"), split_top_kw(rest, ":=")) {
+                    (Some((n, r)), _) => (n.trim(), format!("show by {}", r.trim())),
+                    (None, Some((n, p))) => (n.trim(), format!("show := {}", p.trim())),
+                    _ => return err("expected `case h by R`, `case h := P` or `case h proof`"),
+                };
+                return self.case_step(env, lg, name, &body, line.saturating_sub(1));
+            }
             // let NAME := t  /  let NAME(a, b) := t: an abbreviation, to the end
             // of the block (a term is read with it expanded)
             "let" => {
