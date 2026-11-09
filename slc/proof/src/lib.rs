@@ -99,7 +99,7 @@ mod bits;
 mod lets;
 mod mem;
 mod rsimp;
-mod shadow;
+pub mod shadow;
 mod types;
 
 fn err<T>(m: impl Into<String>) -> KResult<T> {
@@ -159,6 +159,12 @@ fn run_block(env: &mut Env, lg: &Logic, mut st: State, text: &str, line: usize, 
         res = st.step(env, lg, &step, line + line_no, line + body_no).map_err(|e| {
             if e.0.starts_with("line ") { e } else { KernelError(format!("line {}: {}", line + line_no, e.0)) }
         });
+        if res.is_ok() && shadow::explain() {
+            let p = Printer::new(env);
+            for (n, s) in &st.facts[before.min(st.facts.len())..] {
+                eprintln!("explain {}:   {}: {}", line + line_no, n, p.term(s.concl()));
+            }
+        }
         let replaces = matches!(step.split_whitespace().next(), Some("unfold" | "zeta" | "fold_let" | "flip" | "simp"));
         if res.is_ok() && !replaces && st.facts.len() > before {
             for (n, _) in &st.facts[before..] {
@@ -2526,9 +2532,15 @@ impl State {
                 }
             }
         }
+        let explain = shadow::explain();
         for v in &pvars {
             match binds.iter().find(|(w, _)| w == v) {
-                Some((_, t)) => s = Seq::inst(env, &s, *v, t)?,
+                Some((_, t)) => {
+                    if explain {
+                        eprintln!("explain {}: apply {}: {} := {}", shadow::line(), args_text(&args[..1]), env.var(*v).name, Printer::new(env).term(t));
+                    }
+                    s = Seq::inst(env, &s, *v, t)?
+                }
                 None => {
                     let mut vs = Vec::new();
                     s.concl().vars(&mut vs);

@@ -231,6 +231,7 @@ pub fn kernel_check(args: &[String]) -> CResult {
         if std::env::var("SLC_TIDY").is_ok() || std::env::var("SLC_SHADOW").is_ok() || std::env::var("SLC_INST_AUDIT").is_ok() {
             eprintln!("tidy-file\t{}", f.display());
         }
+        sl_proof::shadow::set_file(&f.to_string_lossy());
         let src = std::fs::read_to_string(f).map_err(|e| format!("{}: {}", f.display(), e))?;
         // (SLC_RECHECK=s: the files whose path contains s checked again,
         // their file and proof caches not used -- to time one file)

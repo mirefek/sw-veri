@@ -509,6 +509,12 @@ search P1, P2, ..         show the facts (theorems, axioms, conditional theorems
                           it, then a premise; shorter statements first (30 shown)
 ```
 
+What a step leaves implicit can be shown without editing the file:
+`SLC_EXPLAIN=FILE:L1,L2,.. SLC_RECHECK=FILE scripts/check.sh` prints, for
+the steps at those lines (in files whose path contains FILE), each
+`apply`'s inferred instantiation (`explain L: apply f: x := t`) and the
+facts the step made (`explain L:   h: φ`).
+
 `assume` and `fix` take formulas from the goal, so write a formula only
 where it says something new. They see through a defined goal's head.
 

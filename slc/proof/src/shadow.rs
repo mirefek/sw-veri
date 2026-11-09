@@ -33,9 +33,41 @@ pub(crate) fn inst_audit() -> bool {
     *ON.get_or_init(|| std::env::var("SLC_INST_AUDIT").is_ok())
 }
 
+/// SLC_EXPLAIN=FILE:L1,L2,..: the steps at these lines (in the files whose
+/// path contains FILE) explained -- `apply`'s inferred instantiations and
+/// the facts each step made, on stderr (for reading a proof whose steps
+/// leave them implicit)
+fn explain_spec() -> &'static Option<(String, Vec<usize>)> {
+    static S: OnceLock<Option<(String, Vec<usize>)>> = OnceLock::new();
+    S.get_or_init(|| {
+        let v = std::env::var("SLC_EXPLAIN").ok()?;
+        let (f, ls) = v.rsplit_once(':')?;
+        Some((f.to_string(), ls.split(',').filter_map(|l| l.trim().parse().ok()).collect()))
+    })
+}
+
+thread_local! {
+    static FILE_ON: Cell<bool> = const { Cell::new(false) };
+}
+
+/// the file being checked (for SLC_EXPLAIN)
+pub fn set_file(path: &str) {
+    if let Some((f, _)) = explain_spec() {
+        FILE_ON.with(|c| c.set(path.contains(f.as_str())));
+    }
+}
+
+/// the current step is one to explain
+pub(crate) fn explain() -> bool {
+    match explain_spec() {
+        Some((_, ls)) => FILE_ON.with(|c| c.get()) && ls.contains(&line()),
+        None => false,
+    }
+}
+
 /// the line of the proof step being run
 pub(crate) fn set_line(l: usize) {
-    if on() || inst_audit() {
+    if on() || inst_audit() || explain_spec().is_some() {
         LINE.with(|c| c.set(l));
         CALL.with(|c| c.set(0));
     }
