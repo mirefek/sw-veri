@@ -736,7 +736,7 @@ bound like `p + n + 4 <= e + w` brings in n's and w's facts.
 | rule | result |
 |---|---|
 | `mp(ab, a1, ..)` | modus ponens; a term `{t}` instantiates the leading `all` |
-| `apply(f, a1, ..)` | f instantiated by matching its premises with the proofs, in order, then applied; terms `{t}` fill `all`s in order. As `show by apply(..)` f's conclusion is matched with the goal first: its binder parameters (a contract's precondition and body) come from the goal, and an argument may be a rule with a goal (`simp()`, `defs(..)`) proving the premise so instantiated. A membership premise (`x in omega`) the next proof does not match is proven by `types` (once instantiated): the proof is for a later premise |
+| `apply(f, a1, ..)` | f instantiated by matching its premises with the proofs, in order, then applied; terms `{t}` fill `all`s in order. As `show by apply(..)` f's conclusion is matched with the goal first: its binder parameters (a contract's precondition and body) come from the goal, and an argument may be a rule with a goal (`simp()`, `defs(..)`) proving the premise so instantiated. A membership premise (`x in omega`) the next proof does not match is proven by `types` (once instantiated): the proof is for a later premise. An instantiation `f[x := t]` is needed only for what matching cannot find (a parameter in no premise or conclusion matched, or matched ambiguously); `SLC_INST_AUDIT=1` reports the ones `apply` would infer (`inst-audit <TAB> line <TAB> mp/apply <TAB> lemma <TAB> var`, `*` for all) |
 | `all_elim(p, {t}, ..)` | instantiate `all`s |
 | `conj(p1, .., pn)` | `p1 && .. && pn` |
 | `refl({t})`, `sym(e)`, `trans(e1, e2)` | equality |

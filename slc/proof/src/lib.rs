@@ -2168,7 +2168,13 @@ impl State {
                             self.by(env, lg, &unfolded, &p2).map_err(|_| e)?
                         }
                     },
-                    PE::Rule(n, a) if n == "apply" => self.apply_to(env, lg, a, Some(&unfolded))?,
+                    PE::Rule(n, a) if n == "apply" => {
+                        let s = self.apply_to(env, lg, a, Some(&unfolded))?;
+                        if shadow::inst_audit() {
+                            self.audit_inst(env, lg, a, &s, "apply", Some(&unfolded));
+                        }
+                        s
+                    }
                     _ => {
                         let s = self.eval(env, lg, p)?;
                         self.fit(env, s, &unfolded)?
@@ -2361,7 +2367,40 @@ impl State {
 
     /// `apply(f, a1, .., an)` (see `eval`).
     fn apply(&self, env: &mut Env, lg: &Logic, args: &[Arg]) -> KResult<Seq> {
-        self.apply_to(env, lg, args, None)
+        let r = self.apply_to(env, lg, args, None);
+        if shadow::inst_audit() {
+            if let Ok(s) = &r {
+                self.audit_inst(env, lg, args, s, "apply", None);
+            }
+        }
+        r
+    }
+
+    /// (SLC_INST_AUDIT) the instantiation of args[0], `L[x := t, ..]`, or
+    /// each of its bindings alone, dropped -- `apply(L', args..)` proving the
+    /// same: reported `inst-audit LINE KIND L BINDING`
+    fn audit_inst(&self, env: &mut Env, lg: &Logic, args: &[Arg], s: &Seq, kind: &str, goal: Option<&Term>) {
+        let Some(Arg::Proof(PE::Inst(base, binds))) = args.first() else { return };
+        let same = |st: &State, env: &mut Env, a0: PE| -> bool {
+            let mut a2 = args.to_vec();
+            a2[0] = Arg::Proof(a0);
+            matches!(st.apply_to(env, lg, &a2, goal), Ok(x) if x.concl() == s.concl() && x.hyps() == s.hyps())
+        };
+        let name = pe_text(base);
+        let line = shadow::line();
+        if same(self, env, (**base).clone()) {
+            eprintln!("inst-audit\t{}\t{}\t{}\t*", line, kind, name);
+            return;
+        }
+        if binds.len() > 1 {
+            for i in 0..binds.len() {
+                let mut b = binds.clone();
+                let (v, _) = b.remove(i);
+                if same(self, env, PE::Inst(base.clone(), b)) {
+                    eprintln!("inst-audit\t{}\t{}\t{}\t{}", line, kind, name, v);
+                }
+            }
+        }
     }
 
     /// `apply`, its conclusion first matched with the goal if there is one
@@ -4547,6 +4586,9 @@ impl State {
                                 _ => self.proof_arg(env, lg, Some(a))?,
                             };
                             s = mp_u(env, &s, &x)?;
+                        }
+                        if shadow::inst_audit() {
+                            self.audit_inst(env, lg, args, &s, "mp", None);
                         }
                         Ok(s)
                     }

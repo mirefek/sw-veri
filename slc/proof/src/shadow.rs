@@ -26,12 +26,24 @@ pub(crate) fn on() -> bool {
     *ON.get_or_init(|| std::env::var("SLC_SHADOW").is_ok())
 }
 
+/// SLC_INST_AUDIT=1: an instantiation `L[x := t]` in `apply` / `mp` the
+/// plain `apply(L, ..)` would infer, reported (scripts drop them)
+pub(crate) fn inst_audit() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("SLC_INST_AUDIT").is_ok())
+}
+
 /// the line of the proof step being run
 pub(crate) fn set_line(l: usize) {
-    if on() {
+    if on() || inst_audit() {
         LINE.with(|c| c.set(l));
         CALL.with(|c| c.set(0));
     }
+}
+
+/// the line set last (`set_line`)
+pub(crate) fn line() -> usize {
+    LINE.with(|c| c.get())
 }
 
 impl State {
