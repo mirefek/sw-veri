@@ -732,7 +732,7 @@ bound like `p + n + 4 <= e + w` brings in n's and w's facts.
 | rule | result |
 |---|---|
 | `mp(ab, a1, ..)` | modus ponens; a term `{t}` instantiates the leading `all` |
-| `apply(f, a1, ..)` | f instantiated by matching its premises with the proofs, in order, then applied; terms `{t}` fill `all`s in order. As `show by apply(..)` f's conclusion is matched with the goal first: its binder parameters (a contract's precondition and body) come from the goal, and an argument may be a rule with a goal (`simp()`, `defs(..)`) proving the premise so instantiated |
+| `apply(f, a1, ..)` | f instantiated by matching its premises with the proofs, in order, then applied; terms `{t}` fill `all`s in order. As `show by apply(..)` f's conclusion is matched with the goal first: its binder parameters (a contract's precondition and body) come from the goal, and an argument may be a rule with a goal (`simp()`, `defs(..)`) proving the premise so instantiated. A membership premise (`x in omega`) the next proof does not match is proven by `types` (once instantiated): the proof is for a later premise |
 | `all_elim(p, {t}, ..)` | instantiate `all`s |
 | `conj(p1, .., pn)` | `p1 && .. && pn` |
 | `refl({t})`, `sym(e)`, `trans(e1, e2)` | equality |
@@ -768,7 +768,7 @@ premise they stand for.
 | rule | proves the goal by |
 |---|---|
 | `taut(p..)` | a propositional tautology from the premises; `a = b` is also `b = a`, and `a != b` is `!(a = b)` |
-| `arith(p..)` | propositional logic plus linear arithmetic over integers: words mod 2^n with symbolic widths, `*`, `/`, `%` by constants (numerals, or powers of numerals: `pow2(64)`, `int_pow(2, 32)`); products of non-constants as monomials (`a * (b + c)` is `a b + a c`), a product of nonnegatives nonnegative, `x = m q + r` for `/`, `%` by a symbolic m > 0, `pow2(k + 1)` as `2 pow2(k)` |
+| `arith(p..)` | propositional logic plus linear arithmetic over integers: words mod 2^n with symbolic widths, `*`, `/`, `%` by constants (numerals, or powers of numerals: `pow2(64)`, `int_pow(2, 32)`); products of non-constants as monomials (`a * (b + c)` is `a b + a c`), a product of nonnegatives nonnegative, `x = m q + r` for `/`, `%` by a symbolic m > 0, `pow2(k + 1)` as `2 pow2(k)`. Failing, again with the block's memberships of the goal's terms, then with the sets `types` infers for the terms that have none (`c.ctx in omega` from `c in mallocng.Cfg`) |
 | `simp(e.., D.., [only])` | left-to-right rewriting to `true` with the facts, definitions and registered `simp` rules; a rule's premise that is a membership by `types`, `!(a = b)` of distinct literals by their bytes or numerals |
 | `types(p..)` | a membership `t in T` (or `k in dom(r)`, `is_fun(r)`) by the forms of t and T, from the facts given and the block's: universes by t's constructors and literals, a record's fields from its type, updates of a typed record, function values, reads through updates, word operations by their width, the registered typing lemmas (`type_rule`: the first whose conclusion matches, its membership premises by typing again, the others known facts -- `x86.store_typed` types a chain of stores), numbers by arith over the atoms' inferred sets; determined, each step a lemma (slc/proof/src/types.rs) |
 | `symex(p.., keep(P..), {l0 l. I}, {l. m})` | the path simplifier (symbolic execution), below |

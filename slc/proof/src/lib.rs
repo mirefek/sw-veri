@@ -607,6 +607,11 @@ fn term_occurs(x: &Term, t: &Term) -> bool {
     go(x, t, &mut Default::default())
 }
 
+/// whether t is a membership `x in S`
+fn is_membership(lg: &Logic, t: &Term) -> bool {
+    matches!(t.node(), Node::App(i, a) if *i == lg.in_ && a.len() == 2)
+}
+
 /// t with each occurrence of the closed term `from` replaced by `to` (a
 /// shared node's result made once)
 fn replace_term(t: &Term, from: &Term, to: &Term) -> Term {
@@ -1683,10 +1688,21 @@ impl State {
                     Err(e) => e,
                 };
                 let more = self.memberships(env, goal, &ps);
-                if more.is_empty() {
+                if !more.is_empty() {
+                    ps.extend(more);
+                    let refs: Vec<&Seq> = ps.iter().collect();
+                    if let Ok(s) = Seq::arith(env, lg, &refs, goal) {
+                        return Ok(s);
+                    }
+                }
+                // (failing still, the sets of the terms with none among the
+                // facts inferred: `types`' reading of the facts -- a record's
+                // field, a function's value)
+                let inferred = self.inferred_memberships(env, lg, goal, &ps);
+                if inferred.is_empty() {
                     return Err(e);
                 }
-                ps.extend(more);
+                ps.extend(inferred);
                 let refs: Vec<&Seq> = ps.iter().collect();
                 Seq::arith(env, lg, &refs, goal).map_err(|_| e)
             }
@@ -2087,6 +2103,57 @@ impl State {
 
     /// the block's facts `t in omega` / `t in bits(n)` / `t in int` whose t
     /// occurs in the goal or the facts given (and not already given)
+    /// `t in omega` / `bits(n)` / `int` for the goal's and the facts'
+    /// arithmetic atoms t with no membership among the facts, as `types`
+    /// infers it from the facts given and the block's (types.rs)
+    fn inferred_memberships(&self, env: &mut Env, lg: &Logic, goal: &Term, given: &[Seq]) -> Vec<Seq> {
+        let g = |n: &str| env.sym_by_name.get(n).copied();
+        let arith_heads: Vec<SymId> = [
+            "int_add", "int_sub", "int_neg", "int_mul", "int_div", "int_mod", "int_pow", "pow2", "int_le", "int_lt", "and", "or", "not", "iff", "bits_add", "bits_sub", "bits_of_int",
+        ]
+        .iter()
+        .filter_map(|n| g(n))
+        .chain([env.builtins.eq, env.builtins.imp, lg.in_])
+        .collect();
+        let kinds: Vec<SymId> = ["omega", "bits", "int"].iter().filter_map(|n| g(n)).collect();
+        fn atoms(t: &Term, heads: &[SymId], in_: SymId, out: &mut Vec<Term>) {
+            match t.node() {
+                // (a membership's set is not an atom)
+                Node::App(f, a) if *f == in_ && a.len() == 2 => atoms(&a[0], heads, in_, out),
+                Node::App(f, a) if heads.contains(f) => a.iter().for_each(|x| atoms(x, heads, in_, out)),
+                Node::Nat(_) | Node::BVar(_) | Node::Bytes(_) => {}
+                _ => {
+                    if t.bvar_bound() == 0 && !out.contains(t) {
+                        out.push(t.clone());
+                    }
+                }
+            }
+        }
+        let mut ats = Vec::new();
+        atoms(goal, &arith_heads, lg.in_, &mut ats);
+        for f in given {
+            atoms(f.concl(), &arith_heads, lg.in_, &mut ats);
+        }
+        // (those with a membership among the facts: not inferred again)
+        let has = |t: &Term| {
+            given.iter().chain(self.facts.iter().map(|(_, f)| f)).any(|f| matches!(f.concl().node(), Node::App(i, a) if *i == lg.in_ && a.len() == 2 && a[0] == *t))
+        };
+        let ats: Vec<Term> = ats.into_iter().filter(|t| !has(t)).collect();
+        if ats.is_empty() {
+            return Vec::new();
+        }
+        let Ok(mut ty) = types::Typer::new(env, self, lg, given) else { return Vec::new() };
+        let mut out = Vec::new();
+        for t in ats {
+            if let Some((set, pf)) = ty.infer(env, &t) {
+                if matches!(set.node(), Node::App(k, _) if kinds.contains(k)) {
+                    out.push(pf);
+                }
+            }
+        }
+        out
+    }
+
     fn memberships(&self, env: &Env, goal: &Term, given: &[Seq]) -> Vec<Seq> {
         let Some(in_) = env.sym_by_name.get("in").copied() else { return Vec::new() };
         let kinds: Vec<SymId> = ["omega", "bits", "int"].iter().filter_map(|n| env.sym_by_name.get(*n).copied()).collect();
@@ -2223,12 +2290,12 @@ impl State {
         // the proofs; a goal rule (`simp(..)`, `taut(..)`, ..) proves its
         // premise, instantiated, once the others have fixed the variables
         let mut proofs: Vec<Option<Seq>> = Vec::new();
-        let mut goal_args: Vec<(usize, &PE, Option<Seq>)> = Vec::new();
+        let mut goal_args: Vec<(usize, PE, Option<Seq>)> = Vec::new();
         for a in &args[1..] {
             match a {
                 Arg::Term(_) => terms.push(self.term_arg(env, Some(a), 0)?),
                 Arg::Proof(p @ PE::Rule(n, _)) if GOAL_RULES.contains(&n.as_str()) => {
-                    goal_args.push((proofs.len(), p, None));
+                    goal_args.push((proofs.len(), p.clone(), None));
                     proofs.push(None);
                 }
                 // (a nested apply: on its own if that determines it, else
@@ -2236,7 +2303,7 @@ impl State {
                 Arg::Proof(p @ PE::Rule(n, _)) if n == "apply" => match self.eval(env, lg, p) {
                     Ok(s) if self.free_vars(&s).is_empty() => proofs.push(Some(s)),
                     r => {
-                        goal_args.push((proofs.len(), p, r.ok()));
+                        goal_args.push((proofs.len(), p.clone(), r.ok()));
                         proofs.push(None);
                     }
                 },
@@ -2281,15 +2348,39 @@ impl State {
         }
         let mut c = s.concl().clone();
         let and = env.sym_by_name.get("and").copied();
-        for (i, p) in proofs.iter_mut().enumerate() {
+        let mut i = 0;
+        while i < proofs.len() {
             let (a, b) = imp_parts(env, &c).map_err(|_| KernelError(format!("apply: no premise for the proof number {}", i + 1)))?;
             c = b;
-            let Some(p) = p else { continue };
+            let Some(p) = &mut proofs[i] else {
+                i += 1;
+                continue;
+            };
             // (the variables bound so far substituted)
             let a = {
                 let bf = env.binders_fn();
                 binds.iter().fold(a, |t, (v, x)| t.subst_var(*v, x, &bf))
             };
+            // (a membership premise the proof does not match: by `types`,
+            // once instantiated -- the proof is for a later premise)
+            if is_membership(lg, &a) && !pmatch(env, &a, p.concl(), &pvars, &mut binds.clone()) && !pmatch(env, &a, p.concl(), &pvars, &mut Vec::new()) {
+                let mut cs = Vec::new();
+                conjuncts(p.concl(), and, &mut cs);
+                let fits_part = cs.iter().any(|x| pmatch(env, &a, x, &pvars, &mut binds.clone()));
+                if !fits_part {
+                    proofs.insert(i, None);
+                    for g in goal_args.iter_mut() {
+                        if g.0 >= i {
+                            g.0 += 1;
+                        }
+                    }
+                    goal_args.push((i, PE::Rule("types".into(), Vec::new()), None));
+                    i += 1;
+                    continue;
+                }
+            }
+            let p = proofs[i].as_mut().unwrap();
+            i += 1;
             if !pmatch(env, &a, p.concl(), &pvars, &mut binds) {
                 // a conjunct of the proof's statement that matches
                 let mut cs = Vec::new();
@@ -2309,7 +2400,7 @@ impl State {
                         // (the premise with the variables matched so far)
                         let bf = env.binders_fn();
                         let a2 = binds.iter().fold(a.clone(), |t, (v, x)| t.subst_var(*v, x, &bf));
-                        return err(format!("apply: the proof number {} does not match the premise `{}`\n  {}", i + 1, pp.short(&a2), pp.mismatch(&a2, p.concl())));
+                        return err(format!("apply: the proof number {} does not match the premise `{}`\n  {}", i, pp.short(&a2), pp.mismatch(&a2, p.concl())));
                     }
                 }
             }
@@ -2336,7 +2427,7 @@ impl State {
                 c = b;
             }
             for (i, pe, eager) in goal_args {
-                proofs[i] = Some(match (self.by(env, lg, &ps[i], pe), eager) {
+                proofs[i] = Some(match (self.by(env, lg, &ps[i], &pe), eager) {
                     (Ok(x), _) | (Err(_), Some(x)) => x,
                     (Err(e), None) => return err(format!("apply: premise {}: {}", i + 1, e.0)),
                 });
