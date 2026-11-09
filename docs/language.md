@@ -519,7 +519,9 @@ facts the step made (`explain L:   h: φ`).
 `defs`, ..; not `symex`) proves its goal without, and no slower:
 `arg-audit <TAB> line <TAB> rule <TAB> args <TAB> i,j..` (dropped from the
 last, each with the ones before it gone) -- for keeping proofs to the
-facts they use.
+facts they use. A trial may reuse what the call itself cached (`mem`'s
+reads), so time a file after dropping (`SLC_TIMES=1`): `mem` without its
+facts searches the block's, about a second a call.
 
 `assume` and `fix` take formulas from the goal, so write a formula only
 where it says something new. They see through a defined goal's head.
