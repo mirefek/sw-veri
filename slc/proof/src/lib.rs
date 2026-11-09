@@ -1706,6 +1706,9 @@ impl State {
     fn by(&self, env: &mut Env, lg: &Logic, goal: &Term, pe: &PE) -> KResult<Seq> {
         // (SLC_SLOW_BY=ms: the rules taking longer printed, a debug aid)
         thread_local!(static SLOW_BY: Option<u128> = std::env::var("SLC_SLOW_BY").ok().and_then(|v| v.parse().ok()));
+        if shadow::arg_audit_here() {
+            return self.by_audited(env, lg, goal, pe);
+        }
         let Some(ms) = SLOW_BY.with(|s| *s) else { return self.by_1(env, lg, goal, pe) };
         let t0 = std::time::Instant::now();
         let r = self.by_1(env, lg, goal, pe);
@@ -1714,6 +1717,50 @@ impl State {
             if let PE::Rule(name, _) = pe {
                 eprintln!("slow by: {dt} ms {name}{} `{}`", if r.is_ok() { "" } else { " (failed)" }, Printer::new(env).short(goal));
             }
+        }
+        r
+    }
+
+    /// (SLC_ARG_AUDIT: a goal rule that proved its goal tried again without
+    /// each argument, from the last; those it does without dropped in turn,
+    /// reported as `arg-audit <TAB> line <TAB> rule <TAB> args <TAB> dropped
+    /// indices` -- the arguments as `args_text` prints them)
+    fn by_audited(&self, env: &mut Env, lg: &Logic, goal: &Term, pe: &PE) -> KResult<Seq> {
+        thread_local!(static IN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) });
+        let t0 = std::time::Instant::now();
+        let r = self.by_1(env, lg, goal, pe);
+        let mut best = t0.elapsed();
+        let PE::Rule(name, args) = pe else { return r };
+        // (symex, the searching simplifier, not tried: its failures search long)
+        if r.is_err() || args.is_empty() || IN.with(|c| c.get()) || !GOAL_RULES.contains(&name.as_str()) || name == "symex" || args_text(args).contains("symex(") {
+            return r;
+        }
+        // (the trials together: within ten times the call's own time)
+        let budget = best * 10 + std::time::Duration::from_millis(200);
+        let t_all = std::time::Instant::now();
+        let line = shadow::line();
+        IN.with(|c| c.set(true));
+        let mut keep: Vec<usize> = (0..args.len()).collect();
+        for i in (0..args.len()).rev() {
+            if t_all.elapsed() > budget {
+                break;
+            }
+            let trial: Vec<Arg> = keep.iter().filter(|&&j| j != i).map(|&j| args[j].clone()).collect();
+            let t1 = std::time::Instant::now();
+            // (a trial bounded: rsimp gives up past twice the time it may take)
+            let bound = (best + best / 5).as_secs_f64() * 2.0 + 0.002;
+            let ok = rsimp::with_deadline(bound, || self.by_1(env, lg, goal, &PE::Rule(name.clone(), trial))).is_ok();
+            let dt = t1.elapsed();
+            // (dropped only if no slower: 20% and 1 ms of slack)
+            if ok && dt <= best + best / 5 + std::time::Duration::from_millis(1) {
+                keep.retain(|&j| j != i);
+                best = best.min(dt);
+            }
+        }
+        IN.with(|c| c.set(false));
+        if keep.len() < args.len() {
+            let dropped: Vec<String> = (0..args.len()).filter(|j| !keep.contains(j)).map(|j| j.to_string()).collect();
+            eprintln!("arg-audit\t{}\t{}\t{}\t{}", line, name, args_text(args).replace(['\t', '\n'], " "), dropped.join(","));
         }
         r
     }

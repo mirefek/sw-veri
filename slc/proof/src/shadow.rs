@@ -33,6 +33,18 @@ pub(crate) fn inst_audit() -> bool {
     *ON.get_or_init(|| std::env::var("SLC_INST_AUDIT").is_ok())
 }
 
+/// SLC_ARG_AUDIT=1: a goal rule's arguments it does without, reported
+/// (`State::by_audited`; scripts drop them)
+pub(crate) fn arg_audit() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("SLC_ARG_AUDIT").is_ok())
+}
+
+/// the argument audit is on, in a written proof file
+pub(crate) fn arg_audit_here() -> bool {
+    arg_audit() && FILE_PROOFS.with(|c| c.get())
+}
+
 /// SLC_EXPLAIN=FILE:L1,L2,..: the steps at these lines (in the files whose
 /// path contains FILE) explained -- `apply`'s inferred instantiations and
 /// the facts each step made, on stderr (for reading a proof whose steps
@@ -48,10 +60,15 @@ fn explain_spec() -> &'static Option<(String, Vec<usize>)> {
 
 thread_local! {
     static FILE_ON: Cell<bool> = const { Cell::new(false) };
+    static FILE_PROOFS: Cell<bool> = const { Cell::new(false) };
 }
 
 /// the file being checked (for SLC_EXPLAIN)
 pub fn set_file(path: &str) {
+    // (the argument audit: written proofs only, not generated files)
+    if arg_audit() {
+        FILE_PROOFS.with(|c| c.set(!path.contains("build/")));
+    }
     if let Some((f, _)) = explain_spec() {
         FILE_ON.with(|c| c.set(path.contains(f.as_str())));
     }
@@ -67,7 +84,7 @@ pub(crate) fn explain() -> bool {
 
 /// the line of the proof step being run
 pub(crate) fn set_line(l: usize) {
-    if on() || inst_audit() || explain_spec().is_some() {
+    if on() || inst_audit() || arg_audit() || explain_spec().is_some() {
         LINE.with(|c| c.set(l));
         CALL.with(|c| c.set(0));
     }

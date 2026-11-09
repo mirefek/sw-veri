@@ -515,6 +515,12 @@ the steps at those lines (in files whose path contains FILE), each
 `apply`'s inferred instantiation (`explain L: apply f: x := t`) and the
 facts the step made (`explain L:   h: φ`).
 
+`SLC_ARG_AUDIT=1` reports the arguments a goal rule (`simp`, `arith`,
+`defs`, ..; not `symex`) proves its goal without, and no slower:
+`arg-audit <TAB> line <TAB> rule <TAB> args <TAB> i,j..` (dropped from the
+last, each with the ones before it gone) -- for keeping proofs to the
+facts they use.
+
 `assume` and `fix` take formulas from the goal, so write a formula only
 where it says something new. They see through a defined goal's head.
 

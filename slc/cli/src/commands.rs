@@ -228,7 +228,7 @@ pub fn kernel_check(args: &[String]) -> CResult {
         let first = i == 0;
         let t0 = std::time::Instant::now();
         // (SLC_TIDY, SLC_SHADOW: the prover's reports below are this file's)
-        if std::env::var("SLC_TIDY").is_ok() || std::env::var("SLC_SHADOW").is_ok() || std::env::var("SLC_INST_AUDIT").is_ok() {
+        if std::env::var("SLC_TIDY").is_ok() || std::env::var("SLC_SHADOW").is_ok() || std::env::var("SLC_INST_AUDIT").is_ok() || std::env::var("SLC_ARG_AUDIT").is_ok() {
             eprintln!("tidy-file\t{}", f.display());
         }
         sl_proof::shadow::set_file(&f.to_string_lossy());
