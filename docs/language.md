@@ -322,6 +322,20 @@ The table elaborates to three things:
 Overlapping rows are nondeterministic. The x86 `step` makes a
 non-matching instruction `undefined`.
 
+In `decode`, each row's alternative is led by a guard,
+`NAME.opc(b, K)`: after the table's `before` items (as the program
+`NAME.before`) the byte at the position is K, the row's first byte. The
+row's own byte test implies it, so `decode` means the same; but an
+evaluation (the steps' decoding facts) drops a row of another first byte
+at its guard, without unfolding the row. A row gets a guard only when its
+first byte item is a literal or an expression of the row's constants
+(`8*op + 3` in a `for`), and no item before it may consume bytes (a
+decoder calling `next()`, directly or not -- over-approximated); the
+others (`0xB8+r`, ..) have none. The guards are the elaborator's (trusted)
+by default; `SLC_DECODE_GUARDS=0` elaborates `decode` without them (the
+same rows; slower to evaluate), `SLC_DECODE_REPORT=1` (`=rows`) counts
+(lists) the rows without a guard.
+
 **Notations** are textual shorthand for items, deliberately unhygienic
 (their bound names become visible in the row):
 

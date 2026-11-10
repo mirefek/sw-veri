@@ -330,6 +330,22 @@ impl<'s> Elab<'s> {
         let mut alts_dec = Vec::new();
         let mut alts_exe = Vec::new();
         let b_var = self.fresh("b");
+        // (the rows' guards, trusted by default -- SLC_DECODE_GUARDS=0: none,
+        // decode as the rows alone: each row's alternative led by the test
+        // that the byte after the shared `before` decoding is the row's first
+        // literal byte. The row's own byte test implies it; so decode means
+        // the same, and a row of another byte fails at the guard, its
+        // program not unfolded. A row whose first byte is not a literal, or
+        // that consumes bytes before it, has no guard)
+        let guards_on = std::env::var("SLC_DECODE_GUARDS").map_or(true, |v| v != "0");
+        let consuming = self.consuming_decoders();
+        let opc = if guards_on {
+            let ctx0 = self.pure_const(&module, &t.context, &ctx_ty)?;
+            Some(self.decode_opc(&module, &qual, t, &dstate, ctx0, span)?)
+        } else {
+            None
+        };
+        let mut n_wild = 0;
         let z = self.fresh("z");
         let x = self.fresh("x");
         let s_exe = self.fresh("s");
@@ -380,10 +396,37 @@ impl<'s> Elab<'s> {
             let runs = self.b.app("runs", vec![self.b.c(&row_name), init, self.b.app("ok", vec![self.b.v(st), self.b.v(v)])]);
             let pick = self.b.eq(self.b.v(z), self.b.pair(self.b.field(self.b.v(st), "pos"), self.b.tag(k as u64, self.b.v(v))));
             let inner = self.b.and(runs, pick);
-            alts_dec.push(self.b.ex(&[st, v], inner));
+            let alt = self.b.ex(&[st, v], inner);
+            let key = row_key(prefix.iter().chain(row.items.iter()), &consuming).cloned();
+            // (the byte as the row's own test has it: its constants in scope)
+            let key = match key {
+                Some(e) if opc.is_some() => {
+                    let mut kcx = Cx::new(&module);
+                    for (n, t, ty) in consts {
+                        kcx.push_local(n, t.clone(), ty.clone(), false);
+                    }
+                    self.expr(&mut kcx, &e, Some(&Ty::Bits(self.b.nat(8)))).ok().map(|x| x.0)
+                }
+                _ => None,
+            };
+            if key.is_none() {
+                n_wild += 1;
+                if std::env::var("SLC_DECODE_REPORT").is_ok_and(|v| v == "rows") {
+                    let first: Vec<String> = prefix.iter().chain(row.items.iter()).take(3).map(|i| format!("{:?}", i).chars().take(90).collect()).collect();
+                    eprintln!("  row {} without a guard: {}", k, first.join(" | "));
+                }
+            }
+            alts_dec.push(match (&opc, key) {
+                (Some(o), Some(kt)) => self.b.and(self.b.app(o, vec![self.b.v(b_var), kt]), alt),
+                _ => alt,
+            });
             let is_k = self.b.eq(self.b.fst(self.b.v(x)), self.b.nat(k as u64));
             let run_body = self.b.app("runs", vec![self.b.app(&body_name, vec![self.b.snd(self.b.v(x))]), self.b.v(s_exe), self.b.v(o_exe)]);
             alts_exe.push(self.b.and(is_k, run_body));
+        }
+        // (SLC_DECODE_REPORT: the rows without a guard, counted)
+        if std::env::var("SLC_DECODE_REPORT").is_ok() {
+            eprintln!("table {}: {} rows, {} without a guard", qual, rows.len(), n_wild);
         }
         let univ1 = self.b.app("univ", vec![self.b.nat(1)]);
         let space = self.b.app("cart", vec![self.b.c("omega"), univ1]);
@@ -392,6 +435,64 @@ impl<'s> Elab<'s> {
         let exe = self.b.bind_app("mkprog", vec![], &[s_exe, o_exe], &self.b.ors(alts_exe));
         self.define(&format!("{}.execute", qual), vec![x], exe, span)?;
         Ok(())
+    }
+
+    /// The decoders that may consume bytes: `next()` in their body, or a
+    /// call of one that may (a fixpoint over the names mentioned -- an
+    /// over-approximation: a row it wrongly counts gets no guard, which is
+    /// safe)
+    fn consuming_decoders(&self) -> std::collections::HashSet<String> {
+        let decs: Vec<(String, std::collections::HashSet<String>)> = self
+            .g
+            .decls
+            .iter()
+            .filter_map(|d| match &d.decl.kind {
+                DeclKind::Fn(f) if f.kind == FnKind::Decoder => Some((f.name.name.clone(), names_in(&format!("{:?}", f.body)))),
+                _ => None,
+            })
+            .collect();
+        let mut out: std::collections::HashSet<String> = ["next".to_string()].into_iter().collect();
+        loop {
+            let n = out.len();
+            for (name, ns) in &decs {
+                if !out.contains(name) && ns.iter().any(|x| out.contains(x)) {
+                    out.insert(name.clone());
+                }
+            }
+            if out.len() == n {
+                return out;
+            }
+        }
+    }
+
+    /// `QUAL.before`: the table's `before` items as a program, and
+    /// `QUAL.opc(b, k)`: after them the byte at the position is k -- the
+    /// rows' guards; its name
+    fn decode_opc(&mut self, module: &str, qual: &str, t: &Table, dstate: &Ty, ctx0: Term, span: Span) -> R<String> {
+        let s = self.fresh("s");
+        let o = self.fresh("o");
+        let mut cx = Cx::new(module);
+        cx.pure = false;
+        cx.state = Some(self.b.v(s));
+        cx.state_ty = Some(dstate.clone());
+        cx.exits = vec![Exit::Proc { o }];
+        for it in &t.before {
+            self.item(&mut cx, it, span)?;
+        }
+        let fin = self.exit_ret(&cx, self.b.tuple(vec![]));
+        let frames = std::mem::take(&mut cx.frames);
+        let f = self.wrap_frames(frames, fin);
+        let prog = self.b.bind_app("mkprog", vec![], &[s, o], &f);
+        let before = format!("{}.before", qual);
+        self.define(&before, vec![], prog, span)?;
+        let (b, k, st, v) = (self.fresh("b"), self.fresh("k"), self.fresh("st"), self.fresh("v"));
+        let init = self.b.record(vec![("bytes".into(), self.b.v(b)), ("pos".into(), self.b.nat(0)), ("ctx".into(), ctx0)]);
+        let runs = self.b.app("runs", vec![self.b.c(&before), init, self.b.app("ok", vec![self.b.v(st), self.b.v(v)])]);
+        let at = self.b.app_fn(self.b.field(self.b.v(st), "bytes"), self.b.field(self.b.v(st), "pos"));
+        let body = self.b.ex(&[st, v], self.b.and(runs, self.b.eq(at, self.b.v(k))));
+        let name = format!("{}.opc", qual);
+        self.define(&name, vec![b, k], body, span)?;
+        Ok(name)
     }
 
     fn pure_const(&mut self, module: &str, e: &Expr, ty: &Ty) -> R<Term> {
@@ -493,6 +594,36 @@ impl<'s> Elab<'s> {
             }
         }
     }
+}
+
+/// The identifiers an AST's debug form mentions (`name: "x"`)
+fn names_in(dbg: &str) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    for part in dbg.split("name: \"").skip(1) {
+        if let Some(end) = part.find('"') {
+            out.insert(part[..end].to_string());
+        }
+    }
+    out
+}
+
+/// A row's first byte, when it is a literal and nothing before it may
+/// consume bytes (its guard's byte); else none
+fn row_key<'a>(items: impl Iterator<Item = &'a Item>, consuming: &std::collections::HashSet<String>) -> Option<&'a Expr> {
+    for it in items {
+        match it {
+            // (a literal, or an expression of the row's constants: `8*op + 3`
+            // in a `for op in ..` -- elaborated with them, as the row's own
+            // test; another name fails there, the row then unguarded)
+            Item::Byte(e) => return (!names_in(&format!("{:?}", e)).iter().any(|n| consuming.contains(n))).then_some(e),
+            Item::Bind(_, e) | Item::Run(e) | Item::Guard(e) => {
+                if names_in(&format!("{:?}", e)).iter().any(|n| consuming.contains(n)) {
+                    return None;
+                }
+            }
+        }
+    }
+    None
 }
 
 fn body_or(t: Term) -> Term {
