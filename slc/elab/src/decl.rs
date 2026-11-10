@@ -330,21 +330,23 @@ impl<'s> Elab<'s> {
         let mut alts_dec = Vec::new();
         let mut alts_exe = Vec::new();
         let b_var = self.fresh("b");
-        // (the rows' guards, trusted by default -- SLC_DECODE_GUARDS=0: none,
-        // decode as the rows alone: each row's alternative led by the test
-        // that the byte after the shared `before` decoding is the row's first
-        // literal byte. The row's own byte test implies it; so decode means
-        // the same, and a row of another byte fails at the guard, its
-        // program not unfolded. A row whose first byte is not a literal, or
-        // that consumes bytes before it, has no guard)
-        let guards_on = std::env::var("SLC_DECODE_GUARDS").map_or(true, |v| v != "0");
+        // (the rows' guards: each row's alternative led by the test that the
+        // byte after the shared `before` decoding is the row's first byte.
+        // The row's own byte test implies it; so the guarded form means the
+        // same, and an evaluation drops a row of another byte at its guard,
+        // its program not unfolded. A row whose first byte is not a literal
+        // or an expression of its constants, or that consumes bytes before
+        // it, has no guard. By default `decode` is the guarded form (the
+        // guards the elaborator's, trusted); SLC_DECODE_PREP=kernel: `decode`
+        // the rows alone, `decode_g` the guarded form -- the steps prove them
+        // equal, row by row (proofs/x86_decode.core))
+        let kernel_prep = std::env::var("SLC_DECODE_PREP").is_ok_and(|v| v == "kernel");
         let consuming = self.consuming_decoders();
-        let opc = if guards_on {
+        let opc = {
             let ctx0 = self.pure_const(&module, &t.context, &ctx_ty)?;
             Some(self.decode_opc(&module, &qual, t, &dstate, ctx0, span)?)
-        } else {
-            None
         };
+        let mut alts_plain = Vec::new();
         let mut n_wild = 0;
         let z = self.fresh("z");
         let x = self.fresh("x");
@@ -416,6 +418,7 @@ impl<'s> Elab<'s> {
                     eprintln!("  row {} without a guard: {}", k, first.join(" | "));
                 }
             }
+            alts_plain.push(alt.clone());
             alts_dec.push(match (&opc, key) {
                 (Some(o), Some(kt)) => self.b.and(self.b.app(o, vec![self.b.v(b_var), kt]), alt),
                 _ => alt,
@@ -430,8 +433,14 @@ impl<'s> Elab<'s> {
         }
         let univ1 = self.b.app("univ", vec![self.b.nat(1)]);
         let space = self.b.app("cart", vec![self.b.c("omega"), univ1]);
-        let dec = self.b.bind_app("set_select", vec![space], &[z], &self.b.ors(alts_dec));
-        self.define(&format!("{}.decode", qual), vec![b_var], dec, span)?;
+        let guarded = self.b.bind_app("set_select", vec![space.clone()], &[z], &self.b.ors(alts_dec));
+        if kernel_prep {
+            let plain = self.b.bind_app("set_select", vec![space], &[z], &self.b.ors(alts_plain));
+            self.define(&format!("{}.decode", qual), vec![b_var], plain, span)?;
+            self.define(&format!("{}.decode_g", qual), vec![b_var], guarded, span)?;
+        } else {
+            self.define(&format!("{}.decode", qual), vec![b_var], guarded, span)?;
+        }
         let exe = self.b.bind_app("mkprog", vec![], &[s_exe, o_exe], &self.b.ors(alts_exe));
         self.define(&format!("{}.execute", qual), vec![x], exe, span)?;
         Ok(())

@@ -1,0 +1,206 @@
+// The decoding table's guards, kernel-checked (the steps' option
+// SLC_DECODE_PREP=kernel): a row of the table runs to `ok` only if the
+// byte after the table's `before` program is the row's first byte. The
+// steps directive proves each row's instance of these lemmas once, then
+// evaluates `decode`'s guarded form (the elaborator's `decode_g`) for each
+// encoding: rows of another first byte fall at their guards unopened.
+// (The byte at a state's position is written out, `app(app(s, "bytes"),
+// app(s, "pos"))`, as the rows have it.)
+//
+//   checked before the steps directive (proofs/chain)
+
+// (after p from s, the byte is k)
+def dec.opc_of(p, s, k) := ex s2 u. runs(p, s, ok(s2, u)) && app(app(s2, "bytes"), app(s2, "pos")) = k
+
+// (q leaves the bytes and the position as they are)
+def dec.keeps(q) := all s s1 w. runs(q, s, ok(s1, w)) -> app(s1, "bytes") = app(s, "bytes") && app(s1, "pos") = app(s, "pos")
+
+// (a program's run: its relation)
+theorem dec.runs_elim(x y. r): all s o. runs(mkprog(x y. r(x, y)), s, o) -> r(s, o)
+proof
+  fix s o
+  assume h
+  show by symex(h)
+qed
+
+// a row's byte test at state x2, its outcome ok: the byte
+theorem dec.test_ok(x2, k, R, st, v): (app(app(x2, "bytes"), app(x2, "pos")) = k && R) || (!(app(app(x2, "bytes"), app(x2, "pos")) = k) && ok(st, v) = exc(x2, exc_val("nomatch", empty))) ->
+  app(app(x2, "bytes"), app(x2, "pos")) = k
+proof
+  assume h
+  have no: !(ok(st, v) = exc(x2, exc_val("nomatch", empty))) by defs(symex(), exc, ok)
+  show by taut(h, no)
+qed
+
+// a bind whose other outcomes re-raise / diverge, its outcome ok: p's ok
+// outcome and the continuation
+theorem dec.bind_ok(p, s1 u. K, s, st, v): bind_rel(p, s, s1 u. K(s1, u), s1 e. ok(st, v) = exc(s1, e), t. ok(st, v) = diverge(t)) ->
+  ex s1 u. runs(p, s, ok(s1, u)) && K(s1, u)
+proof
+  assume h
+  obtain o, hr hc from expand(h, bind_rel)
+  cases from hc
+  case h proof
+    obtain s1 u, he hk from h
+    show by ex_intro({s1}, {u}, taut(rewrite(he, hr), hk))
+  qed
+  case h proof
+    obtain s1 e, _ hx from h
+    have no: !(ok(st, v) = exc(s1, e)) by defs(symex(), exc, ok)
+    show by taut(hx, no)
+  qed
+  case h proof
+    obtain t, _ hd from h
+    have no: !(ok(st, v) = diverge(t)) by defs(symex(), diverge, ok)
+    show by taut(hd, no)
+  qed
+qed
+
+// A row is walked from its top (the `before` decoder p, x86: prefixes) to
+// its first byte's test: through binds of decoders that keep the position
+// (dec.bind_keeps) and lets; each continuation's byte fact carried back.
+
+// the row's top: its outcome ok, p's ok continuation giving the byte --
+// the byte after p
+theorem dec.top(p, k, x2 x3 x1. K): all s st v. runs(mkprog(x0 x1. bind_rel(p, x0, x2 x3. K(x2, x3, x1), x2 x3. x1 = exc(x2, x3), x2. x1 = diverge(x2))), s, ok(st, v)) ->
+  (all s1 u. K(s1, u, ok(st, v)) -> app(app(s1, "bytes"), app(s1, "pos")) = k) ->
+  dec.opc_of(p, s, k)
+proof
+  fix s st v
+  assume h hk
+  obtain s2 u, hp hc from apply(dec.bind_ok, apply(dec.runs_elim, h))
+  show by defs(ex_intro({s2}, {u}, taut(hp, mp(all_elim(hk, {s2}, {u}), hc))), dec.opc_of)
+qed
+
+// a decoder keeping the bytes and the position, its continuation giving
+// the byte: the byte before it
+theorem dec.bind_keeps(q, k, s, st, v, x4 x5. K): dec.keeps(q) -> (all s1 u. K(s1, u) -> app(app(s1, "bytes"), app(s1, "pos")) = k) ->
+  bind_rel(q, s, x4 x5. K(x4, x5), x4 x5. ok(st, v) = exc(x4, x5), x4. ok(st, v) = diverge(x4)) -> app(app(s, "bytes"), app(s, "pos")) = k
+proof
+  assume hq hk hb
+  obtain s1 u, hr hc from apply(dec.bind_ok, hb)
+  have b1 := mp(all_elim(hk, {s1}, {u}), hc)
+  have e1 e2 := mp(all_elim(expand(hq, dec.keeps), {s}, {s1}, {u}), hr)
+  show := rewrite(e2, rewrite(e1, b1))
+qed
+
+// the decoders the rows run before their first byte: they set the context
+// only
+theorem dec.keeps_opsize: dec.keeps(x86_64_linux.opsize)
+proof
+  unfold dec.keeps
+  fix s s1 w
+  assume h
+  show by symex(h)
+qed
+
+theorem dec.keeps_rep: dec.keeps(x86_64_linux.rep)
+proof
+  unfold dec.keeps
+  fix s s1 w
+  assume h
+  show by symex(h)
+qed
+
+theorem dec.keeps_rex_w: dec.keeps(x86_64_linux.rex_w)
+proof
+  unfold dec.keeps
+  fix s s1 w
+  assume h
+  show by symex(h)
+qed
+
+theorem dec.keeps_lock: dec.keeps(x86_64_linux.lock)
+proof
+  unfold dec.keeps
+  fix s s1 w
+  assume h
+  show by symex(h)
+qed
+
+theorem dec.keeps_pfx66: dec.keeps(x86_64_linux.pfx66)
+proof
+  unfold dec.keeps
+  fix s s1 w
+  assume h
+  show by symex(h)
+qed
+
+// (a run's state and outcome: a set's pair)
+theorem dec.runs_univ(x y. r): all s o. runs(mkprog(x y. r(x, y)), s, o) -> pair(s, o) in univ(1)
+proof
+  fix s o
+  assume h
+  have u := unsel(expand(h, runs, mkprog))
+  show by taut(u)
+qed
+
+// p's run to ok: the `before` program's (p, then ok with no value)
+theorem dec.before_intro(p): all s s2 u. pair(s, ok(s2, empty)) in univ(1) -> runs(p, s, ok(s2, u)) ->
+  runs(mkprog(x0 x1. bind_rel(p, x0, x2 x3. x1 = ok(x2, empty), x2 x3. x1 = exc(x2, x3), x2. x1 = diverge(x2))), s, ok(s2, empty))
+proof
+  fix s s2 u
+  assume hu hr
+  have hb: bind_rel(p, s, x2 x3. ok(s2, empty) = ok(x2, empty), x2 x3. ok(s2, empty) = exc(x2, x3), x2. ok(s2, empty) = diverge(x2)) by defs(ex_intro(symex(hr)), bind_rel)
+  show by defs(symex(hu, hb), runs, mkprog)
+qed
+
+// the table's guard, from a row's: after prefixes from b's start the byte
+// is k
+theorem dec.opc_intro: all b k. dec.opc_of(x86_64_linux.prefixes, fn_update(fn_update(fn_update(empty, "bytes", b), "pos", 0), "ctx", x86_64_linux.START), k) -> x86_64_linux.x86.opc(b, k)
+proof
+  fix b k
+  assume h
+  obtain s2 u, hr hb from expand(h, dec.opc_of)
+  have hu := apply(dec.runs_univ, expand(hr, x86_64_linux.prefixes))
+  have hu2: pair(fn_update(fn_update(fn_update(empty, "bytes", b), "pos", 0), "ctx", x86_64_linux.START), ok(s2, empty)) in univ(1) by symex(hu)
+  have rb := apply(dec.before_intro, hu2, hr)
+  show by defs(ex_intro({s2}, {empty}, taut(rb, hb)), x86_64_linux.x86.opc, x86_64_linux.x86.before)
+qed
+
+// (a selection's members, its condition replaced by an equivalent one)
+theorem dec.sel_cong(S, z. P, z. Q): (all z. P(z) <-> Q(z)) -> all x. x in set_select(S, z. P(z)) <-> x in set_select(S, z. Q(z))
+proof
+  assume he
+  fix x
+  have e := all_elim(he, {x})
+  have a := set_select_def[s := S, z := x, p := z. P(z)]
+  have c := set_select_def[s := S, z := x, p := z. Q(z)]
+  show by taut(e, a, c)
+qed
+
+// (decode's condition and decode_g's: equivalent alternative by alternative)
+theorem dec.or_cong(a1, a2, b1, b2): (a1 <-> b1) -> (a2 <-> b2) -> ((a1 || a2) <-> (b1 || b2))
+proof
+  assume h1 h2
+  show by taut(h1, h2)
+qed
+
+theorem dec.guard_iff(a, g): (a -> g) -> (a <-> (g && a))
+proof
+  assume h
+  show by taut(h)
+qed
+
+theorem dec.iff_refl(a): a <-> a
+proof
+  show by taut()
+qed
+
+// (the members of S2 are those of S1: S1's are too)
+theorem dec.members_conv(S1, S2, x. R): (all x. x in S1 <-> x in S2) -> (all x. x in S2 <-> R(x)) -> all x. x in S1 <-> R(x)
+proof
+  assume h1 h2
+  fix x
+  show by taut(all_elim(h1, {x}), all_elim(h2, {x}))
+qed
+
+// a row's alternative in decode (its run from b's start, and the member
+// picked): the row's guard, by its theorem
+theorem dec.alt_guard(r, k, b, st v. Z): (all s st v. runs(r, s, ok(st, v)) -> dec.opc_of(x86_64_linux.prefixes, s, k)) ->
+  (ex st v. runs(r, fn_update(fn_update(fn_update(empty, "bytes", b), "pos", 0), "ctx", x86_64_linux.START), ok(st, v)) && Z(st, v)) -> x86_64_linux.x86.opc(b, k)
+proof
+  assume hr ha
+  obtain st v, hrun _ from ha
+  show := apply(dec.opc_intro, mp(all_elim(hr, {fn_update(fn_update(fn_update(empty, "bytes", b), "pos", 0), "ctx", x86_64_linux.START)}, {st}, {v}), hrun))
+qed

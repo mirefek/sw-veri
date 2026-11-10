@@ -30,7 +30,7 @@ use sl_interp::Interp;
 use sl_kernel::ext::seq::{defined_sym, unfold_all, Seq};
 use sl_kernel::syntax::parse_term;
 use sl_kernel::{Env, Node, Term, VarId};
-use sl_proof::api::Api;
+use sl_proof::api::{Api, A, G};
 use std::collections::BTreeMap;
 
 type R<T> = Result<T, String>;
@@ -283,11 +283,22 @@ fn decode_facts(env: &mut Env, elf: &Elf, fns: &[String]) -> R<Vec<(String, Opti
     phase(&format!("decoded: {} encodings, {} instructions ({} by a known encoding)", encodings.len(), n_insns, n_cached));
     let (cx, _) = context(env, &["m", "o"])?;
     let dec = cx.term(env, &format!("x86_64_linux.x86.decode({})", DECODED))?;
+    // (SLC_DECODE_PREP=kernel: decode the rows alone, decode_g their guarded
+    // form -- proven equivalent once here; each encoding then evaluated on
+    // decode_g, its members carried over to decode)
+    let prep = if env.sym_by_name.contains_key("x86_64_linux.x86.decode_g") {
+        let t1 = std::time::Instant::now();
+        let eq = cx.decode_eq(env)?;
+        phase(&format!("decode prepared (kernel), {:.2} s", t1.elapsed().as_secs_f64()));
+        Some((eq, cx.term(env, &format!("x86_64_linux.x86.decode_g({})", DECODED))?))
+    } else {
+        None
+    };
     let mut out = Vec::new();
     let mut steps: BTreeMap<Vec<u8>, Step> = BTreeMap::new();
     let mut names = std::collections::HashSet::new();
     for (enc, window) in &encodings {
-        match cx.step(env, &dec, enc, window) {
+        match cx.step(env, &dec, prep.as_ref(), enc, window) {
             Ok(st) => {
                 if names.insert(st.name.clone()) {
                     out.push((st.name.clone(), Some(st.seq.clone())));
@@ -385,8 +396,10 @@ impl Cx {
     /// The step theorem of an encoding (`window`: the 15 bytes at one of
     /// its addresses):
     /// `byte_0 = v_0 -> .. -> runs(step(), m, o) -> runs(exec_insn(len, insn), m, o)`
-    fn step(&self, env: &mut Env, dec: &Term, enc: &[u8], window: &[u8]) -> R<Step> {
+    fn step(&self, env: &mut Env, dec: &Term, prep: Option<&(Seq, Term)>, enc: &[u8], window: &[u8]) -> R<Step> {
         let lg = &self.api.lg;
+        // (the set evaluated: decode_g under SLC_DECODE_PREP=kernel)
+        let evald = prep.map_or(dec, |p| &p.1);
         // the members of the decoding, from the instruction's own bytes,
         // else all 15
         let mut known = None;
@@ -394,7 +407,7 @@ impl Cx {
         for n in [enc.len(), window.len()] {
             let hs: Vec<Seq> = (0..n).map(|k| self.term(env, &byte_eq(k, window[k])).and_then(|t| Seq::assume(env, t).map_err(ke))).collect::<R<_>>()?;
             let refs: Vec<&Seq> = hs.iter().collect();
-            match Seq::members(env, lg, dec, &refs) {
+            match Seq::members(env, lg, evald, &refs) {
                 Ok(d) => {
                     known = Some((d, hs));
                     break;
@@ -403,6 +416,10 @@ impl Cx {
             }
         }
         let Some((d, hs)) = known else { return Err(err) };
+        let d = match prep {
+            Some((eq, _)) => self.to_decode(env, eq, d, dec)?,
+            None => d,
+        };
         let c = one_member(d.concl()).ok_or("not exactly one decoding")?;
         let (len, insn) = match c.node() {
             Node::App(_, p) if p.len() == 2 => (p[0].clone(), p[1].clone()),
@@ -438,6 +455,192 @@ impl Cx {
             s = s.discharge(env, hs[k].concl()).map_err(ke)?;
         }
         Ok(Step { name, bytes, len, insn, seq: s })
+    }
+
+    /// (SLC_DECODE_PREP=kernel) `all b z. A(b, z) <-> G(b, z)`: decode's
+    /// condition (its rows' alternatives) and decode_g's (each led by its
+    /// guard `x86.opc(b, K)`), proven once -- per guarded row, its theorem
+    /// (proofs/x86_decode.core: the row's shape's lemma, by matching; the
+    /// decoder before its byte keeping the position), then the two
+    /// disjunctions by taut
+    fn decode_eq(&self, env: &mut Env) -> R<Seq> {
+        let sym = |env: &Env, n: &str| env.sym_by_name.get(n).copied().ok_or_else(|| format!("no symbol `{}`", n));
+        let (dsym, gsym) = (defined_sym(env, "x86_64_linux.x86.decode").map_err(ke)?, defined_sym(env, "x86_64_linux.x86.decode_g").map_err(ke)?);
+        let (or, and, ex, runs, ok, iff) = (sym(env, "or")?, sym(env, "and")?, sym(env, "ex")?, sym(env, "runs")?, sym(env, "ok")?, sym(env, "iff")?);
+        let opc = sym(env, "x86_64_linux.x86.opc")?;
+        let b = env.new_var("b", 0);
+        let z = env.new_var("z", 0);
+        let (bt, zt) = (Term::var(b, vec![]), Term::var(z, vec![]));
+        // (a selection's condition at b, z)
+        let cond = |env: &Env, s| -> R<Term> {
+            let t = unfold_all(env, &Term::app(s, vec![bt.clone()]), &[s]);
+            match t.node() {
+                Node::App(_, a) if a.len() == 2 => Ok(a[1].instantiate_params(std::slice::from_ref(&zt), &env.binders_fn())),
+                _ => Err("decode: not a selection".into()),
+            }
+        };
+        let (ca, cg) = (cond(env, dsym)?, cond(env, gsym)?);
+        fn disjuncts(t: &Term, or: u32, out: &mut Vec<Term>) {
+            match t.node() {
+                Node::App(o, a) if *o == or => {
+                    disjuncts(&a[0], or, out);
+                    disjuncts(&a[1], or, out);
+                }
+                _ => out.push(t.clone()),
+            }
+        }
+        let lg = &self.api.lg;
+        let alt_guard = self.api.inst(env, self.fact(env, "dec.alt_guard")?, &[("b", bt.clone())]).map_err(ke)?;
+        // (alternative by alternative, the two disjunctions alike in shape:
+        // dec.or_cong at each `||`; at a leaf the same alternative, or led by
+        // its guard -- dec.guard_iff by the row's theorem)
+        let s = self.or_iff(env, &ca, &cg, or, and, ex, runs, ok, opc, &alt_guard)?;
+        let _ = (iff, disjuncts as fn(&Term, u32, &mut Vec<Term>));
+        let s = Seq::gen(env, lg, &s, z).map_err(ke)?;
+        // (the members of the two, folded: `all x. x in decode(b) <-> x in
+        // decode_g(b)` -- what each use instantiates)
+        let space = match unfold_all(env, &Term::app(dsym, vec![bt.clone()]), &[dsym]).node() {
+            Node::App(_, a) if a.len() == 2 => a[0].clone(),
+            _ => return Err("decode: not a selection".into()),
+        };
+        let sc = self.api.inst(env, self.fact(env, "dec.sel_cong")?, &[("S", space)]).map_err(ke)?;
+        let sc = self.api.apply(env, sc, vec![A::G(G::By(s))], None).map_err(ke)?;
+        let folded = self.tm(env, "all x. x in x86_64_linux.x86.decode(ph_a) <-> x in x86_64_linux.x86.decode_g(ph_a)", &[&bt])?;
+        let s = Seq::conv(env, &sc, &folded, &[dsym, gsym]).map_err(ke)?;
+        Seq::gen(env, lg, &s, b).map_err(ke)
+    }
+
+    /// `a <-> g`: decode's condition and decode_g's, or their parts alike
+    #[allow(clippy::too_many_arguments)]
+    fn or_iff(&self, env: &mut Env, a: &Term, g: &Term, or: u32, and: u32, ex: u32, runs: u32, ok: u32, opc: u32, alt_guard: &Seq) -> R<Seq> {
+        if let (Node::App(o1, x), Node::App(o2, y)) = (a.node(), g.node()) {
+            if *o1 == or && *o2 == or {
+                let l = self.or_iff(env, &x[0], &y[0], or, and, ex, runs, ok, opc, alt_guard)?;
+                let r = self.or_iff(env, &x[1], &y[1], or, and, ex, runs, ok, opc, alt_guard)?;
+                return self.api.apply(env, self.fact(env, "dec.or_cong")?, vec![A::G(G::By(l)), A::G(G::By(r))], None).map_err(ke);
+            }
+        }
+        if a == g {
+            return self.api.inst(env, self.fact(env, "dec.iff_refl")?, &[("a", a.clone())]).map_err(ke);
+        }
+        let f = self.guard_fact(env, g, and, ex, runs, ok, opc, alt_guard, or)?;
+        self.api.apply(env, self.fact(env, "dec.guard_iff")?, vec![A::G(G::By(f))], None).map_err(ke)
+    }
+
+    /// a guarded alternative `opc(b, K) && ALT`: `ALT -> opc(b, K)`, by the
+    /// row's theorem
+    #[allow(clippy::too_many_arguments)]
+    fn guard_fact(&self, env: &mut Env, g: &Term, and: u32, ex: u32, runs: u32, ok: u32, opc: u32, alt_guard: &Seq, or: u32) -> R<Seq> {
+        {
+            let Node::App(a0, ga) = g.node() else { return Err("decode_g: an alternative not an application".into()) };
+            if *a0 != and || !matches!(ga[0].node(), Node::App(o, _) if *o == opc) {
+                return Err("decode_g: an alternative differs from decode's but has no guard".into());
+            }
+            let alt = &ga[1];
+            // (the row: `ex st v. runs(ROW, ..) && ..`)
+            let row = (|| {
+                let Node::App(e1, x) = alt.node() else { return None };
+                let Node::App(e2, y) = x[0].node() else { return None };
+                let Node::App(a, w) = y[0].node() else { return None };
+                let Node::App(r, u) = w[0].node() else { return None };
+                let Node::App(rs, _) = u[0].node() else { return None };
+                (*e1 == ex && *e2 == ex && *a == and && *r == runs).then_some(*rs)
+            })()
+            .ok_or("decode_g: an alternative not a row's run")?;
+            let rt = self.row_thm(env, row, runs, ok, or)?;
+            let ha = Seq::assume(env, alt.clone()).map_err(ke)?;
+            let f = self.api.apply(env, alt_guard.clone(), vec![A::G(G::By(rt)), A::G(G::By(ha))], None).map_err(|e| format!("{}: {}", env.syms[row as usize].name, e.0))?;
+            f.discharge(env, alt).map_err(ke)
+        }
+    }
+
+    /// a row's theorem: `all s st v. runs(ROW, s, ok(st, v)) ->
+    /// dec.opc_of(prefixes, s, K)` -- its top bind (dec.top), the
+    /// continuation walked to the byte test (`byte_of`)
+    fn row_thm(&self, env: &mut Env, row: u32, runs: u32, ok: u32, or: u32) -> R<Seq> {
+        let lg = &self.api.lg;
+        let name = env.syms[row as usize].name.clone();
+        let (s, st, v) = (env.new_var("s", 0), env.new_var("st", 0), env.new_var("v", 0));
+        let (s_t, o_t) = (Term::var(s, vec![]), Term::app(ok, vec![Term::var(st, vec![]), Term::var(v, vec![])]));
+        let rt = Term::app(runs, vec![Term::app(row, vec![]), s_t.clone(), o_t.clone()]);
+        let h = Seq::assume(env, rt).map_err(ke)?;
+        let hx = self.api.expand(env, h.clone(), &[row]).map_err(ke)?;
+        // mkprog(x0 x1. bind_rel(p, x0, x2 x3. K, ..)) at s, ok(st, v): K at
+        // a fresh state s1 and value u
+        let body = unfold_all(env, &Term::app(row, vec![]), &[row]);
+        let Node::App(_, mk) = body.node() else { return Err(format!("{}: not a program", name)) };
+        let top = mk[0].instantiate_params(&[s_t, o_t], &env.binders_fn());
+        let k = self.bind_parts(env, &top).ok_or_else(|| format!("{}: not a bind", name))?[2].clone();
+        let p = self.cont_proof(env, &k, or).map_err(|e| format!("{}: {}", name, e))?;
+        let r = self.api.apply(env, self.fact(env, "dec.top")?, vec![A::G(G::By(hx)), A::G(G::By(p))], None).map_err(|e| format!("{} by dec.top: {}", name, e.0))?;
+        let mut r = r.discharge(env, h.concl()).map_err(ke)?;
+        for x in [v, st, s] {
+            r = Seq::gen(env, lg, &r, x).map_err(ke)?;
+        }
+        Ok(r)
+    }
+
+    /// `bind_rel(q, s, k, x, d)`'s five arguments
+    fn bind_parts(&self, env: &Env, t: &Term) -> Option<Vec<Term>> {
+        match t.node() {
+            Node::App(f, a) if env.syms[*f as usize].name == "bind_rel" && a.len() == 5 => Some(a.to_vec()),
+            _ => None,
+        }
+    }
+
+    /// a bind's continuation (its body, binding the state and the value):
+    /// `all s1 u. K(s1, u) -> byte(s1) = k`
+    fn cont_proof(&self, env: &mut Env, k: &Term, or: u32) -> R<Seq> {
+        let lg = &self.api.lg;
+        let (s1, u) = (env.new_var("s1", 0), env.new_var("u", 0));
+        let kc = k.instantiate_params(&[Term::var(s1, vec![]), Term::var(u, vec![])], &env.binders_fn());
+        let r = self.byte_of(env, &kc, or)?;
+        let mut r = r.discharge(env, &kc).map_err(ke)?;
+        for x in [u, s1] {
+            r = Seq::gen(env, lg, &r, x).map_err(ke)?;
+        }
+        Ok(r)
+    }
+
+    /// `c` (a row's continuation at a state σ, its outcome ok) proves the
+    /// byte at σ: the hypothesis c, `byte(σ) = k` -- the test itself
+    /// (dec.test_ok), a let (opened), or a bind of a decoder that keeps the
+    /// position (dec.bind_keeps, its continuation walked)
+    fn byte_of(&self, env: &mut Env, c: &Term, or: u32) -> R<Seq> {
+        let h = Seq::assume(env, c.clone()).map_err(ke)?;
+        let head = match c.node() {
+            Node::App(f, _) => *f,
+            _ => return Err("a continuation not an application".into()),
+        };
+        if head == or {
+            return self.api.apply(env, self.fact(env, "dec.test_ok")?, vec![A::G(G::By(h))], None).map_err(|e| format!("the byte test: {}", e.0));
+        }
+        let hname = env.syms[head as usize].name.clone();
+        if hname == "letin" {
+            let h2 = self.api.expand(env, h, &[head]).map_err(ke)?;
+            let inner = self.byte_of(env, &h2.concl().clone(), or)?;
+            let imp = inner.discharge(env, h2.concl()).map_err(ke)?;
+            return Seq::mp(env, &imp, &h2).map_err(ke);
+        }
+        let a = self.bind_parts(env, c).ok_or_else(|| format!("before the byte test: `{}`, not a bind or a let", hname))?;
+        let q = match a[0].node() {
+            Node::App(q, x) if x.is_empty() => env.syms[*q as usize].name.rsplit('.').next().unwrap_or_default().to_string(),
+            _ => return Err("before the byte test: a decoder not a constant".into()),
+        };
+        let keeps = self.fact(env, &format!("dec.keeps_{}", q)).map_err(|_| format!("before the byte test: `{}` (no dec.keeps_{} theorem)", q, q))?;
+        let p = self.cont_proof(env, &a[2], or)?;
+        self.api.apply(env, self.fact(env, "dec.bind_keeps")?, vec![A::G(G::By(keeps)), A::G(G::By(p)), A::G(G::By(h))], None).map_err(|e| format!("after `{}`: {}", q, e.0))
+    }
+
+    /// (SLC_DECODE_PREP=kernel) `d`, the members of decode_g(D), as those of
+    /// decode(D): by the conditions' equivalence `eq` at D
+    fn to_decode(&self, env: &mut Env, eq: &Seq, d: Seq, dec: &Term) -> R<Seq> {
+        let darg = match dec.node() {
+            Node::App(_, a) if a.len() == 1 => a[0].clone(),
+            _ => return Err("decode: not applied".into()),
+        };
+        let e = self.all_elim(env, eq, &[darg])?;
+        self.api.apply(env, self.fact(env, "dec.members_conv")?, vec![A::G(G::By(e)), A::G(G::By(d))], None).map_err(ke)
     }
 
     /// `NS.at_ADDR`: `all m o. runs(step(), m, o) -> abi.code_at(m.vm, BASE,
