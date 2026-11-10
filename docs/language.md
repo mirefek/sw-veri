@@ -334,9 +334,8 @@ decoder calling `next()`, directly or not -- over-approximated); the
 others (`0xB8+r`, ..) have none. `SLC_DECODE_REPORT=1` (`=rows`) counts
 (lists) the rows without a guard.
 
-The guards are the elaborator's (trusted) by default. With
-`SLC_DECODE_PREP=kernel` they are proven instead: `decode` is the rows
-alone and `decode_g` the guarded form, and the steps directive proves,
+The guards are proven: `decode` is the rows alone and `decode_g` the
+guarded form, and the steps directive proves,
 once, `all b x. x in decode(b) <-> x in decode_g(b)` -- per guarded row
 that its run to `ok` implies its guard (proofs/x86_decode.core: the row
 walked from its top bind through decoders that keep the position,
@@ -344,7 +343,9 @@ walked from its top bind through decoders that keep the position,
 alternative by alternative. Each encoding is then evaluated on
 `decode_g` and its members carried over (~0.04 s once; per encoding as
 fast as the trusted form). A new decoder run before a row's first byte
-needs its `dec.keeps_NAME` theorem there.
+needs its `dec.keeps_NAME` theorem there. `SLC_DECODE_PREP=trusted`
+skips the preparation: `decode` is then the guarded form itself, the
+guards the elaborator's (trusted) -- for a table much larger than x86's.
 
 **Notations** are textual shorthand for items, deliberately unhygienic
 (their bound names become visible in the row):

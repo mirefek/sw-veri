@@ -336,11 +336,12 @@ impl<'s> Elab<'s> {
         // same, and an evaluation drops a row of another byte at its guard,
         // its program not unfolded. A row whose first byte is not a literal
         // or an expression of its constants, or that consumes bytes before
-        // it, has no guard. By default `decode` is the guarded form (the
-        // guards the elaborator's, trusted); SLC_DECODE_PREP=kernel: `decode`
-        // the rows alone, `decode_g` the guarded form -- the steps prove them
-        // equal, row by row (proofs/x86_decode.core))
-        let kernel_prep = std::env::var("SLC_DECODE_PREP").is_ok_and(|v| v == "kernel");
+        // it, has no guard. By default `decode` is the rows alone and
+        // `decode_g` the guarded form -- the steps prove them equal, row by
+        // row (proofs/x86_decode.core); SLC_DECODE_PREP=trusted: `decode` is
+        // the guarded form itself (the guards the elaborator's, trusted -- no
+        // preparation, for a table much larger)
+        let kernel_prep = !std::env::var("SLC_DECODE_PREP").is_ok_and(|v| v == "trusted");
         let consuming = self.consuming_decoders();
         let opc = {
             let ctx0 = self.pure_const(&module, &t.context, &ctx_ty)?;
