@@ -516,7 +516,9 @@ the steps at those lines (in files whose path contains FILE), each
 facts the step made (`explain L:   h: φ`).
 
 `SLC_ARG_AUDIT=1` reports the arguments a goal rule (`simp`, `arith`,
-`defs`, ..; not `symex`) proves its goal without, and no slower:
+`defs`, ..; not `symex`) proves its goal without, and no slower -- and
+`apply`'s proof arguments it does without (a membership premise then by
+`types`), same conclusion:
 `arg-audit <TAB> line <TAB> rule <TAB> args <TAB> i,j..` (dropped from the
 last, each with the ones before it gone) -- for keeping proofs to the
 facts they use. A trial may reuse what the call itself cached (`mem`'s

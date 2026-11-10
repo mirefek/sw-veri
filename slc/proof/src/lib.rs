@@ -2222,9 +2222,13 @@ impl State {
                         }
                     },
                     PE::Rule(n, a) if n == "apply" => {
+                        let t0 = std::time::Instant::now();
                         let s = self.apply_to(env, lg, a, Some(&unfolded))?;
                         if shadow::inst_audit() {
                             self.audit_inst(env, lg, a, &s, "apply", Some(&unfolded));
+                        }
+                        if shadow::arg_audit_here() {
+                            self.audit_apply_args(env, lg, a, &s, Some(&unfolded), t0.elapsed());
                         }
                         s
                     }
@@ -2420,13 +2424,50 @@ impl State {
 
     /// `apply(f, a1, .., an)` (see `eval`).
     fn apply(&self, env: &mut Env, lg: &Logic, args: &[Arg]) -> KResult<Seq> {
+        let t0 = std::time::Instant::now();
         let r = self.apply_to(env, lg, args, None);
-        if shadow::inst_audit() {
-            if let Ok(s) = &r {
+        if let Ok(s) = &r {
+            if shadow::inst_audit() {
                 self.audit_inst(env, lg, args, s, "apply", None);
+            }
+            if shadow::arg_audit_here() {
+                self.audit_apply_args(env, lg, args, s, None, t0.elapsed());
             }
         }
         r
+    }
+
+    /// (SLC_ARG_AUDIT) `apply`'s proof arguments it does without (a
+    /// membership premise then by `types`), from the last, each with the
+    /// ones before it gone, and no slower: reported as the goal rules' are,
+    /// `arg-audit <TAB> line <TAB> apply <TAB> args <TAB> i,j..`
+    fn audit_apply_args(&self, env: &mut Env, lg: &Logic, args: &[Arg], s: &Seq, goal: Option<&Term>, took: std::time::Duration) {
+        thread_local!(static IN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) });
+        if args.len() < 2 || IN.with(|c| c.get()) {
+            return;
+        }
+        IN.with(|c| c.set(true));
+        let mut best = took;
+        let mut keep: Vec<usize> = (0..args.len()).collect();
+        for i in (1..args.len()).rev() {
+            if matches!(args[i], Arg::Term(_)) {
+                continue;
+            }
+            let trial: Vec<Arg> = keep.iter().filter(|&&j| j != i).map(|&j| args[j].clone()).collect();
+            let t1 = std::time::Instant::now();
+            let bound = (best + best / 5).as_secs_f64() * 2.0 + 0.002;
+            let ok = rsimp::with_deadline(bound, || self.apply_to(env, lg, &trial, goal)).is_ok_and(|x| x.concl() == s.concl() && x.hyps() == s.hyps());
+            let dt = t1.elapsed();
+            if ok && dt <= best + best / 5 + std::time::Duration::from_millis(1) {
+                keep.retain(|&j| j != i);
+                best = best.min(dt);
+            }
+        }
+        IN.with(|c| c.set(false));
+        if keep.len() < args.len() {
+            let dropped: Vec<String> = (0..args.len()).filter(|j| !keep.contains(j)).map(|j| j.to_string()).collect();
+            eprintln!("arg-audit\t{}\tapply\t{}\t{}", shadow::line(), args_text(args).replace(['\t', '\n'], " "), dropped.join(","));
+        }
     }
 
     /// (SLC_INST_AUDIT) the instantiation of args[0], `L[x := t, ..]`, or
