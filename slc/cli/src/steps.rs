@@ -246,6 +246,7 @@ fn decode_facts(env: &mut Env, elf: &Elf, fns: &[String]) -> R<Vec<(String, Opti
     let mut funs: Vec<(String, u64, Vec<u8>, Vec<(u64, Vec<u8>)>)> = Vec::new();
     // encoding -> the 15 bytes at its first address
     let mut encodings: BTreeMap<Vec<u8>, Vec<u8>> = BTreeMap::new();
+    let (mut n_insns, mut n_cached) = (0usize, 0usize);
     for s in fns {
         let (ns, sym) = function(&elf, s)?;
         let code = elf.bytes_at(sym.value, sym.size as usize).ok_or_else(|| format!("{}: no bytes", s))?.to_vec();
@@ -260,14 +261,26 @@ fn decode_facts(env: &mut Env, elf: &Elf, fns: &[String]) -> R<Vec<(String, Opti
                 continue;
             }
             let window = elf.bytes_at(addr, 15).unwrap_or(&[]).to_vec();
-            let len = interp.decode(&window).first().map(|m| m.len).ok_or_else(|| format!("{:x}: not decoded", addr))?;
+            // (an encoding met before starting the window: its length -- an
+            // instruction's length is fixed by its own bytes; one candidate
+            // only, else the interpreter decides. Only a boundary: the
+            // kernel proves each encoding's step itself)
+            let known: Vec<usize> = (1..=window.len()).filter(|&l| encodings.contains_key(&window[..l])).collect();
+            let len = match known[..] {
+                [l] => {
+                    n_cached += 1;
+                    l
+                }
+                _ => interp.decode(&window).first().map(|m| m.len).ok_or_else(|| format!("{:x}: not decoded", addr))?,
+            };
+            n_insns += 1;
             encodings.entry(window[..len].to_vec()).or_insert_with(|| window.clone());
             insns.push((addr, window[..len].to_vec()));
             addr += len as u64;
         }
         funs.push((ns.to_string(), sym.value, code, insns));
     }
-    phase(&format!("decoded: {} encodings", encodings.len()));
+    phase(&format!("decoded: {} encodings, {} instructions ({} by a known encoding)", encodings.len(), n_insns, n_cached));
     let (cx, _) = context(env, &["m", "o"])?;
     let dec = cx.term(env, &format!("x86_64_linux.x86.decode({})", DECODED))?;
     let mut out = Vec::new();
