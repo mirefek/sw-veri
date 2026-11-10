@@ -19,6 +19,8 @@ check (scripts/check.sh --no-cache) before committing.
 Options:
   --passes P,..   the passes (default inst,args,unused)
   --no-time       keep every hunk that checks (no timing)
+  --symex         audit symex's arguments too (SLC_ARG_AUDIT=all: slow,
+                  its failing trials search -- a file at a time)
   --dry           report what each pass would change, then restore the file
   -v              each check's outcome
 
@@ -132,8 +134,8 @@ def ws(x):
 # passes: the file's text -> a new text
 
 
-def audit(f, var, tag):
-    _, _, _, out = run_check(f, {var: "1"})
+def audit(f, var, tag, val="1"):
+    _, _, _, out = run_check(f, {var: val})
     return [l.split("\t") for l in out.split("\n") if l.startswith(tag + "\t")]
 
 
@@ -179,9 +181,12 @@ def pass_inst(f, lines):
     return lines
 
 
+SYMEX = False
+
+
 def pass_args(f, lines):
     reports, seen = [], set()
-    for p in audit(f, "SLC_ARG_AUDIT", "arg-audit"):
+    for p in audit(f, "SLC_ARG_AUDIT", "arg-audit", "all" if SYMEX else "1"):
         if len(p) >= 5 and p[1].isdigit():
             key = (int(p[1]), p[2], ws(p[3]))
             if key not in seen:
@@ -383,8 +388,11 @@ def main():
     ap.add_argument("--no-time", action="store_true")
     ap.add_argument("--dry", action="store_true")
     ap.add_argument("-v", action="store_true")
+    ap.add_argument("--symex", action="store_true")
     a = ap.parse_args()
     VERBOSE = a.v
+    global SYMEX
+    SYMEX = a.symex
     passes = a.passes.split(",")
     for p in passes:
         if p not in PASSES:

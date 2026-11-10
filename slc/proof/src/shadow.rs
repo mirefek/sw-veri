@@ -40,6 +40,13 @@ pub(crate) fn arg_audit() -> bool {
     *ON.get_or_init(|| std::env::var("SLC_ARG_AUDIT").is_ok())
 }
 
+/// SLC_ARG_AUDIT=all: symex's arguments audited too (its failing trials
+/// may search long: for a file at a time)
+pub(crate) fn arg_audit_symex() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("SLC_ARG_AUDIT").is_ok_and(|v| v == "all"))
+}
+
 /// the argument audit is on, in a written proof file
 pub(crate) fn arg_audit_here() -> bool {
     arg_audit() && FILE_PROOFS.with(|c| c.get())
@@ -84,7 +91,9 @@ pub(crate) fn explain() -> bool {
 
 /// the line of the proof step being run
 pub(crate) fn set_line(l: usize) {
-    if on() || inst_audit() || arg_audit() || explain_spec().is_some() {
+    static SLOW: OnceLock<bool> = OnceLock::new();
+    let slow = *SLOW.get_or_init(|| std::env::var("SLC_SLOW_BY").is_ok());
+    if on() || inst_audit() || arg_audit() || slow || explain_spec().is_some() {
         LINE.with(|c| c.set(l));
         CALL.with(|c| c.set(0));
     }

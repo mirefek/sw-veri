@@ -1715,7 +1715,7 @@ impl State {
         let dt = t0.elapsed().as_millis();
         if dt >= ms {
             if let PE::Rule(name, _) = pe {
-                eprintln!("slow by: {dt} ms {name}{} `{}`", if r.is_ok() { "" } else { " (failed)" }, Printer::new(env).short(goal));
+                eprintln!("slow by: {dt} ms line {} {name}{} `{}`", shadow::line(), if r.is_ok() { "" } else { " (failed)" }, Printer::new(env).short(goal));
             }
         }
         r
@@ -1732,7 +1732,7 @@ impl State {
         let mut best = t0.elapsed();
         let PE::Rule(name, args) = pe else { return r };
         // (symex, the searching simplifier, not tried: its failures search long)
-        if r.is_err() || args.is_empty() || IN.with(|c| c.get()) || !GOAL_RULES.contains(&name.as_str()) || name == "symex" || args_text(args).contains("symex(") {
+        if r.is_err() || args.is_empty() || IN.with(|c| c.get()) || !GOAL_RULES.contains(&name.as_str()) || (!shadow::arg_audit_symex() && (name == "symex" || args_text(args).contains("symex("))) {
             return r;
         }
         // (the trials together: within ten times the call's own time)
