@@ -550,6 +550,14 @@ facts they use. A trial may reuse what the call itself cached (`mem`'s
 reads), so time a file after dropping (`SLC_TIMES=1`): `mem` without its
 facts searches the block's, about a second a call.
 
+`scripts/tidy.py FILE..` applies the audits: inferable instantiations
+(and `mp(all_elim(L, ..), ..)` as `apply(L, ..)`), unneeded arguments,
+and `have` steps nothing after them uses -- keeping only the edits under
+which FILE still checks and is no slower than before (its proof time,
+against the file's before tidying; a slower set of edits halved until the
+costly ones are found). `--dry` reports, `--passes inst,args,unused`
+selects. It rechecks FILE alone; run the full check before committing.
+
 `assume` and `fix` take formulas from the goal, so write a formula only
 where it says something new. They see through a defined goal's head.
 
