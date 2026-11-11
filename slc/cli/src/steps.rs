@@ -143,6 +143,11 @@ pub fn directive(env: &mut Env, kw: &str, elf_path: &str, sha: &str, fns: &[Stri
     let elf = Elf::parse(bytes)?;
     match kw {
         "steps" => decode_facts(env, &elf, fns),
+        // (PROBE: `text NAME "ELF" "SHA" "mainrun N"`)
+        "text" if fns.first().map(|s| s.as_str()) == Some("mainrun") => {
+            crate::mainrun::probe(env, &elf, fns.get(1).and_then(|n| n.parse().ok()).unwrap_or(10))?;
+            Ok(Vec::new())
+        }
         "text" => text_facts(env, &elf, fns),
         _ => Err(format!("`{}`: not a line of a binary", kw)),
     }

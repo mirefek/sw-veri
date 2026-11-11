@@ -8,6 +8,7 @@ mod claim;
 mod cputest;
 mod gimple;
 mod heapcheck;
+mod mainrun;
 mod sha256;
 mod steps;
 
@@ -65,6 +66,7 @@ fn run() -> ExitCode {
         "gimple" => gimple::gimple(&rest),
         "steps" => steps::steps(&rest),
         "heapcheck" => heapcheck::heapcheck(&rest),
+        "mainrun" => mainrun::mainrun(&rest),
         _ => return usage(),
     };
     match r {
