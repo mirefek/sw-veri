@@ -66,6 +66,7 @@ impl Cache {
     /// f's statements, if its entry holds for f's contents `src`
     fn lookup(&self, f: &std::path::Path, src: &str, prefix: &str, first: bool) -> Option<String> {
         let text = std::fs::read_to_string(self.entry(f)).ok()?;
+        touch(&self.entry(f));
         // (SLC_CACHE_AS=any: the entry's own checker taken as this one's --
         // the same trust, for every engine's entries at once)
         if self.as_id.as_deref() == Some("any") {
@@ -131,8 +132,10 @@ const PROVEN: &str = "proven\n";
 
 impl syntax::ProofCache for ProofStore {
     fn lookup(&mut self, context: &str, proof: &str) -> Option<Vec<String>> {
-        let text = std::fs::read_to_string(self.entry(context, proof)).ok()?;
+        let e = self.entry(context, proof);
+        let text = std::fs::read_to_string(&e).ok()?;
         let open = text.strip_prefix(PROVEN)?;
+        touch(&e);
         self.hits += 1;
         Some(open.lines().filter(|l| !l.is_empty()).map(|l| l.to_string()).collect())
     }
@@ -350,7 +353,54 @@ pub fn kernel_check(args: &[String]) -> CResult {
     if n_proofs_cached > 0 {
         println!("  ({} proofs of the other files from the proof cache: as checked before, in the same context)", n_proofs_cached);
     }
+    if let Some(c) = &cache {
+        c.prune();
+    }
     Ok(())
+}
+
+/// an entry used: its time now (the cache's age-based pruning keeps it)
+fn touch(p: &std::path::Path) {
+    if let Ok(f) = std::fs::File::options().write(true).open(p) {
+        let _ = f.set_modified(std::time::SystemTime::now());
+    }
+}
+
+impl Cache {
+    /// (at most once a day, after a check) the entries not used for 14 days
+    /// removed -- a proof's older versions, files gone: the cache would grow
+    /// without bound (each proof's text a new entry). An entry removed in
+    /// use only costs its file's check once more.
+    fn prune(&self) {
+        let day = std::time::Duration::from_secs(86_400);
+        let now = std::time::SystemTime::now();
+        let stamp = self.dir.join(".pruned");
+        let fresh = |p: &std::path::Path, d: std::time::Duration| {
+            std::fs::metadata(p).and_then(|m| m.modified()).ok().and_then(|t| now.duration_since(t).ok()).is_some_and(|age| age < d)
+        };
+        if fresh(&stamp, day) {
+            return;
+        }
+        let old = |p: &std::path::Path| !fresh(p, day * 14);
+        let files = |d: &std::path::Path| std::fs::read_dir(d).into_iter().flatten().flatten().map(|e| e.path()).collect::<Vec<_>>();
+        let mut removed = 0;
+        for p in files(&self.dir) {
+            if p.is_file() && p != stamp && old(&p) && std::fs::remove_file(&p).is_ok() {
+                removed += 1;
+            }
+        }
+        for sub in files(&self.dir.join("proofs")) {
+            for p in files(&sub) {
+                if old(&p) && std::fs::remove_file(&p).is_ok() {
+                    removed += 1;
+                }
+            }
+        }
+        let _ = std::fs::write(&stamp, "");
+        if removed > 0 {
+            println!("  (the cache: {} entries unused for 14 days removed)", removed);
+        }
+    }
 }
 
 pub fn repo_root() -> PathBuf {
