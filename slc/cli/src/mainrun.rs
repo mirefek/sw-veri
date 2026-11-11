@@ -132,8 +132,9 @@ pub fn exec_machine(elf: &Elf, argv0: &str) -> Result<(V, u64), String> {
 }
 
 /// (PROBE) the initial machine as a kernel term, then `n` steps by the
-/// kernel's evaluator (`members` of the step's outcomes), each timed --
-/// a `text` line's `mainrun N`
+/// kernel's evaluator (the decodings by `members`, the next state a
+/// witness from the outcomes, `runs(..)` to it kernel-checked), each timed,
+/// and `rip = main` at the end -- a `text` line's `mainrun N`
 pub fn probe(env: &mut sl_kernel::Env, elf: &Elf, n: usize) -> Result<(), String> {
     use sl_kernel::ext::seq::Seq;
     let ke = |e: sl_kernel::KernelError| e.0;
@@ -147,10 +148,13 @@ pub fn probe(env: &mut sl_kernel::Env, elf: &Elf, n: usize) -> Result<(), String
     let hex: String = stack.iter().map(|b| format!("{:02x}", b)).collect();
     let mut bytes = "0".to_string();
     let mut pages = "none".to_string();
+    // (the file's bytes by `bytes_at` on its literal: the evaluator reads
+    // those; `musl_malloc.file` is `bytes_seq` of the same literal)
+    let file_hex: String = elf.data.iter().map(|b| format!("{:02x}", b)).collect();
     for s in elf.segments.iter().filter(|s| s.memsz > 0) {
         bytes = format!(
-            "ite(int_le({v}, a) && int_lt(a, {e}), ite(int_lt(a, {fe}), app(musl_malloc.file, int_add(int_sub(a, {v}), {o})), 0), {rest})",
-            v = s.vaddr, e = s.vaddr + s.memsz, fe = s.vaddr + s.filesz, o = s.offset, rest = bytes
+            "ite(int_le({v}, a) && int_lt(a, {e}), ite(int_lt(a, {fe}), bytes_at(bytes\"{fh}\", int_add(int_sub(a, {v}), {o})), 0), {rest})",
+            v = s.vaddr, e = s.vaddr + s.memsz, fe = s.vaddr + s.filesz, o = s.offset, fh = file_hex, rest = bytes
         );
         pages = format!("ite(int_le({}, p) && int_le(p, {}), {}, {})", s.vaddr / PAGE, (s.vaddr + s.memsz - 1) / PAGE, pg(prot(s.flags), 0), pages);
     }
@@ -167,7 +171,7 @@ pub fn probe(env: &mut sl_kernel::Env, elf: &Elf, n: usize) -> Result<(), String
     let rec = |fs: &[(&str, String)]| fs.iter().fold("empty".to_string(), |acc, (k, v)| format!("fn_update({}, \"{}\", {})", acc, k, v));
     let flags = rec(&["cf", "pf", "af", "zf", "sf", "df", "of"].iter().map(|f| (*f, "false".to_string())).collect::<Vec<_>>());
     let vm = rec(&[
-        ("pages", format!("fn_build(set_select(omega, p. int_lt(p, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))), p. {})", pages)),
+        ("pages", format!("fn_build(set_select(omega, p. int_lt(p, {})), p. {})", TASK_SIZE / PAGE, pages)),
         ("bytes", format!("fn_build(bits(64), a. {})", bytes)),
         ("stack_top", top.to_string()),
         ("stack_limit", (8u64 << 20).to_string()),
@@ -203,7 +207,7 @@ pub fn probe(env: &mut sl_kernel::Env, elf: &Elf, n: usize) -> Result<(), String
         let t1 = std::time::Instant::now();
         // (1) the decodings of the bytes at rip -- as step() forms them
         let (sym, app) = (|n: &str| env.sym_by_name[n], sl_kernel::Term::app);
-        let (ss, univ, runs, fnb, omega) = (sym("set_select"), sym("univ"), sym("runs"), sym("fn_build"), sym("omega"));
+        let (runs, fnb, omega) = (sym("runs"), sym("fn_build"), sym("omega"));
         let (appf, bits_add, rip_t, vm_t, bytes_t) = (sym("app"), sym("bits_add"), sl_kernel::Term::bytes(b"rip"), sl_kernel::Term::bytes(b"vm"), sl_kernel::Term::bytes(b"bytes"));
         let nat = |v: u64| sl_kernel::Term::nat(sl_kernel::nat::Nat::from_u64(v));
         let rip_v = app(appf, vec![mt.clone(), rip_t]);
@@ -228,20 +232,39 @@ pub fn probe(env: &mut sl_kernel::Env, elf: &Elf, n: usize) -> Result<(), String
         }
         let (len, insn) = find_pair(env, dm.concl()).ok_or_else(|| format!("step {}: no decoding", k))?;
         // (2) exec_insn(len, insn)'s outcomes from mt
+        // the outcome as a witness (no theorem), then `runs(.., ok(M', v))`
+        // kernel-checked
         let ei = app(sym("x86_64_linux.exec_insn"), vec![len, insn]);
-        let body = app(runs, vec![ei, mt.shift(1, 0, &env.binders_fn()), sl_kernel::Term::bvar(0)]);
-        let set = app(ss, vec![app(univ, vec![nat(1)]), body]);
-        let d = Seq::members(env, &lg, &set, &[]).map_err(|e| format!("step {}: exec: {}", k, e.0))?;
-        eprintln!("  decode {:.3} s, exec {:.3} s", (t2 - t1).as_secs_f64(), t2.elapsed().as_secs_f64());
-        // `all x. x in S <-> (false || x = ok(M', ()))`: M'
-        let Some(next) = find_ok(env, d.concl()) else {
-            let c = sl_kernel::syntax::Printer::new(env).short(d.concl());
-            return Err(format!("step {}: no ok outcome: {}", k, &c[..c.len().min(300)]));
+        let outs = lg.eval_outcomes(env, &ei, &mt).map_err(|e| format!("step {}: exec: {}", k, e.0))?;
+        let t3 = std::time::Instant::now();
+        let Some(o) = outs.iter().find(|o| find_ok(env, o).is_some()).cloned() else {
+            // (each outcome's end: an exception's value)
+            let c: Vec<String> = outs
+                .iter()
+                .map(|o| match o.node() {
+                    sl_kernel::Node::App(_, a) if a.len() == 2 => sl_kernel::syntax::Printer::new(env).short(&a[1]),
+                    _ => "?".into(),
+                })
+                .collect();
+            return Err(format!("step {}: no ok outcome: ..{}", k, c.join(" | ..")));
         };
-        mt = next;
+        let goal = app(runs, vec![ei, mt.clone(), o.clone()]);
+        Seq::eval_goal(env, &lg, &[], &goal).map_err(|e| format!("step {}: check: {}", k, e.0))?;
+        eprintln!("  decode {:.3} s, exec {:.3} s, check {:.3} s ({} outcomes)", (t2 - t1).as_secs_f64(), (t3 - t2).as_secs_f64(), t3.elapsed().as_secs_f64(), outs.len());
+        mt = find_ok(env, &o).unwrap();
         eprintln!("kernel step {}: {:.3} s", k, t1.elapsed().as_secs_f64());
     }
     eprintln!("kernel: {} steps, {:.2} s", n, t0.elapsed().as_secs_f64());
+    // where the run is: `rip = main` checked
+    if let Some(main) = elf.symbol("main") {
+        let (sym, app) = (|n: &str| env.sym_by_name[n], sl_kernel::Term::app);
+        let rip = app(sym("app"), vec![mt.clone(), sl_kernel::Term::bytes(b"rip")]);
+        let goal = app(sym("eq"), vec![rip, sl_kernel::Term::nat(sl_kernel::nat::Nat::from_u64(main.value))]);
+        match Seq::eval_goal(env, &lg, &[], &goal) {
+            Ok(_) => eprintln!("kernel: at main ({:#x})", main.value),
+            Err(e) => eprintln!("kernel: not at main: {}", e.0.chars().take(200).collect::<String>()),
+        }
+    }
     Ok(())
 }
 

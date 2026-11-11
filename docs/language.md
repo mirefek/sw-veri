@@ -833,7 +833,7 @@ premise they stand for.
 | `sel(p)` | `z in set_select(S, x. P)` from `z in S && P(z)` |
 | `lists(p..)` | equal list expressions (same pieces) |
 | `induct(base, step)` | `all n. n in omega -> P(n)` |
-| `eval(p..)` | evaluation on concrete data |
+| `eval(p..)` | evaluation on concrete data: closed terms normalized (a closed formula to its truth value), programs run from concrete states (`runs(P, s, o)` with o given: P's relation at s, o), unknowns solved by matching or enumerated (finite sets, naturals below a numeral, a tuple's components); an `ex` none of that solves: small values tried as witnesses (it is then shown, never refuted) |
 | `bitwise([{n},] p..)` | bits: a word equation of n-bit words bit by bit (extensionality), or a proposition about bits; see "Bits" |
 | `cases({k}, {a}, {b}, R, p..)` | the goal for each value c of the variable k, a <= k < b (numerals; the bounds from p.. by arith), each by R with k read as c in R's terms |
 | `mem(p..)` | memory: an equation of reads (both sides resolved, then equal or by arith), or a predicate of a written memory (views and frames, then a fact); the facts p.. failing (or none given, `mem()`), also the block's small facts about the goal's terms -- the addresses' bounds and apartness, the memories' typing |

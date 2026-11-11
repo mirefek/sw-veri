@@ -253,6 +253,23 @@ would hold vacuously if none did. A witness that some exec state reaches
 that every run exits with 0 or 1 or overflows the stack, but it does not
 state that an exec state exists either.
 
+Measured: from a concrete exec state of build/test_malloc_O0 (argc 1,
+uid 1000), `slc mainrun` reaches `main` in 1063 steps; the kernel's
+evaluator runs the same 1063 steps (each `runs(exec_insn(..), M, ok(M',
+..))` kernel-checked, `set_tid_address`'s `any` by a picked witness) and
+proves `rip = main` at the end: about 40 s, of which decoding the bytes
+at rip is half -- the `steps` facts give those. (A development probe: a
+`text` line `"mainrun N"`, slc/cli/src/mainrun.rs.)
+
+The proof, in steps:
+- the concrete `m0` as an `exec_state(file, argv, envp, m0)` with
+  `unprivileged(m0.os)`: its stack layout and auxv by evaluation;
+- `bytes_seq` read at i = `bytes_at` at i (the file's bytes as the
+  memory holds them);
+- a reverse step lemma: decode = {c} and a run of `exec_insn(c)` give a
+  run of `step()`; `run_until` stop / unfold lemmas;
+- the existence theorem (a claim conjunct only by agreement).
+
 ## 3. Long-term directions
 
 Each is designed in a principled way before it is built: which level it
