@@ -25,7 +25,7 @@ type Assign = Vec<(VarId, Term)>;
 
 const UNSOLVED: &str = "unsolved: ";
 /// iterations of all loops, per evaluation
-const FUEL: usize = 10_000_000;
+const FUEL: usize = 100_000;
 /// the largest numeral whose elements a membership is solved by (a
 /// binary's bytes, each)
 const ENUM_MAX: u64 = 1 << 16;
@@ -990,6 +990,35 @@ impl<'s, 'a> Ev<'s, 'a> {
             return err(format!("{}a loop from an open state", UNSOLVED));
         }
         let env = self.sp.env;
+        let fuel0 = self.fuel;
+        let r = self.solve_loop1(x, us, a);
+        // (EVAL_LOOPS: each loop's iterations and its body's start)
+        if std::env::var("EVAL_LOOPS").is_ok() {
+            // (the body's defined names, in order)
+            fn names(ev: &Ev, t: &Term, out: &mut Vec<String>, seen: &mut std::collections::HashSet<usize>) {
+                if !seen.insert(t.ptr_id()) || out.len() >= 8 {
+                    return;
+                }
+                if let Node::App(g, b) = t.node() {
+                    let n = ev.name(*g).to_string();
+                    if ev.defined(*g) && n.contains('.') && !out.contains(&n) {
+                        out.push(n);
+                    }
+                    for y in b.iter() {
+                        names(ev, y, out, seen);
+                    }
+                }
+            }
+            let mut ns = Vec::new();
+            names(self, &x[2], &mut ns, &mut Default::default());
+            eprintln!("loop {:>6}: {}", fuel0 - self.fuel, ns.join(" "));
+        }
+        let _ = env;
+        r
+    }
+
+    fn solve_loop1(&mut self, x: &[Term], us: &[VarId], a: Assign) -> Result<Vec<Assign>, String> {
+        let env = self.sp.env;
         let mut finals: Vec<Term> = Vec::new();
         let mut work = vec![self.norm(&x[0])];
         // (picking: depth first, up to the first run that ends normally --
@@ -1131,7 +1160,11 @@ impl Logic {
         // showing a `false`)
         ev.pick = true;
         DEBUG_N.with(|n| n.set(0));
-        match ev.truth(p) {
+        let r = ev.truth(p);
+        if std::env::var("EVAL_STATS").is_ok() {
+            eprintln!("eval stats: loop iterations {}", FUEL - ev.fuel);
+        }
+        match r {
             Ok(true) => Ok(ev.used.borrow().iter().enumerate().filter(|(_, u)| **u).map(|(i, _)| i).collect()),
             Ok(false) => Err(crate::env::KernelError(format!("eval: false: {}", ev.show(p)))),
             Err(e) => Err(crate::env::KernelError(format!("eval: {}", e))),
