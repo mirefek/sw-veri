@@ -638,6 +638,11 @@ impl<'a> Typer<'a> {
     /// `t in univ(u)` from t's inferred set
     fn univ_by_type(&mut self, env: &mut Env, t: &Term, u: &Term) -> Option<Seq> {
         let (ty, p) = self.infer(env, t)?;
+        self.univ_from(env, t, ty, p, u)
+    }
+
+    /// `t in univ(u)` from `p: t in ty`
+    fn univ_from(&mut self, env: &mut Env, t: &Term, ty: Term, p: Seq, u: &Term) -> Option<Seq> {
         let uu = Term::app(self.s.univ, vec![u.clone()]);
         // (its set a member: univ_trans)
         if let Some(name) = self.head_name(env, &ty) {
@@ -769,6 +774,14 @@ impl<'a> Typer<'a> {
     fn record(&mut self, env: &mut Env, t: &Term, set: &Term) -> Option<Seq> {
         let (k, u, pred) = self.rec_parts(set)?;
         let up = self.is(t, self.s.fn_update)?;
+        // (a literal: updates of `empty`)
+        let mut base = t.clone();
+        while let Some(a) = self.is(&base, self.s.fn_update) {
+            base = a[0].clone();
+        }
+        if self.head_name(env, &base) == Some("empty") {
+            return self.rec_literal(env, t, &k, &u, &pred);
+        }
         let (r, key, v) = (&up[0], &up[1], &up[2]);
         // (r of the record type: its function, domain and fields)
         let rp = self.check(env, r, set)?;
@@ -809,6 +822,89 @@ impl<'a> Typer<'a> {
         let isf = have.get(&self.mk(self.s.is_fun, vec![t.clone()]))?.clone();
         let dm = have.get(&self.mk(self.s.eq, vec![self.mk(self.s.dom, vec![t.clone()]), k.clone()]))?.clone();
         use_thm(env, "rec_type_intro", &[("u", &u), ("k", &k), ("p", &pred), ("r", t)], &[&tu, &isf, &dm, &ppt]).ok()
+    }
+
+    /// `t in R` for a record literal t (updates of `empty`) and R's parts
+    /// (K, u, p): its function and domain update by update (dom_empty,
+    /// fn_update_fun, dom_update), the domain K (the same keys, in any
+    /// order: subsets both ways), its fields by their types (reads through
+    /// the updates), rec_type_intro
+    fn rec_literal(&mut self, env: &mut Env, t: &Term, k: &Term, u: &Term, pred: &Term) -> Option<Seq> {
+        let mut chain = Vec::new();
+        let mut x = t.clone();
+        while let Some(a) = self.is(&x, self.s.fn_update) {
+            chain.push(a);
+            x = chain.last()?[0].clone();
+        }
+        chain.reverse();
+        let de = thm(env, "dom_empty", &[]).ok()?;
+        let mut fun = self.project(env, &de, &[false]).ok()?;
+        let mut dom = self.project(env, &de, &[true]).ok()?;
+        let mut d = x;
+        for a in &chain {
+            let (f, key, v) = (&a[0], &a[1], &a[2]);
+            let du = use_thm(env, "dom_update", &[("f", f), ("k", key), ("v", v)], &[&fun]).ok()?;
+            dom = Seq::rewrite(env, &dom, &du).ok()?;
+            fun = use_thm(env, "fn_update_fun", &[("f", f), ("k", key), ("v", v)], &[&fun]).ok()?;
+            d = self.mk(self.s.insert, vec![key.clone(), d]);
+        }
+        // (dom(t) = d, d = K)
+        let dk = if d == *k {
+            None
+        } else {
+            let a = self.subset_chain(env, &d, k)?;
+            let b = self.subset_chain(env, k, &d)?;
+            Some(use_thm(env, "sub_antisym", &[("s", &d), ("t", k)], &[&a, &b]).ok()?)
+        };
+        if let Some(dk) = dk {
+            dom = Seq::rewrite(env, &dk, &dom).ok()?;
+        }
+        let uu = Term::app(self.s.univ, vec![u.clone()]);
+        // p(t): is_fun, the domain, and each field `app(t, j) in T_j`
+        let pt = pred.instantiate_params(std::slice::from_ref(t), &env.binders_fn());
+        let mut cs = Vec::new();
+        self.conjuncts(&pt, &mut cs);
+        // t in univ(u): update by update, each value's universe by its
+        // field's type (a function's by its space)
+        let mut tu = thm(env, "univ_empty", &[("u", u)]).ok()?;
+        for a in &chain {
+            let (f, key, v) = (&a[0], &a[1], &a[2]);
+            let field = self.mk(self.s.app, vec![t.clone(), key.clone()]);
+            let ty = cs.iter().find_map(|c| self.is(c, self.s.in_).filter(|x| x[0] == field).map(|x| x[1].clone()));
+            let typed = ty.and_then(|ty| self.check(env, v, &ty).map(|p| (ty, p)));
+            let vu = match typed.and_then(|(ty, p)| self.univ_from(env, v, ty, p, u)) {
+                Some(p) => p,
+                None => self.check(env, v, &uu)?,
+            };
+            let ku = self.check(env, key, &uu)?;
+            tu = use_thm(env, "fn_update_univ", &[("u", u), ("f", f), ("k", key), ("v", v)], &[&tu, &ku, &vu]).ok()?;
+        }
+        let mut have: HashMap<Term, Seq> = HashMap::new();
+        have.insert(fun.concl().clone(), fun.clone());
+        have.insert(dom.concl().clone(), dom.clone());
+        for c in &cs {
+            if have.contains_key(c) {
+                continue;
+            }
+            let a = self.is(c, self.s.in_)?;
+            let pc = self.check(env, &a[0], &a[1])?;
+            have.insert(c.clone(), pc);
+        }
+        let ppt = self.build(env, &pt, &have)?;
+        use_thm(env, "rec_type_intro", &[("u", u), ("k", k), ("p", pred), ("r", t)], &[&tu, &fun, &dom, &ppt]).ok()
+    }
+
+    /// `subset(a, b)`, a an insert chain of elements of the insert chain b
+    fn subset_chain(&self, env: &Env, a: &Term, b: &Term) -> Option<Seq> {
+        match self.is(a, self.s.insert) {
+            Some(x) => {
+                let hin = self.in_set(env, &x[0], b)?;
+                let rest = self.subset_chain(env, &x[1], b)?;
+                use_thm(env, "insert_sub", &[("a", &x[0]), ("s", &x[1]), ("t", b)], &[&hin, &rest]).ok()
+            }
+            None if self.head_name(env, a) == Some("empty") => thm(env, "empty_sub", &[("a", b)]).ok(),
+            None => None,
+        }
     }
 
     /// `app(fn_update(r, k, v), j) = ..`: v at k, r's field at another

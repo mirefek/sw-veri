@@ -248,27 +248,16 @@ The plan, in order (each step measured: speed comes first):
 ## 2. Open from the milestone: a reached main
 
 The malloc claim's `Init` is about the runs that reach `main`, and it
-would hold vacuously if none did. A witness that some exec state reaches
-`main` is a separate statement, not made yet. The program claim says
-that every run exits with 0 or 1 or overflows the stack, but it does not
-state that an exec state exists either.
-
-Measured: from a concrete exec state of build/test_malloc_O0 (argc 1,
-uid 1000), `slc mainrun` reaches `main` in 1063 steps; the kernel's
-evaluator runs the same 1063 steps (each `runs(exec_insn(..), M, ok(M',
-..))` kernel-checked, `set_tid_address`'s `any` by a picked witness) and
-proves `rip = main` at the end: about 40 s, of which decoding the bytes
-at rip is half -- the `steps` facts give those. (A development probe: a
-`text` line `"mainrun N"`, slc/cli/src/mainrun.rs.)
-
-The proof, in steps:
-- the concrete `m0` as an `exec_state(file, argv, envp, m0)` with
-  `unprivileged(m0.os)`: its stack layout and auxv by evaluation;
-- `bytes_seq` read at i = `bytes_at` at i (the file's bytes as the
-  memory holds them);
-- a reverse step lemma: decode = {c} and a run of `exec_insn(c)` give a
-  run of `step()`; `run_until` stop / unfold lemmas;
-- the existence theorem (a claim conjunct only by agreement).
+would hold vacuously if none did. proofs/test/witness*.core prove
+`wit.reach`: an unprivileged exec state `wit.m0` of the binary (argv
+["test_malloc"], no environment, uid 1000) whose run reaches `main`
+(1063 steps by evaluation, about 40 s). Open:
+- the final machine's typing (`m in Machine`, which `init_at_main`'s
+  quantifier has): a lemma that `step()` keeps a machine typed, then
+  `run_until` by induction;
+- `wit.reach` as a conjunct of the claims (only by agreement);
+- the run's decoding from the `steps` facts instead of evaluating the
+  decoder at each step (half of the 40 s).
 
 ## 3. Long-term directions
 

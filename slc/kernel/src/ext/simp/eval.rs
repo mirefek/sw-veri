@@ -25,7 +25,7 @@ type Assign = Vec<(VarId, Term)>;
 
 const UNSOLVED: &str = "unsolved: ";
 /// iterations of all loops, per evaluation
-const FUEL: usize = 100_000;
+const FUEL: usize = 10_000_000;
 /// the largest numeral whose elements a membership is solved by (a
 /// binary's bytes, each)
 const ENUM_MAX: u64 = 1 << 16;
@@ -200,6 +200,19 @@ impl<'s, 'a> Ev<'s, 'a> {
                 t = t2;
                 continue;
             }
+            // `dom(fn_build(D, x. v))` is D (sets.core's fn_build_dom): a
+            // sequence's length
+            if self.name(f) == "dom" && a2.len() == 1 {
+                if let Node::App(g, b) = a2[0].node() {
+                    if is(*g, self.sp.s.fn_build) && b.len() == 2 {
+                        return self.norm(&b[0]);
+                    }
+                    // (the empty sequence's: set_image(empty, ..) = empty = 0)
+                    if b.is_empty() && Some(*g) == self.sp.s.empty {
+                        return Term::nat(crate::nat::Nat::from_u64(0));
+                    }
+                }
+            }
             // `app(fn_build(D, x. v), a)`, a closed: v(a) when a in D is
             // decided true here (the simplifier's rule takes only omega and
             // bits domains -- a machine's maps have others: Reg, PageNo)
@@ -264,6 +277,66 @@ impl<'s, 'a> Ev<'s, 'a> {
         let mut vs = Vec::new();
         t.vars(&mut vs);
         vs.is_empty() && self.sp.env.loose_depth_m(t) == 0
+    }
+
+    /// The conjuncts of p (through `!(a -> b)` as a, !b and `!!a`; a
+    /// defined predicate unfolded up to `depth` levels) -- where an
+    /// unknown's bound is looked for
+    fn conjuncts(&self, p: &Term, depth: u32, out: &mut Vec<Term>) {
+        let s = &self.sp.s;
+        if let Node::App(g, b) = p.node() {
+            if is(*g, s.and) {
+                self.conjuncts(&b[0], depth, out);
+                self.conjuncts(&b[1], depth, out);
+                return;
+            }
+            if is(*g, s.not) {
+                if let Node::App(h, c) = b[0].node() {
+                    if *h == s.imp {
+                        self.conjuncts(&c[0], depth, out);
+                        out.push(self.sp.not(c[1].clone()));
+                        return;
+                    }
+                    if is(*h, s.not) {
+                        self.conjuncts(&c[0], depth, out);
+                        return;
+                    }
+                }
+            }
+            if depth > 0 && self.defined(*g) && !self.opaque(*g) && !["int_lt", "int_le"].contains(&self.name(*g)) {
+                if let Some(u) = self.sp.unfold(*g, b) {
+                    self.conjuncts(&self.sp.term(&u), depth - 1, out);
+                    return;
+                }
+            }
+        }
+        out.push(p.clone());
+    }
+
+    /// b a bound `v < n` / `v <= n` / `v + c < n` (c, n numerals after
+    /// normalizing, n not too large): the number of values below it
+    fn bound(&mut self, b: &Term, v: &Term, us: &[VarId], a: &Assign) -> Option<u64> {
+        let Node::App(r, ra) = b.node() else { return None };
+        let rel = self.name(*r).to_string();
+        if !(rel == "int_lt" || rel == "int_le") || ra.len() != 2 || self.open(&ra[1], us, a) {
+            return None;
+        }
+        let off = if ra[0] == *v {
+            0
+        } else {
+            match ra[0].node() {
+                Node::App(ad, ab) if self.name(*ad) == "int_add" && ab.len() == 2 => match (&ab[0] == v, ab[1].node(), &ab[1] == v, ab[0].node()) {
+                    (true, Node::Nat(c), _, _) | (_, _, true, Node::Nat(c)) => c.to_u64()?,
+                    _ => return None,
+                },
+                _ => return None,
+            }
+        };
+        let n = match self.norm(&ra[1]).node() {
+            Node::Nat(n) => n.to_u64().filter(|&n| n <= ENUM_MAX)?,
+            _ => return None,
+        };
+        Some((if rel == "int_lt" { n } else { n + 1 }).saturating_sub(off))
     }
 
     fn bits_build(&mut self, a: &[Term]) -> Option<Term> {
@@ -379,6 +452,24 @@ impl<'s, 'a> Ev<'s, 'a> {
             if let (Some(u), Some(v)) = (tv(&x), tv(&y)) {
                 return Ok(u == v);
             }
+            // `S = empty`: whether S has a member (set_ext); its members all
+            // known (no pick) for none
+            let is_empty = |t: &Term| matches!(t.node(), Node::App(g, b) if b.is_empty() && Some(*g) == sp.s.empty);
+            if is_empty(&x) != is_empty(&y) {
+                let set = if is_empty(&x) { y.clone() } else { x.clone() };
+                let old = std::mem::replace(&mut self.partial, false);
+                let r = self.members(&set);
+                let part = self.partial;
+                self.partial = old || part;
+                if let Ok(ms) = r {
+                    if !ms.is_empty() {
+                        return Ok(false);
+                    }
+                    if !part {
+                        return Ok(true);
+                    }
+                }
+            }
             return err(format!("undecided: {}", self.show(&p)));
         }
         if is(f, s.in_) {
@@ -426,6 +517,14 @@ impl<'s, 'a> Ev<'s, 'a> {
     /// Membership of a value in a set built from constructors; None: not
     /// decided here.
     fn member(&mut self, x: &Term, set: &Term) -> Result<Option<bool>, String> {
+        // (`empty` is the numeral 0: lit_zero)
+        if matches!(x.node(), Node::App(g, b) if b.is_empty() && Some(*g) == self.sp.s.empty) {
+            return self.member(&Term::nat(crate::nat::Nat::from_u64(0)), set);
+        }
+        // a numeral n is {0, .., n-1} (von Neumann; lit_lt_def)
+        if let (Node::Nat(m), Node::Nat(n)) = (x.node(), set.node()) {
+            return Ok(Some(m < n));
+        }
         let Node::App(g, b) = set.node() else { return Ok(None) };
         let n = self.name(*g).to_string();
         Ok(match n.as_str() {
@@ -549,51 +648,41 @@ impl<'s, 'a> Ev<'s, 'a> {
             if let Some(l) = flat(&x[0]) {
                 return self.solve(&sp.and(l, x[1].clone()), us, a);
             }
-            // `v in omega && v < n` (either order), v unknown, n a numeral
-            // not too large: each of 0..n
-            // (the bound may be the other side's first conjunct)
-            let first = |t: &Term| -> Term {
-                let mut t = t.clone();
-                while let Node::App(g, b) = t.node() {
-                    if !is(*g, s.and) {
-                        break;
+            // `v in omega` and a bound `v < n` (or `v + c < n`, `<=`) among
+            // the conjuncts, v unknown, n a numeral not too large: each v of
+            // 0..n, then the whole conjunction under it
+            let mut conj = Vec::new();
+            self.conjuncts(&p, 2, &mut conj);
+            let mut found = None;
+            'o: for m in &conj {
+                let Node::App(i, ia) = m.node() else { continue };
+                if !is(*i, s.in_) || ia.len() != 2 {
+                    continue;
+                }
+                let unknown = matches!(ia[0].node(), Node::Var(w, wa) if wa.is_empty() && us.contains(w));
+                if !unknown || !matches!(ia[1].node(), Node::App(o, oa) if oa.is_empty() && is(*o, s.omega)) {
+                    continue;
+                }
+                for b in &conj {
+                    if let Some(top) = self.bound(b, &ia[0], us, &a) {
+                        found = Some((ia[0].clone(), top));
+                        break 'o;
                     }
-                    let l = b[0].clone();
-                    t = l;
                 }
-                t
-            };
-            let (b0, b1) = (first(&x[1]), first(&x[0]));
-            for (m, b) in [(&x[0], &b0), (&x[1], &b1)] {
-                let (Node::App(i, ia), Node::App(r, ra)) = (m.node(), b.node()) else { continue };
-                let unknown = matches!(ia.first().map(|t| t.node()), Some(Node::Var(w, wa)) if wa.is_empty() && us.contains(w));
-                let rel = self.name(*r).to_string();
-                if !(is(*i, s.in_) && unknown && (rel == "int_lt" || rel == "int_le") && ra[0] == ia[0]) {
-                    continue;
-                }
-                if !matches!(ia[1].node(), Node::App(o, oa) if oa.is_empty() && is(*o, s.omega)) || self.open(&ra[1], us, &a) {
-                    continue;
-                }
-                let top = match self.norm(&ra[1]).node() {
-                    Node::Nat(n) => n.to_u64().filter(|&n| n <= ENUM_MAX),
-                    _ => None,
-                };
-                if let Some(n) = top {
-                    let top = if rel == "int_lt" { n } else { n + 1 };
-                    // (each v, then the whole conjunction under it)
-                    let mut out = Vec::new();
-                    for v in 0..top {
-                        let e = Term::app(s.eq, vec![ia[0].clone(), Term::nat(crate::nat::Nat::from_u64(v))]);
-                        for e in self.solve(&e, us, a.clone())? {
-                            for r in self.solve(&p, us, e)? {
-                                if !out.contains(&r) {
-                                    out.push(r);
-                                }
+            }
+            if let Some((v, top)) = found {
+                let mut out = Vec::new();
+                for c in 0..top {
+                    let e = Term::app(s.eq, vec![v.clone(), Term::nat(crate::nat::Nat::from_u64(c))]);
+                    for e in self.solve(&e, us, a.clone())? {
+                        for r in self.solve(&p, us, e)? {
+                            if !out.contains(&r) {
+                                out.push(r);
                             }
                         }
                     }
-                    return Ok(out);
                 }
+                return Ok(out);
             }
             return match self.solve(&x[0], us, a.clone()) {
                 Ok(es) => {
@@ -756,6 +845,10 @@ impl<'s, 'a> Ev<'s, 'a> {
                 if is(g, s.not) {
                     return self.solve(&y[0], us, a);
                 }
+                // !(all x. p) is ex x. !p
+                if g == s.all && y.len() == 1 {
+                    return self.solve(&Term::app(s.ex, vec![sp.not(y[0].clone())]), us, a);
+                }
             }
             return err(format!("{}{}", UNSOLVED, self.show(&p)));
         }
@@ -899,7 +992,21 @@ impl<'s, 'a> Ev<'s, 'a> {
         let env = self.sp.env;
         let mut finals: Vec<Term> = Vec::new();
         let mut work = vec![self.norm(&x[0])];
+        // (picking: depth first, up to the first run that ends normally --
+        // ok, or left by `break` -- the finals then a part of all; else a
+        // nondeterministic body's runs multiply)
+        let normal = |sp: &Simp, o: &Term| match o.node() {
+            Node::App(k, _) if is(*k, sp.s.ok) => true,
+            Node::App(k, b) if is(*k, sp.s.exc) && b.len() == 2 => {
+                matches!(b[1].node(), Node::App(p, pb) if is(*p, sp.s.pair) && matches!(pb[0].node(), Node::Bytes(s) if &s[..] == b"brk"))
+            }
+            _ => false,
+        };
         while let Some(l) = work.pop() {
+            if self.pick && finals.iter().any(|f| normal(self.sp, f)) {
+                self.partial = true;
+                break;
+            }
             if self.fuel == 0 {
                 return err("a loop did not end within the fuel");
             }

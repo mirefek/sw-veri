@@ -1615,3 +1615,20 @@ For a first reading, docs/overview.md is the better start. The sections:
       the run's continuation; a faulting push is an overflow,
       `pw.push_fault`);
     - the contract's outcomes when the spec ends (`pw.mtv_end`).
+- A reached main (proofs/test/witness*.core, `wit.reach`): an unprivileged
+  exec state `wit.m0` (argv ["test_malloc"], no environment, uid 1000) of
+  the binary, typed, whose run reaches `main`.
+  - The run (`wit.run`): one `eval()` -- 1063 steps decoded and executed on
+    the concrete state, set_tid_address's thread id a picked witness.
+  - `exec_state` (`wit.exec`): the closed parts by evaluation (the ELF
+    header, the stack layout, the auxv, its data, the registers); the
+    pages, the loads' bytes, the stack's growth room and the image's end
+    by lemmas about the page table and memory (`wit.pg`, `wit.byte`).
+  - The typing (`wit.m0_typed`): `types` of a record literal, with typing
+    rules for options, `ite`, the file's and the stack's bytes.
+  - The evaluator's trusted extensions this needed: closed formulas as
+    truth values, `app(fn_build(D, f), a)` for a in D, `dom` of a
+    sequence, numeral comparisons and memberships, `S = empty` by its
+    members, enumerated bounded unknowns, a tuple's `any` split, a given
+    outcome checked by the program's relation, picked witnesses (shown,
+    never refuted: a result from a pick never gives `false`).

@@ -148,13 +148,11 @@ pub fn probe(env: &mut sl_kernel::Env, elf: &Elf, n: usize) -> Result<(), String
     let hex: String = stack.iter().map(|b| format!("{:02x}", b)).collect();
     let mut bytes = "0".to_string();
     let mut pages = "none".to_string();
-    // (the file's bytes by `bytes_at` on its literal: the evaluator reads
-    // those; `musl_malloc.file` is `bytes_seq` of the same literal)
-    let file_hex: String = elf.data.iter().map(|b| format!("{:02x}", b)).collect();
+    // (the file's bytes: the claim's `musl_malloc.file`)
     for s in elf.segments.iter().filter(|s| s.memsz > 0) {
         bytes = format!(
-            "ite(int_le({v}, a) && int_lt(a, {e}), ite(int_lt(a, {fe}), bytes_at(bytes\"{fh}\", int_add(int_sub(a, {v}), {o})), 0), {rest})",
-            v = s.vaddr, e = s.vaddr + s.memsz, fe = s.vaddr + s.filesz, o = s.offset, fh = file_hex, rest = bytes
+            "ite(int_le({v}, a) && int_lt(a, {e}), ite(int_lt(a, {fe}), app(musl_malloc.file, int_add(int_sub(a, {v}), {o})), 0), {rest})",
+            v = s.vaddr, e = s.vaddr + s.memsz, fe = s.vaddr + s.filesz, o = s.offset, rest = bytes
         );
         pages = format!("ite(int_le({}, p) && int_le(p, {}), {}, {})", s.vaddr / PAGE, (s.vaddr + s.memsz - 1) / PAGE, pg(prot(s.flags), 0), pages);
     }
@@ -191,6 +189,9 @@ pub fn probe(env: &mut sl_kernel::Env, elf: &Elf, n: usize) -> Result<(), String
         ("vm", vm),
         ("os", os),
     ]);
+    if std::env::var("PROBE_PRINT").is_ok() {
+        eprintln!("probe m0: {}", m);
+    }
     let mut mt = sl_kernel::syntax::parse_term(env, &m, &[]).map_err(ke)?;
     let lg = sl_kernel::ext::prop::Logic::new(env).map_err(ke)?;
     fn find_ok(env: &sl_kernel::Env, t: &sl_kernel::Term) -> Option<sl_kernel::Term> {

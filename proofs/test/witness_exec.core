@@ -1,0 +1,423 @@
+// The witness's exec state: wit.m0 is one for argv = ["test_malloc"], no
+// environment.
+
+def wit.argv := fn_build(1, i. bytes_seq(bytes"746573745f6d616c6c6f63"))
+
+// the auxv: PHDR, PHENT, PHNUM, PAGESZ, ENTRY, UID, EUID, GID, EGID,
+// SECURE, RANDOM, EXECFN, NULL
+def wit.aux_at(k) :=
+  ite(k = 0, pair(3, 4194368), ite(k = 1, pair(4, 56), ite(k = 2, pair(5, 8), ite(k = 3, pair(6, 4096),
+  ite(k = 4, pair(9, 4198543), ite(k = 5, pair(11, 1000), ite(k = 6, pair(12, 1000), ite(k = 7, pair(13, 1000),
+  ite(k = 8, pair(14, 1000), ite(k = 9, pair(23, 0), ite(k = 10, pair(25, 140737488351184),
+  ite(k = 11, pair(31, 140737488351204), pair(0, 0)))))))))))))
+def wit.auxv := fn_build(13, k. wit.aux_at(k))
+
+// (the stack's pages [lo, top) and its data's top)
+abbrev wit.LO := 34359738335
+abbrev wit.TOP := 34359738367
+
+// ----------------------------------------------------------------------
+//  The witness's pages
+
+theorem wit.pg: all p. p in omega -> int_lt(p, 34359738367) -> wit.m0.vm.pages[p] = wit.pg_at(p)
+proof
+  fix p
+  assume hp hl
+  have m: p in set_select(omega, q. int_lt(q, 34359738367)) by sel(taut(hp, hl))
+  have a := apply(app_fn_build[v := q. wit.pg_at(q)], m)
+  show by defs(simp(a), wit.m0, wit.vm, wit.pages)
+qed
+
+// the stack's pages
+theorem wit.pg_stack: all p. p in omega -> int_le(wit.LO, p) -> int_lt(p, wit.TOP) -> wit.m0.vm.pages[p] = wit.PG(true, true, false, 2)
+proof
+  fix p
+  assume hp h1 h2
+  have v := apply(wit.pg, hp, h2)
+  show by simp(v, h1, h2, wit.pg_at)
+qed
+
+// a mapped page: the stack's or the image's
+theorem wit.mapped_at: all p. p in omega -> x86_64_linux.mapped(wit.m0.vm, p) ->
+  (int_le(wit.LO, p) && int_lt(p, wit.TOP)) || (int_le(1024, p) && int_le(p, 1032))
+proof
+  fix p
+  assume hp hm
+  have lt nn := expand(hm, x86_64_linux.mapped)
+  have l2: int_lt(p, wit.TOP) by arith(lt, (x86_64_linux.TASK_SIZE = 140737488351232 by eval()), (x86_64_linux.PAGE = 4096 by eval()))
+  have v := apply(wit.pg, hp, l2)
+  cases from ((int_le(wit.LO, p) && int_lt(p, wit.TOP)) || (int_le(1024, p) && int_le(p, 1032)) || int_lt(p, 1024) ||
+    (int_lt(1032, p) && int_lt(p, wit.LO)) by arith(l2))
+  case h proof
+    show by taut(h)
+  qed
+  case h proof
+    show by taut(h)
+  qed
+  case b proof
+    have z: wit.m0.vm.pages[p] = none by simp(v, (!int_le(wit.LO, p) by arith(b)), (!int_le(1031, p) by arith(b)), (!(p = 1030) by arith(b)),
+      (!int_le(1025, p) by arith(b)), (!(p = 1024) by arith(b)), wit.pg_at)
+    show by taut(nn, z)
+  qed
+  case b proof
+    have b1 b2 := b
+    have z: wit.m0.vm.pages[p] = none by simp(v, (!int_le(wit.LO, p) by arith(b2)), (!int_le(p, 1032) by arith(b1)), (!(p = 1030) by arith(b1)),
+      (!int_le(p, 1029) by arith(b1)), (!(p = 1024) by arith(b1)), wit.pg_at)
+    show by taut(nn, z)
+  qed
+qed
+
+// an image page: the load last on it
+theorem wit.img_tab: all p. p in omega -> int_le(1024, p) -> int_le(p, 1032) -> ex i. i in omega && ui.TAB(i, p)
+proof
+  fix p
+  assume hp h1 h2
+  cases from (p = 1024 || (int_le(1025, p) && int_le(p, 1029)) || p = 1030 || (int_le(1031, p) && int_le(p, 1032)) by arith(h1, h2))
+  case c proof
+    show by ex_intro({0}, taut((0 in omega by eval()), (0 = 0 by eval()), c))
+  qed
+  case c proof
+    show by ex_intro({1}, taut((1 in omega by eval()), (1 = 1 by eval()), c))
+  qed
+  case c proof
+    show by ex_intro({2}, taut((2 in omega by eval()), (2 = 2 by eval()), c))
+  qed
+  case c proof
+    show by ex_intro({3}, taut((3 in omega by eval()), (3 = 3 by eval()), c))
+  qed
+qed
+
+// an image page (one with a load last on it): its load's protection
+theorem wit.pg_img: all i p. i in omega -> p in omega -> ui.TAB(i, p) ->
+  wit.m0.vm.pages[p] = some(fn_update(fn_update(empty, "prot", x86_64_linux.seg_prot(x86_64_linux.segment(musl_malloc.file, i))), "kind", 0))
+proof
+  fix i p
+  assume hi hp ht
+  cases from ht
+  case e proof
+    have e1 e2 := e
+    show := rewrite(sym(e1), rewrite(sym(e2), (wit.m0.vm.pages[1024] = some(fn_update(fn_update(empty, "prot", x86_64_linux.seg_prot(x86_64_linux.segment(musl_malloc.file, 0))), "kind", 0)) by eval())))
+  qed
+  case e proof
+    have e1 a1 a2 := e
+    have pr: x86_64_linux.seg_prot(x86_64_linux.segment(musl_malloc.file, 1)) = fn_update(fn_update(fn_update(empty, "r", true), "w", false), "x", true) by eval()
+    have v := apply(wit.pg, hp, arith(a2))
+    have w: wit.m0.vm.pages[p] = wit.PG(true, false, true, 0) by simp(v, (!int_le(wit.LO, p) by arith(a2)), (!int_le(1031, p) by arith(a2)), (!(p = 1030) by arith(a2)), a1, a2, wit.pg_at)
+    show := rewrite(sym(e1), rewrite(sym(pr), w))
+  qed
+  case e proof
+    have e1 e2 := e
+    show := rewrite(sym(e1), rewrite(sym(e2), (wit.m0.vm.pages[1030] = some(fn_update(fn_update(empty, "prot", x86_64_linux.seg_prot(x86_64_linux.segment(musl_malloc.file, 2))), "kind", 0)) by eval())))
+  qed
+  case e proof
+    have e1 a1 a2 := e
+    have pr: x86_64_linux.seg_prot(x86_64_linux.segment(musl_malloc.file, 3)) = fn_update(fn_update(fn_update(empty, "r", true), "w", true), "x", false) by eval()
+    have v := apply(wit.pg, hp, arith(a2))
+    have w: wit.m0.vm.pages[p] = wit.PG(true, true, false, 0) by simp(v, (!int_le(wit.LO, p) by arith(a2)), a1, a2, wit.pg_at)
+    show := rewrite(sym(e1), rewrite(sym(pr), w))
+  qed
+qed
+
+// ----------------------------------------------------------------------
+//  The witness's memory: the loads' bytes
+
+theorem wit.byte: all a. a in omega -> int_lt(a, 18446744073709551616) -> wit.m0.vm.bytes[a] = wit.byte_at(a)
+proof
+  fix a
+  assume ha hl
+  have ab: a in bits(64) by arith(ha, hl)
+  have v := apply(app_fn_build[v := x. wit.byte_at(x)], ab)
+  show by defs(simp(v), wit.m0, wit.vm, wit.bytes)
+qed
+
+// (a load whose file bytes are all it has: no .bss)
+theorem wit.no_bss: all s vm. s.filesz = s.memsz ->
+  all a. a in omega -> int_le(int_add(s.vaddr, s.filesz), a) && int_lt(a, int_add(s.vaddr, s.memsz)) -> vm.bytes[bits_of_int(64, a)] = 0
+proof
+  fix s vm
+  assume e
+  fix a
+  assume ha hr
+  have r1 r2 := hr
+  have f: false by arith(r1, r2, e)
+  show by taut(f)
+qed
+
+// the first page (the ELF and program headers)
+theorem wit.seg0: x86_64_linux.segment_bytes(musl_malloc.file, x86_64_linux.segment(musl_malloc.file, 0), wit.m0.vm)
+proof
+  let F := musl_malloc.file
+  let S := x86_64_linux.segment(F, 0)
+  have {g0 = s0} := ui.elf
+  have _ _ o v f m := expand(g0, ui.segis)
+  have a1: all a. a in omega -> int_le(S.vaddr, a) && int_lt(a, int_add(S.vaddr, S.filesz)) -> wit.m0.vm.bytes[bits_of_int(64, a)] = F[int_add(S.offset, int_sub(a, S.vaddr))] proof
+    fix a
+    assume ha hr
+    have r1 r2 := hr
+    have lo: int_le(4194304, a) by arith(r1, v)
+    have hi: int_lt(a, 4194816) by arith(r2, v, f)
+    have b := apply(wit.byte, ha, arith(hi))
+    have w: wit.m0.vm.bytes[bits_of_int(64, a)] = F[int_sub(a, 4194304)] by simp(b, (!int_le(140737488350944, a) by arith(hi)), (!int_le(4227016, a) by arith(hi)),
+      (!int_le(4218880, a) by arith(hi)), (!int_le(4198400, a) by arith(hi)), lo, hi, wit.byte_at)
+    show by simp(w, o, v, (int_add(0, int_sub(a, 4194304)) = int_sub(a, 4194304) by arith()))
+  qed
+  have a2 := apply(wit.no_bss[s := S, vm := wit.m0.vm], arith(f, m))
+  show by defs(taut(a1, a2), x86_64_linux.segment_bytes)
+qed
+
+// the text
+theorem wit.seg1: x86_64_linux.segment_bytes(musl_malloc.file, x86_64_linux.segment(musl_malloc.file, 1), wit.m0.vm)
+proof
+  let F := musl_malloc.file
+  let S := x86_64_linux.segment(F, 1)
+  have {g1 = s1} := ui.elf
+  have _ _ o v f m := expand(g1, ui.segis)
+  have a1: all a. a in omega -> int_le(S.vaddr, a) && int_lt(a, int_add(S.vaddr, S.filesz)) -> wit.m0.vm.bytes[bits_of_int(64, a)] = F[int_add(S.offset, int_sub(a, S.vaddr))] proof
+    fix a
+    assume ha hr
+    have r1 r2 := hr
+    have lo: int_le(4198400, a) by arith(r1, v)
+    have hi: int_lt(a, 4216692) by arith(r2, v, f)
+    have b := apply(wit.byte, ha, arith(hi))
+    have w: wit.m0.vm.bytes[bits_of_int(64, a)] = F[int_add(int_sub(a, 4198400), 4096)] by simp(b, (!int_le(140737488350944, a) by arith(hi)), (!int_le(4227016, a) by arith(hi)),
+      (!int_le(4218880, a) by arith(hi)), lo, hi, wit.byte_at)
+    show by simp(w, o, v, (int_add(4096, int_sub(a, 4198400)) = int_add(int_sub(a, 4198400), 4096) by arith()))
+  qed
+  have a2 := apply(wit.no_bss[s := S, vm := wit.m0.vm], arith(f, m))
+  show by defs(taut(a1, a2), x86_64_linux.segment_bytes)
+qed
+
+// the read-only data
+theorem wit.seg2: x86_64_linux.segment_bytes(musl_malloc.file, x86_64_linux.segment(musl_malloc.file, 2), wit.m0.vm)
+proof
+  let F := musl_malloc.file
+  let S := x86_64_linux.segment(F, 2)
+  have {g2 = s2} := ui.elf
+  have _ _ o v f m := expand(g2, ui.segis)
+  have a1: all a. a in omega -> int_le(S.vaddr, a) && int_lt(a, int_add(S.vaddr, S.filesz)) -> wit.m0.vm.bytes[bits_of_int(64, a)] = F[int_add(S.offset, int_sub(a, S.vaddr))] proof
+    fix a
+    assume ha hr
+    have r1 r2 := hr
+    have lo: int_le(4218880, a) by arith(r1, v)
+    have hi: int_lt(a, 4219272) by arith(r2, v, f)
+    have b := apply(wit.byte, ha, arith(hi))
+    have w: wit.m0.vm.bytes[bits_of_int(64, a)] = F[int_add(int_sub(a, 4218880), 24576)] by simp(b, (!int_le(140737488350944, a) by arith(hi)), (!int_le(4227016, a) by arith(hi)),
+      lo, hi, wit.byte_at)
+    show by simp(w, o, v, (int_add(24576, int_sub(a, 4218880)) = int_add(int_sub(a, 4218880), 24576) by arith()))
+  qed
+  have a2 := apply(wit.no_bss[s := S, vm := wit.m0.vm], arith(f, m))
+  show by defs(taut(a1, a2), x86_64_linux.segment_bytes)
+qed
+
+// the data and its .bss
+theorem wit.seg3: x86_64_linux.segment_bytes(musl_malloc.file, x86_64_linux.segment(musl_malloc.file, 3), wit.m0.vm)
+proof
+  let F := musl_malloc.file
+  let S := x86_64_linux.segment(F, 3)
+  have {g3 = s3} := ui.elf
+  have _ _ o v f m := expand(g3, ui.segis)
+  have a1: all a. a in omega -> int_le(S.vaddr, a) && int_lt(a, int_add(S.vaddr, S.filesz)) -> wit.m0.vm.bytes[bits_of_int(64, a)] = F[int_add(S.offset, int_sub(a, S.vaddr))] proof
+    fix a
+    assume ha hr
+    have r1 r2 := hr
+    have lo: int_le(4227016, a) by arith(r1, v)
+    have hi: int_lt(a, 4227088) by arith(r2, v, f)
+    have b := apply(wit.byte, ha, arith(hi))
+    have w: wit.m0.vm.bytes[bits_of_int(64, a)] = F[int_add(int_sub(a, 4227016), 28616)] by simp(b, (!int_le(140737488350944, a) by arith(hi)), lo,
+      (int_lt(a, 4228688) by arith(hi)), hi, wit.byte_at)
+    show by simp(w, o, v, (int_add(28616, int_sub(a, 4227016)) = int_add(int_sub(a, 4227016), 28616) by arith()))
+  qed
+  have a2: all a. a in omega -> int_le(int_add(S.vaddr, S.filesz), a) && int_lt(a, int_add(S.vaddr, S.memsz)) -> wit.m0.vm.bytes[bits_of_int(64, a)] = 0 proof
+    fix a
+    assume ha hr
+    have r1 r2 := hr
+    have lo: int_le(4227088, a) by arith(r1, v, f)
+    have hi: int_lt(a, 4228688) by arith(r2, v, m)
+    have b := apply(wit.byte, ha, arith(hi))
+    show by simp(b, (!int_le(140737488350944, a) by arith(hi)), (int_le(4227016, a) by arith(lo)), hi, (!int_lt(a, 4227088) by arith(lo)), wit.byte_at)
+  qed
+  show by defs(taut(a1, a2), x86_64_linux.segment_bytes)
+qed
+
+// the image ends with the data's .bss at 4228688 (a load's end at most that,
+// the data's that)
+theorem wit.image_end: int_le(x86_64_linux.image_end(musl_malloc.file), 4228688)
+proof
+  let F := musl_malloc.file
+  let S := set_select(omega, x. ex i. i in omega && (x86_64_linux.is_load(F, i) && x = int_add(x86_64_linux.segment(F, i).vaddr, x86_64_linux.segment(F, i).memsz)))
+  have {g0 = s0, g1 = s1, g2 = s2, g3 = s3} := ui.elf
+  have _ _ _ v0 _ m0 := expand(g0, ui.segis)
+  have _ _ _ v1 _ m1 := expand(g1, ui.segis)
+  have _ _ _ v2 _ m2 := expand(g2, ui.segis)
+  have _ _ _ v3 _ m3 := expand(g3, ui.segis)
+  have sb: all x. x in S -> int_le(x, 4228688) proof
+    fix x
+    assume hx
+    have _ e := unsel(hx)
+    obtain i, hi hl he from e
+    cases from apply(ui.loads, hi, hl)
+    case q proof
+      show by arith(rewrite(q, he), v0, m0)
+    qed
+    case q proof
+      show by arith(rewrite(q, he), v1, m1)
+    qed
+    case q proof
+      show by arith(rewrite(q, he), v2, m2)
+    qed
+    case q proof
+      show by arith(rewrite(q, he), v3, m3)
+    qed
+  qed
+  have l3 := apply(ui.load_i, (3 in omega by eval()), (int_le(3, 3) by eval()))
+  have in3: 4228688 in S by sel(taut((4228688 in omega by eval()),
+    (ex i. i in omega && (x86_64_linux.is_load(F, i) && 4228688 = int_add(x86_64_linux.segment(F, i).vaddr, x86_64_linux.segment(F, i).memsz)) by
+      ex_intro({3}, taut((3 in omega by eval()), l3, (4228688 = int_add(x86_64_linux.segment(F, 3).vaddr, x86_64_linux.segment(F, 3).memsz) by arith(v3, m3)))))))
+  have exm: ex m. m in S && (all x. x in S -> int_le(x, m)) by ex_intro({4228688}, taut(in3, sb))
+  have mx: int_max(S) in S by defs(taut(apply(choose_spec[p := m. m in S && (all x. x in S -> int_le(x, m))], exm)), int_max)
+  show by defs(apply(sb, mx), x86_64_linux.image_end)
+qed
+
+// the image as exec loads it: each page the protection of the load last
+// on it, each load's bytes
+theorem wit.image: x86_64_linux.image_loaded(musl_malloc.file, wit.m0.vm)
+proof
+  let F := musl_malloc.file
+  have il1: all i p. i in omega && p in omega -> x86_64_linux.last_on_page(F, i, p) ->
+      wit.m0.vm.pages[p] = some(fn_update(fn_update(empty, "prot", x86_64_linux.seg_prot(x86_64_linux.segment(F, i))), "kind", 0)) proof
+    fix i p
+    assume hip hl
+    have hi hp := hip
+    have l s _ := expand(hl, x86_64_linux.last_on_page)
+    have q := apply(ui.loads, hi, l)
+    have t := apply(ui.seg_pages, hi, (int_le(i, 3) by arith(q)), hp, s)
+    show := apply(wit.pg_img, hi, hp, t)
+  qed
+  have il2: all i. i in omega -> x86_64_linux.is_load(F, i) -> x86_64_linux.segment_bytes(F, x86_64_linux.segment(F, i), wit.m0.vm) proof
+    fix i
+    assume hi hl
+    cases from apply(ui.loads, hi, hl)
+    case e := rewrite(sym(e), wit.seg0)
+    case e := rewrite(sym(e), wit.seg1)
+    case e := rewrite(sym(e), wit.seg2)
+    case e := rewrite(sym(e), wit.seg3)
+  qed
+  show by defs(taut(il1, il2), x86_64_linux.image_loaded)
+qed
+
+// the stack: its 32 pages, nothing else a stack page, room to grow down
+// to its floor
+theorem wit.stack_pages: x86_64_linux.stack_pages(wit.m0.vm, wit.LO, wit.TOP)
+proof
+  let V := wit.m0.vm
+  have k0: int_lt(wit.LO, wit.TOP) && int_le(wit.TOP, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) && V.stack_top = int_mul(wit.TOP, x86_64_linux.PAGE) &&
+    int_le(int_mul(int_sub(wit.TOP, wit.LO), x86_64_linux.PAGE), V.stack_limit) && int_le(x86_64_linux.STACK_GUARD_GAP, x86_64_linux.stack_floor(V)) by eval()
+  have k1: all p. p in omega -> int_le(wit.LO, p) && int_lt(p, wit.TOP) -> V.pages[p] = wit.PG(true, true, false, 2) proof
+    fix p
+    assume hp hr
+    have r1 r2 := hr
+    show := apply(wit.pg_stack, hp, r1, r2)
+  qed
+  // (a mapped page below the stack: the image's, kind 0)
+  have img: all p. p in omega -> int_lt(p, wit.LO) -> x86_64_linux.mapped(V, p) -> int_le(p, 1032) && snd(V.pages[p]).kind = 0 proof
+    fix p
+    assume hp hl hm
+    have r := apply(wit.mapped_at, hp, hm)
+    have ir: int_le(1024, p) && int_le(p, 1032) by taut(r, (!int_le(wit.LO, p) by arith(hl)))
+    have r1 r2 := ir
+    obtain i, hi ht from apply(wit.img_tab, hp, r1, r2)
+    have pg := apply(wit.pg_img, hi, hp, ht)
+    show by taut(r2, (snd(V.pages[p]).kind = 0 by simp(pg, ui.snd_some)))
+  qed
+  have k2: all p. p in omega -> (int_lt(p, wit.LO) || int_le(wit.TOP, p)) && x86_64_linux.mapped(V, p) -> !(snd(V.pages[p]).kind = 2) proof
+    fix p
+    assume hp hr
+    have ro hm := hr
+    have lt _ := expand(hm, x86_64_linux.mapped)
+    have hl: int_lt(p, wit.LO) by arith(ro, lt, (x86_64_linux.TASK_SIZE = 140737488351232 by eval()), (x86_64_linux.PAGE = 4096 by eval()))
+    have _ k := apply(img, hp, hl, hm)
+    show by arith(k)
+  qed
+  have k3: all p. p in omega -> int_lt(p, wit.LO) && x86_64_linux.mapped(V, p) ->
+      int_le(int_add(int_mul(int_add(p, 1), x86_64_linux.PAGE), x86_64_linux.STACK_GUARD_GAP), x86_64_linux.stack_floor(V)) proof
+    fix p
+    assume hp hr
+    have hl hm := hr
+    have b _ := apply(img, hp, hl, hm)
+    show by arith(b, (x86_64_linux.PAGE = 4096 by eval()), (x86_64_linux.STACK_GUARD_GAP = 1048576 by eval()), (x86_64_linux.stack_floor(V) = 140737479962624 by eval()))
+  qed
+  show by defs(taut(k0, k1, k2, k3), x86_64_linux.stack_pages)
+qed
+
+// wit.m0 an exec state of the binary
+theorem wit.exec: x86_64_linux.exec_state(musl_malloc.file, wit.argv, empty, wit.m0)
+proof
+  let F := musl_malloc.file
+  let M := wit.m0
+  have e1: x86_64_linux.elf_ok(F) by eval()
+  // (a page neither the image's nor the stack's: not mapped)
+  have s2: all p. p in omega -> (x86_64_linux.mapped(M.vm, p) && !x86_64_linux.covered(F, p)) && !(int_le(wit.LO, p) && int_lt(p, wit.TOP)) ->
+      !snd(M.vm.pages[p]).prot.w proof
+    fix p
+    assume hp hr
+    have hm hc hs := hr
+    have r := apply(wit.mapped_at, hp, hm)
+    have ir: int_le(1024, p) && int_le(p, 1032) by taut(r, hs)
+    have r1 r2 := ir
+    obtain i, hi ht from apply(wit.img_tab, hp, r1, r2)
+    have l s _ := expand(apply(ui.last_tab, hi, hp, ht), x86_64_linux.last_on_page)
+    have cv: x86_64_linux.covered(F, p) by defs(ex_intro({i}, taut(hi, l, s)), x86_64_linux.covered)
+    show by taut(hc, cv)
+  qed
+  // (the image's pages below the stack's)
+  have s3: all i p. i in omega && p in omega -> x86_64_linux.is_load(F, i) && x86_64_linux.seg_page(x86_64_linux.segment(F, i), p) -> int_lt(p, wit.LO) proof
+    fix i p
+    assume hip hr
+    have hi hp := hip
+    have l s := hr
+    have q := apply(ui.loads, hi, l)
+    have t := apply(ui.seg_pages, hi, (int_le(i, 3) by arith(q)), hp, s)
+    show by arith(t)
+  qed
+  have s4: !x86_64_linux.covered(F, 0) -> !x86_64_linux.mapped(M.vm, 0) by taut((!x86_64_linux.mapped(M.vm, 0) by eval()))
+  have s5: int_le(int_mul(wit.LO, x86_64_linux.PAGE), M.gpr[4]) && int_lt(M.gpr[4], int_mul(wit.TOP, x86_64_linux.PAGE)) by eval()
+  have s6: ord_lt(seq_len(wit.argv), int_pow(2, 31)) && ord_lt(seq_len(empty), int_pow(2, 31)) by eval()
+  have s7: x86_64_linux.stack_layout(M.vm, M.gpr[4], wit.argv, empty, wit.auxv) by eval()
+  have s8: x86_64_linux.auxv_ok(F, M.vm, M.os, wit.auxv) by eval()
+  have s9: x86_64_linux.stack_data(M.vm, M.gpr[4], int_mul(wit.TOP, x86_64_linux.PAGE), wit.argv, empty, wit.auxv) proof
+    let SP := M.gpr[4]
+    let T := int_mul(wit.TOP, x86_64_linux.PAGE)
+    let S := bytes_seq(bytes"746573745f6d616c6c6f63")
+    have k4: x86_64_linux.in_stack(SP, T, SP, int_add(int_add(int_add(24, int_mul(8, seq_len(wit.argv))), int_mul(8, seq_len(empty))), int_mul(16, seq_len(wit.auxv)))) &&
+      (all i. i in omega -> int_lt(i, seq_len(wit.argv)) -> x86_64_linux.in_stack(SP, T, x86_64_linux.u64_at(M.vm, int_add(int_add(SP, 8), int_mul(8, i))), int_add(seq_len(wit.argv[i]), 1))) &&
+      (all i. i in omega -> int_lt(i, seq_len(empty)) -> x86_64_linux.in_stack(SP, T, x86_64_linux.u64_at(M.vm, int_add(int_add(int_add(SP, 16), int_mul(8, seq_len(wit.argv))), int_mul(8, i))), int_add(seq_len(empty[i]), 1))) &&
+      (ex q. q in omega && (x86_64_linux.aux(wit.auxv, x86_64_linux.AT_RANDOM, q) && x86_64_linux.in_stack(SP, T, q, 16))) by eval()
+    // (the executable's name: "test_malloc")
+    have sl: S in list_type(bits(8)) := mp(apply(ui.bytes_list[c := S], refl({S})), eval(), eval())
+    have k5: (140737488351204 in omega && S in list_type(bits(8))) && ((x86_64_linux.aux(wit.auxv, x86_64_linux.AT_EXECFN, 140737488351204) &&
+      x86_64_linux.cstring(M.vm, 140737488351204, S)) && x86_64_linux.in_stack(SP, T, 140737488351204, int_add(seq_len(S), 1))) by taut(sl, (140737488351204 in omega by eval()),
+      (x86_64_linux.aux(wit.auxv, x86_64_linux.AT_EXECFN, 140737488351204) && x86_64_linux.cstring(M.vm, 140737488351204, S) &&
+       x86_64_linux.in_stack(SP, T, 140737488351204, int_add(seq_len(S), 1)) by eval()))
+    have e5: ex q s. (q in omega && s in list_type(bits(8))) && ((x86_64_linux.aux(wit.auxv, x86_64_linux.AT_EXECFN, q) && x86_64_linux.cstring(M.vm, q, s)) &&
+      x86_64_linux.in_stack(SP, T, q, int_add(seq_len(s), 1))) by ex_intro({140737488351204}, {S}, k5)
+    show by defs(taut(k4, e5), x86_64_linux.stack_data)
+  qed
+  have b1: int_mod(M.vm.brk_start, x86_64_linux.PAGE) = 0 && int_le(x86_64_linux.PAGE, M.vm.brk_start) &&
+    int_le(M.vm.brk_start, x86_64_linux.TASK_SIZE) && M.vm.brk = M.vm.brk_start by eval()
+  have b2: int_le(x86_64_linux.image_end(F), M.vm.brk_start) by arith(wit.image_end, (M.vm.brk_start = 4296704 by eval()))
+  have r1: M.rip = x86_64_linux.entry_of(F) && int_mod(M.gpr[4], 16) = 0 by eval()
+  have r2: (all r. r in x86_64_linux.Reg -> !(r = 4) -> M.gpr[r] = 0) && (all r. r in x86_64_linux.Reg -> M.xmm[r] = 0) by eval()
+  have r3: M.flags = fn_update(fn_update(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "cf", false), "pf", false), "af", false), "zf", false), "sf", false), "df", false), "of", false) &&
+    M.fs_base = 0 && M.gs_base = 0 && M.os.events = empty by eval()
+  // (the stack's pages, the auxv)
+  have au: wit.auxv in list_type(cart(omega, omega)) by defs(apply(build_list[d := 13, v := k. wit.aux_at(k), t := cart(omega, omega)], eval(), eval()), wit.auxv)
+  have st: (wit.LO in omega && wit.TOP in omega) && wit.auxv in list_type(cart(omega, omega)) by taut(au, (wit.LO in omega by eval()), (wit.TOP in omega by eval()))
+  have ex: ex lo top auxv. ((lo in omega && top in omega) && auxv in list_type(cart(omega, omega))) && ((((((((((x86_64_linux.stack_pages(M.vm, lo, top) &&
+      (all p. p in omega -> (x86_64_linux.mapped(M.vm, p) && !x86_64_linux.covered(F, p)) && !(int_le(lo, p) && int_lt(p, top)) -> !snd(M.vm.pages[p]).prot.w)) &&
+      (all i p. i in omega && p in omega -> x86_64_linux.is_load(F, i) && x86_64_linux.seg_page(x86_64_linux.segment(F, i), p) -> int_lt(p, lo))) &&
+      (!x86_64_linux.covered(F, 0) -> !x86_64_linux.mapped(M.vm, 0))) && int_le(int_mul(lo, x86_64_linux.PAGE), M.gpr[4])) && int_lt(M.gpr[4], int_mul(top, x86_64_linux.PAGE))) &&
+      ord_lt(seq_len(wit.argv), int_pow(2, 31))) && ord_lt(seq_len(empty), int_pow(2, 31))) && x86_64_linux.stack_layout(M.vm, M.gpr[4], wit.argv, empty, auxv)) &&
+      x86_64_linux.auxv_ok(F, M.vm, M.os, auxv)) && x86_64_linux.stack_data(M.vm, M.gpr[4], int_mul(top, x86_64_linux.PAGE), wit.argv, empty, auxv))
+    by ex_intro({wit.LO}, {wit.TOP}, {wit.auxv}, taut(st, wit.stack_pages, s2, s3, s4, s5, s6, s7, s8, s9))
+  show by defs(taut(e1, wit.image, ex, b1, b2, r1, r2, r3), x86_64_linux.exec_state)
+qed
