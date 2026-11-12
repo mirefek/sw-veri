@@ -99,8 +99,11 @@ impl State {
             Arg::Proof(PE::Ref(n)) => Ok(n.clone()),
             _ => err("run_steps(STOP, STEP): two lemmas' names"),
         };
-        let [a_stop, a_step] = args else { return err("run_steps(STOP, STEP): two lemmas' names") };
+        let [a_stop, a_step, more @ ..] = args else { return err("run_steps(STOP, STEP, L..): lemmas' names") };
         let (stop, step) = (self.fact(env, &name(a_stop)?)?, self.fact(env, &name(a_step)?)?);
+        // (L..: premises of every evaluation -- a loop's outcome by its
+        // lemma, `all xs. A -> runs(Q, S, O)`)
+        let extra: Vec<Seq> = more.iter().map(|a| self.fact(env, &name(a)?)).collect::<KResult<_>>()?;
         let sym = |n: &str| env.sym_by_name.get(n).copied().ok_or_else(|| KernelError(format!("run_steps: no `{}`", n)));
         let (runs, okc) = (sym("runs")?, sym("ok")?);
         // the goal: ex x. C(.., m0, x)
@@ -150,7 +153,9 @@ impl State {
         let envm = env;
         let env: &Env = &*envm;
         // (the evaluations share memos: the states share most of their parts)
-        let mut ses = lg.eval_session(env);
+        let known: Vec<Term> = extra.iter().map(|s| s.concl().clone()).collect();
+        let xs: Vec<&Seq> = extra.iter().collect();
+        let mut ses = lg.eval_session(env, &known);
         let try_stop = |ses: &mut sl_kernel::ext::simp::EvalSession, m: &Term| -> Option<Seq> {
             let mut at = fixed.clone();
             at.insert(vm, m.clone());
@@ -160,7 +165,7 @@ impl State {
             if !pmatch(&sp.concl, &target, &sp.vars, &mut s2) || sp.vars.iter().any(|v| !s2.contains_key(v)) {
                 return None;
             }
-            let ps: Vec<Seq> = sp.prems.iter().map(|q| Seq::eval_goal_in(env, ses, &subst(env, q, &s2))).collect::<KResult<_>>().ok()?;
+            let ps: Vec<Seq> = sp.prems.iter().map(|q| Seq::eval_goal_in(env, ses, &xs, &subst(env, q, &s2))).collect::<KResult<_>>().ok()?;
             let vals: Vec<Term> = sp.vars.iter().map(|v| s2[v].clone()).collect();
             instance(env, lg, &stop, &vals, &ps.iter().collect::<Vec<_>>()).ok()
         };
@@ -190,7 +195,7 @@ impl State {
                     continue;
                 }
                 let q = subst(env, q, &at);
-                side.push(Seq::eval_goal_in(env, &mut ses, &q).map_err(|e| KernelError(format!("run_steps: step {}: STEP's premise `{}`: {}", k, Printer::new(env).short(&q), e.0)))?);
+                side.push(Seq::eval_goal_in(env, &mut ses, &xs, &q).map_err(|e| KernelError(format!("run_steps: step {}: STEP's premise `{}`: {}", k, Printer::new(env).short(&q), e.0)))?);
             }
             let t2 = std::time::Instant::now();
             tm[1] += (t2 - t1).as_secs_f64();
@@ -205,7 +210,7 @@ impl State {
             let Node::App(_, ob) = o.node() else { unreachable!() };
             let (m1, v) = (ob[0].clone(), ob[1].clone());
             let rg = Term::app(runs, vec![prog.clone(), m.clone(), o.clone()]);
-            let run = Seq::eval_goal_in(env, &mut ses, &rg).map_err(|e| KernelError(format!("run_steps: step {}: the step's run: {}", k, e.0)))?;
+            let run = Seq::eval_goal_in(env, &mut ses, &xs, &rg).map_err(|e| KernelError(format!("run_steps: step {}: the step's run: {}", k, e.0)))?;
             tm[3] += t3.elapsed().as_secs_f64();
             if trace {
                 let rss = std::fs::read_to_string("/proc/self/statm").ok().and_then(|s| s.split_whitespace().nth(1).and_then(|x| x.parse::<u64>().ok())).unwrap_or(0) * 4096 >> 20;

@@ -27,9 +27,9 @@ const UNSOLVED: &str = "unsolved: ";
 /// the iterations a loop is evaluated for (each loop's own, its exit
 /// included): the spec's fixed-size loops -- an access's bytes (at most 16),
 /// an instruction's (at most 15), an immediate's; a loop as long as its
-/// data (a rep instruction's) is a lemma's (an invariant), not evaluated.
-/// (17 then; 40 until memset's `rep stosq` (38 words) is a lemma's)
-const LOOP_MAX: usize = 40;
+/// data (a rep instruction's) is a lemma's (an invariant), not evaluated --
+/// given as a premise `all xs. A -> runs(Q, S, O)` (`RunLemma`).
+const LOOP_MAX: usize = 17;
 /// the largest numeral whose elements a membership is solved by (a
 /// binary's bytes, each)
 const ENUM_MAX: u64 = 1 << 16;
@@ -48,6 +48,10 @@ pub(super) struct Ev<'s, 'a> {
     used: std::cell::RefCell<Vec<bool>>,
     /// terms in univ(1) by a premise `t in univ(1)` (its index)
     univ_known: Vec<(Term, usize)>,
+    /// premises not equations: true where their truth is asked (the index)
+    known_true: Vec<(Term, usize)>,
+    /// premises `all xs. A -> runs(Q, S, O)`: outcomes of Q
+    run_lemmas: Vec<RunLemma>,
     /// shared terms (no bound variables) shown in univ(1) (`in_univ1`)
     univ_memo: std::cell::RefCell<std::collections::HashSet<Term>>,
     /// counters (printed with EVAL_STATS=1): subst, norm, truth, structural,
@@ -60,6 +64,20 @@ pub(super) struct Ev<'s, 'a> {
     /// a part of the solutions (a pick) in the current computation: an
     /// empty result then not `false`
     partial: bool,
+}
+
+/// A premise `all xs. A1 -> .. -> runs(Q, S, O)` (xs fresh unknowns): where
+/// the outcomes of Q from a state matching S are asked and the A's
+/// evaluate true, O is one of them -- a loop's outcome by its lemma (an
+/// invariant), not by running it. A part of the outcomes (as a pick).
+#[derive(Clone)]
+struct RunLemma {
+    vars: Vec<VarId>,
+    prems: Vec<Term>,
+    prog: Term,
+    st: Term,
+    out: Term,
+    idx: usize,
 }
 
 fn size(t: &Term) -> u64 {
@@ -127,7 +145,7 @@ fn split_proj(t: &Term, w: VarId, fst: SymId, snd: SymId, a: &Term, b: &Term) ->
 
 impl<'s, 'a> Ev<'s, 'a> {
     pub(super) fn new(sp: &'s Simp<'a>, fresh: u32) -> Self {
-        Ev { sp, fresh, iters: 0, memo: HashMap::new(), norm_memo: HashMap::new(), known: Vec::new(), used: Default::default(), univ_known: Vec::new(), univ_memo: Default::default(), stats: Default::default(), pick: false, partial: false }
+        Ev { sp, fresh, iters: 0, memo: HashMap::new(), norm_memo: HashMap::new(), known: Vec::new(), used: Default::default(), univ_known: Vec::new(), known_true: Vec::new(), run_lemmas: Vec::new(), univ_memo: Default::default(), stats: Default::default(), pick: false, partial: false }
     }
 
     /// Premises `lhs = value` (value closed) to use while evaluating.
@@ -144,11 +162,67 @@ impl<'s, 'a> Ev<'s, 'a> {
                     self.univ_known.push((self.sp.term(&ab[0]), self.known.len()));
                 }
             }
+            // `all xs. A1 -> .. -> runs(Q, S, O)`: an outcome of Q (`outcomes`)
+            if let Some(l) = self.run_lemma(e, self.known.len()) {
+                self.run_lemmas.push(l);
+            } else {
+                // another proposition: true where its truth is asked
+                let pt = self.sp.prop(&self.sp.term(e), Pol::Other);
+                self.known_true.push((pt, self.known.len()));
+            }
             // not an equation: kept (unused) so that indices match the premises
             self.known.push((e.clone(), e.clone()));
         }
         self.used = std::cell::RefCell::new(vec![false; eqs.len()]);
         self
+    }
+
+    /// `e` as a run lemma: its variables fresh unknowns
+    fn run_lemma(&mut self, e: &Term, idx: usize) -> Option<RunLemma> {
+        let (all, imp, runs) = (self.sp.s.all, self.sp.s.imp, self.sp.s.runs?);
+        let mut t = e.clone();
+        let mut vars = Vec::new();
+        while let Node::App(q, b) = t.node() {
+            if *q != all {
+                break;
+            }
+            let (v, vt) = self.var();
+            t = self.sp.env.instantiate_params_m(&b[0], &[vt]);
+            vars.push(v);
+        }
+        let mut prems = Vec::new();
+        while let Node::App(q, b) = t.node() {
+            if *q != imp {
+                break;
+            }
+            prems.push(b[0].clone());
+            t = b[1].clone();
+        }
+        match t.node() {
+            Node::App(r, b) if is(*r, Some(runs)) && b.len() == 3 => {
+                Some(RunLemma { vars, prems, prog: self.sp.term(&b[0]), st: b[1].clone(), out: b[2].clone(), idx })
+            }
+            _ => None,
+        }
+    }
+
+    /// an outcome of p from st by a run lemma whose premises evaluate true
+    fn run_lemma_outcome(&mut self, p: &Term, st: &Term) -> Option<Term> {
+        for l in self.run_lemmas.clone() {
+            if l.prog.bvar_bound() != 0 || self.norm(&l.prog) != *p {
+                continue;
+            }
+            let mut a: Assign = Vec::new();
+            if self.unify(&l.st, st, &l.vars, &mut a) != Ok(Some(true)) || l.vars.iter().any(|v| !a.iter().any(|(w, _)| w == v)) {
+                continue;
+            }
+            if !l.prems.iter().all(|q| self.truth(&self.subst(q, &a)) == Ok(true)) {
+                continue;
+            }
+            self.used.borrow_mut()[l.idx] = true;
+            return Some(self.norm(&self.subst(&l.out, &a)));
+        }
+        None
     }
 
     fn var(&mut self) -> (VarId, Term) {
@@ -422,6 +496,15 @@ impl<'s, 'a> Ev<'s, 'a> {
             return Ok(true);
         }
         if sp.is_false(&p) {
+            return Ok(false);
+        }
+        // (a premise: true; its negation's: false)
+        if let Some((_, i)) = self.known_true.iter().find(|(k, _)| *k == p) {
+            self.used.borrow_mut()[*i] = true;
+            return Ok(true);
+        }
+        if let Some((_, i)) = self.known_true.iter().find(|(k, _)| matches!(k.node(), Node::App(n, b) if is(*n, s.not) && b[0] == p)) {
+            self.used.borrow_mut()[*i] = true;
             return Ok(false);
         }
         let Node::App(f, a) = p.node() else { return err(format!("undecided: {}", self.show(&p))) };
@@ -1279,6 +1362,14 @@ impl<'s, 'a> Ev<'s, 'a> {
             self.partial |= *part;
             return Ok(r.clone());
         }
+        // (a run lemma's outcome: a part of them)
+        if !self.run_lemmas.is_empty() {
+            if let Some(o) = self.run_lemma_outcome(&p, &st) {
+                self.partial = true;
+                self.memo.insert((p, st), (vec![o.clone()], true));
+                return Ok(vec![o]);
+            }
+        }
         let old = std::mem::replace(&mut self.partial, false);
         let r = self.outcomes1(&p, &st);
         let part = self.partial;
@@ -1382,8 +1473,10 @@ impl Logic {
     /// evaluator's memos (the last computation's outcomes, the terms shown
     /// in univ(1) -- each a function of its term alone, so valid across
     /// them), e.g. a run's steps one at a time.
-    pub fn eval_session<'a>(&'a self, env: &'a Env) -> EvalSession<'a> {
-        EvalSession { env, lg: self, fresh: env.var_bound() + 5_000_000, memo: HashMap::new(), univ_memo: Default::default(), iters: 0 }
+    /// `known`: premises (as for `eval_truth`) for all its evaluations.
+    pub fn eval_session<'a>(&'a self, env: &'a Env, known: &[Term]) -> EvalSession<'a> {
+        let fresh = known.iter().map(|t| max_var(t) + 1).fold(env.var_bound() + 5_000_000, u32::max);
+        EvalSession { env, lg: self, fresh, known: known.to_vec(), used: Vec::new(), memo: HashMap::new(), univ_memo: Default::default(), iters: 0 }
     }
 
     /// The outcomes of program `p` run from the concrete state `st`, as
@@ -1402,6 +1495,9 @@ pub struct EvalSession<'a> {
     env: &'a Env,
     lg: &'a Logic,
     fresh: u32,
+    /// the premises of every evaluation, and those used so far
+    pub(crate) known: Vec<Term>,
+    used: Vec<usize>,
     memo: HashMap<(Term, Term), (Vec<Term>, bool)>,
     univ_memo: std::cell::RefCell<std::collections::HashSet<Term>>,
     /// loop iterations evaluated (EVAL_STATS)
@@ -1411,10 +1507,10 @@ pub struct EvalSession<'a> {
 impl<'a> EvalSession<'a> {
     /// f on an evaluator with the session's memos (taken and put back; the
     /// simplifier's own node memo per evaluation, freed after it)
-    fn with<T>(&mut self, inputs: &[&Term], f: impl FnOnce(&mut Ev) -> T) -> T {
+    fn with<T>(&mut self, inputs: &[&Term], f: impl FnOnce(&mut Ev) -> T) -> (T, Vec<usize>) {
         let fresh = inputs.iter().map(|t| max_var(t) + 1).fold(self.fresh, u32::max);
         let sp = Simp::new(self.env, self.lg);
-        let mut ev = Ev::new(&sp, fresh);
+        let mut ev = Ev::new(&sp, fresh).with_known(&self.known);
         ev.pick = true;
         ev.memo = std::mem::take(&mut self.memo);
         ev.univ_memo = std::mem::take(&mut self.univ_memo);
@@ -1423,19 +1519,27 @@ impl<'a> EvalSession<'a> {
         self.univ_memo = std::mem::take(&mut ev.univ_memo);
         self.fresh = ev.fresh;
         self.iters += ev.iters;
-        r
+        // (the premises used by any evaluation so far: a memo entry may rest
+        // on an earlier one's)
+        for (i, u) in ev.used.borrow().iter().enumerate() {
+            if *u && !self.used.contains(&i) {
+                self.used.push(i);
+            }
+        }
+        (r, self.used.clone())
     }
 
-    /// `p` evaluated true (as `eval_truth` without premises)
-    pub(crate) fn truth(&mut self, p: &Term) -> crate::env::KResult<()> {
+    /// `p` evaluated true (as `eval_truth` with the session's premises):
+    /// the premises used
+    pub(crate) fn truth(&mut self, p: &Term) -> crate::env::KResult<Vec<usize>> {
         DEBUG_N.with(|n| n.set(0));
-        let r = self.with(&[p], |ev| {
+        let (r, used) = self.with(&[p], |ev| {
             // (a pick's partial result kept from a `false`: per evaluation)
             ev.partial = false;
             ev.truth(p).map(|b| (b, ev.show(p)))
         });
         match r {
-            Ok((true, _)) => Ok(()),
+            Ok((true, _)) => Ok(used),
             Ok((false, s)) => Err(crate::env::KernelError(format!("eval: false: {}", s))),
             Err(e) => Err(crate::env::KernelError(format!("eval: {}", e))),
         }
@@ -1447,6 +1551,6 @@ impl<'a> EvalSession<'a> {
     /// computations' states freed)
     pub fn outcomes(&mut self, p: &Term, st: &Term) -> crate::env::KResult<Vec<Term>> {
         self.memo.clear();
-        self.with(&[p, st], |ev| ev.outcomes(p, st)).map_err(|e| crate::env::KernelError(format!("eval: {}", e)))
+        self.with(&[p, st], |ev| ev.outcomes(p, st)).0.map_err(|e| crate::env::KernelError(format!("eval: {}", e)))
     }
 }

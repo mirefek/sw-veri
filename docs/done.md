@@ -1635,12 +1635,23 @@ For a first reading, docs/overview.md is the better start. The sections:
     (`rc.W`: the run to t's loop stopping at mf); set_tid_address's thread
     id a picked witness. The evaluations share a session (the step's
     outcomes memo, so its check is a lookup; the terms shown in
-    univ(1)): about 65 s, 113 MB.
+    univ(1)): about 55 s, 106 MB.
   - The evaluator's loops: each loop's own iterations bounded
-    (`LOOP_MAX`), not a budget for the whole evaluation; a run's state
-    and outcome shown in univ(1) by their form (`in_univ1`; a premise
-    `t in univ(1)` for a free t -- the decode facts' `m`, by
-    `x86.step_univ`).
+    (`LOOP_MAX` 17: an access's bytes, an instruction's), not a budget
+    for the whole evaluation; a run's state and outcome shown in univ(1)
+    by their form (`in_univ1`; a premise `t in univ(1)` for a free t --
+    the decode facts' `m`, by `x86.step_univ`).
+  - memset's `rep stosq` (38 words) by a lemma, not run
+    (proofs/x86_rep_run.core, `x86r.rep_stos_run`): the loop's run exists
+    by `while_exists` over the words (invariant: after j words); its
+    body's run by evaluation on a symbolic state (`x86r.body`); its
+    outcome closed (`x86r.cl`: 8 c bytes from rdi filled with rax's word,
+    `x86r.fill`; rdi 8 c up, rcx 0). The evaluator takes it as a premise
+    `all xs. A -> runs(Q, S, O)`: where Q's outcomes from a state matching
+    S are asked and the A's evaluate true, O is one (a part of them, as a
+    pick); `run_steps(STOP, STEP, L..)` passes such lemmas. Premises that
+    are not equations count as true where their truth is asked (and
+    their negations' as false).
   - `exec_state` (`wit.exec`): the closed parts by evaluation (the ELF
     header, the stack layout, the auxv, its data, the registers); the
     pages, the loads' bytes, the stack's growth room and the image's end

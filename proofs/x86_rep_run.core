@@ -1,0 +1,427 @@
+// Runs that exist: rep stosq's (rcx words rax from rdi up, the direction
+// flag clear) -- its outcome by an invariant over the words, not by
+// running them; the evaluator takes it as a premise (`run_steps`' lemmas).
+// Its body's run by evaluation on a symbolic state (the premises as known
+// truths; the 8-byte store's loop a fixed-size one).
+
+// (a writable byte: its page mapped, writable)
+theorem x86r.acc_parts: all vm a. x86_64_linux.can_access(vm, a, 1) ->
+  x86_64_linux.mapped(vm, x86_64_linux.page_of(a)) && snd(vm.pages[x86_64_linux.page_of(a)]).prot.w
+proof
+  fix vm a
+  assume hc
+  have hm hw _ := expand(hc, x86_64_linux.can_access)
+  have ew: snd(vm.pages[x86_64_linux.page_of(a)]).prot.w by symex(expand(hw, x86_64_linux.hw_allows))
+  show by taut(hm, ew)
+qed
+
+// ----------------------------------------------------------------------
+//  rep stosq's loop (rep_stos(8)): its body, then the loop by an invariant
+
+// the loop's body (spec/x86_64/instructions.sl's rep_stos, n = 8)
+abbrev x86r.B(x3, x4) := (!(app(app(fst(x3), "gpr"), 1) = 0) && bind_rel(x86_64_linux.reg.get(0, 8), fst(x3), x5 x6. bind_rel(x86_64_linux.mem.set(app(app(x5, "gpr"), 7), 8, x6), x5,
+  x7 x8. bind_rel(x86_64_linux.string_step(8), x7, x9 x10. letin(fn_update(x9, "gpr", fn_update(app(x9, "gpr"), 7, bits_add(64, app(app(x7, "gpr"), 7), x10))),
+  x11. letin(fn_update(x11, "gpr", fn_update(app(x11, "gpr"), 1, bits_sub(64, app(app(x11, "gpr"), 1), 1))), x12. x4 = ok(pair(x12, empty), empty))),
+  x9 x10. x4 = exc(pair(x9, empty), pair("raise", x10)), x9. x4 = diverge(x9)), x7 x8. x4 = exc(pair(x7, empty), pair("raise", x8)), x7. x4 = diverge(x7)),
+  x5 x6. x4 = exc(pair(x5, empty), pair("raise", x6)), x5. x4 = diverge(x5))) || (!!(app(app(fst(x3), "gpr"), 1) = 0) && x4 = exc(pair(fst(x3), empty), pair("brk", empty)))
+
+// one word: rax's 8 bytes at rdi, rdi 8 up, rcx one down (as the body
+// computes it)
+def x86r.rstep(y) := letin(fn_update(y, "vm", fn_update(y.vm, "bytes", x86_64_linux.store_le(y.vm.bytes, y.gpr[7], 8, bits_slice(y.gpr[0], 63, 0)))),
+  x9. letin(fn_update(x9, "gpr", fn_update(x9.gpr, 7, bits_add(64, x9.gpr[7], 8))), x11. fn_update(x11, "gpr", fn_update(x11.gpr, 1, bits_sub(64, x11.gpr[1], 1)))))
+
+// the body from a state with rcx not 0, rdi's 8 bytes writable: the word
+theorem x86r.body: all y. y in univ(1) -> !(y.gpr[1] = 0) -> !y.flags.df -> x86i.acc(y, y.gpr[7], 8, 1) ->
+  x86r.B(pair(y, empty), ok(pair(x86r.rstep(y), empty), empty))
+proof
+  fix y
+  assume hu hc hdf ha
+  let A := y.gpr[7]
+  have c0 c0w := apply(x86r.acc_parts, apply(ha, (0 in omega by simp()), (int_lt(0, 8) by simp())))
+  have c1 c1w := apply(x86r.acc_parts, apply(ha, (1 in omega by simp()), (int_lt(1, 8) by simp())))
+  have c2 c2w := apply(x86r.acc_parts, apply(ha, (2 in omega by simp()), (int_lt(2, 8) by simp())))
+  have c3 c3w := apply(x86r.acc_parts, apply(ha, (3 in omega by simp()), (int_lt(3, 8) by simp())))
+  have c4 c4w := apply(x86r.acc_parts, apply(ha, (4 in omega by simp()), (int_lt(4, 8) by simp())))
+  have c5 c5w := apply(x86r.acc_parts, apply(ha, (5 in omega by simp()), (int_lt(5, 8) by simp())))
+  have c6 c6w := apply(x86r.acc_parts, apply(ha, (6 in omega by simp()), (int_lt(6, 8) by simp())))
+  have c7 c7w := apply(x86r.acc_parts, apply(ha, (7 in omega by simp()), (int_lt(7, 8) by simp())))
+  show by defs(eval(hu, hc, hdf, c0, c0w, c1, c1w, c2, c2w, c3, c3w, c4, c4w, c5, c5w, c6, c6w, c7, c7w), x86r.rstep)
+qed
+
+// (a word's registers, flags, pages; a value still)
+theorem x86r.rstep_parts: all y. y in univ(1) ->
+  x86r.rstep(y).gpr[1] = bits_sub(64, y.gpr[1], 1) && x86r.rstep(y).gpr[7] = bits_add(64, y.gpr[7], 8) && x86r.rstep(y).flags = y.flags &&
+  x86r.rstep(y).vm.pages = y.vm.pages && x86r.rstep(y) in univ(1)
+proof
+  fix y
+  assume hu
+  have e1: x86r.rstep(y).gpr[1] = bits_sub(64, y.gpr[1], 1) by defs(simp(), x86r.rstep)
+  have e7: x86r.rstep(y).gpr[7] = bits_add(64, y.gpr[7], 8) by defs(simp(), x86r.rstep)
+  have ef: x86r.rstep(y).flags = y.flags by defs(simp(), x86r.rstep)
+  have ep: x86r.rstep(y).vm.pages = y.vm.pages by defs(simp(), x86r.rstep)
+  have u: x86r.rstep(y) in univ(1) by defs(eval(hu), x86r.rstep)
+  show by taut(e1, e7, ef, ep, u)
+qed
+
+// after j words
+def x86r.rst(s, j) := nat_rec(s, k y. x86r.rstep(y), j)
+
+theorem x86r.rst_zero: all s. x86r.rst(s, 0) = s
+proof
+  fix s
+  show by defs(rec({nat_rec(s, k y. x86r.rstep(y), 0)}), x86r.rst)
+qed
+
+theorem x86r.rst_succ: all s j. j in omega -> x86r.rst(s, int_add(j, 1)) = x86r.rstep(x86r.rst(s, j))
+proof
+  fix s j
+  assume hj
+  show by defs(rec({nat_rec(s, k y. x86r.rstep(y), int_add(j, 1))}, hj), x86r.rst)
+qed
+
+// (after j of the c words from d: rcx c - j, rdi d + 8 j, the flags and
+// pages as they were, a value)
+theorem x86r.rst_facts: all s j. s in univ(1) -> s.gpr[1] in bits(64) -> s.gpr[7] in bits(64) -> j in omega -> int_le(j, s.gpr[1]) ->
+  x86r.rst(s, j).gpr[1] = int_sub(s.gpr[1], j) && x86r.rst(s, j).gpr[7] = bits_add(64, s.gpr[7], int_mul(8, j)) &&
+  x86r.rst(s, j).flags = s.flags && x86r.rst(s, j).vm.pages = s.vm.pages && x86r.rst(s, j) in univ(1)
+proof
+  fix s j
+  assume hu hc hd hj hjc
+  let C := s.gpr[1]
+  let D := s.gpr[7]
+  let F(i) := x86r.rst(s, i).gpr[1] = int_sub(C, i) && x86r.rst(s, i).gpr[7] = bits_add(64, D, int_mul(8, i)) &&
+    x86r.rst(s, i).flags = s.flags && x86r.rst(s, i).vm.pages = s.vm.pages && x86r.rst(s, i) in univ(1)
+  have base: int_le(0, C) -> F(0) proof
+    assume _
+    have r0 := x86r.rst_zero[s := s]
+    have lf := apply(nf.lo_fit, {64}, {64}, {D}, simp(), simp(), simp(), hd)
+    have e0: int_mul(8, 0) = 0 by arith()
+    have d0: bits_add(64, D, int_mul(8, 0)) = D := rewrite(sym(e0), lf)
+    have z1: int_sub(C, 0) = C by arith((C in omega by simp(hc)))
+    have a1: x86r.rst(s, 0).gpr[1] = int_sub(C, 0) := rewrite(sym(z1), (x86r.rst(s, 0).gpr[1] = C by simp(r0)))
+    have a7: x86r.rst(s, 0).gpr[7] = bits_add(64, D, int_mul(8, 0)) := rewrite(sym(d0), (x86r.rst(s, 0).gpr[7] = D by simp(r0)))
+    show by taut(a1, a7, (x86r.rst(s, 0).flags = s.flags by simp(r0)), (x86r.rst(s, 0).vm.pages = s.vm.pages by simp(r0)), (x86r.rst(s, 0) in univ(1) by simp(r0, hu)))
+  qed
+  have step: all i. i in omega -> (int_le(i, C) -> F(i)) -> (int_le(int_add(i, 1), C) -> F(int_add(i, 1))) proof
+    fix i
+    assume hi ih hl
+    have f1 f7 ff fp fu := mp(ih, (int_le(i, C) by arith(hl)))
+    let Y := x86r.rst(s, i)
+    have rs := apply(x86r.rst_succ, {s}, {i}, hi)
+    have g1 g7 gf gp gu := apply(x86r.rstep_parts, fu)
+    have co: C in omega by simp(hc)
+    have cl: int_lt(int_sub(C, i), 18446744073709551616) by arith(symex(hc))
+    have b1 := apply(x86.bsub_nowrap, {int_sub(C, i)}, {1}, (int_sub(C, i) in omega by arith(hl)), simp(), (int_le(1, int_sub(C, i)) by arith(hl)), cl)
+    have do: D in omega by simp(hd)
+    have b7 := apply(x86.badd_assoc, {D}, {int_mul(8, i)}, {8}, do, (int_mul(8, i) in omega by arith()), simp())
+    have m8: int_add(int_mul(8, i), 8) = int_mul(8, int_add(i, 1)) by arith()
+    have s1: x86r.rst(s, int_add(i, 1)).gpr[1] = int_sub(C, int_add(i, 1)) by simp(rs, g1, f1, b1)
+    have s7: x86r.rst(s, int_add(i, 1)).gpr[7] = bits_add(64, D, int_mul(8, int_add(i, 1))) by simp(rs, g7, f7, b7, m8)
+    have sf: x86r.rst(s, int_add(i, 1)).flags = s.flags by simp(rs, gf, ff)
+    have sp: x86r.rst(s, int_add(i, 1)).vm.pages = s.vm.pages by simp(rs, gp, fp)
+    have su: x86r.rst(s, int_add(i, 1)) in univ(1) by simp(rs, gu)
+    show by taut(s1, s7, sf, sp, su)
+  qed
+  show := apply(mp(nat_ind[p := i. int_le(i, C) -> F(i)], base, step), hj, hjc)
+qed
+
+// n bytes from a filled with the word v, repeated: the byte at a + t is v's
+// byte t mod 8 (b elsewhere)
+def x86r.fill(b, a, n, v) := fn_build(bits(64), z. ite(int_lt(bits_sub(64, z, a), n), bits_of_int(8, int_div(v, int_pow(256, int_mod(bits_sub(64, z, a), 8)))), b[z]))
+
+// (the first word: a fill of 8 bytes)
+theorem x86r.fill_first: all b a v. a in bits(64) -> x86_64_linux.store_le(b, a, 8, v) = x86r.fill(b, a, 8, v)
+proof
+  fix b a v
+  assume ha
+  have pw: all z. z in bits(64) ->
+      ite(int_lt(bits_sub(64, z, a), 8), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, z, a)))), b[z]) =
+      ite(int_lt(bits_sub(64, z, a), 8), bits_of_int(8, int_div(v, int_pow(256, int_mod(bits_sub(64, z, a), 8)))), b[z]) proof
+    fix z
+    assume hz
+    let t := bits_sub(64, z, a)
+    have to: t in omega by defs(simp())
+    cases int_lt(t, 8)
+    case c proof
+      have m: int_mod(t, 8) = t by arith(c, to)
+      show by simp(c, m)
+    qed
+    case c proof
+      show by simp(c)
+    qed
+  qed
+  have ext := apply(fn_build_ext, pw)
+  show by defs(ext, x86_64_linux.store_le, x86r.fill)
+qed
+
+// (a word after 8 k filled bytes: 8 k + 8 of them -- no wrap)
+theorem x86r.fill_cat: all b a k v. a in bits(64) -> k in omega -> int_le(int_add(int_mul(8, k), 8), 18446744073709551616) ->
+  x86_64_linux.store_le(x86r.fill(b, a, int_mul(8, k), v), bits_add(64, a, int_mul(8, k)), 8, v) = x86r.fill(b, a, int_add(int_mul(8, k), 8), v)
+proof
+  fix b a k v
+  assume ha hk hnw
+  let n := int_mul(8, k)
+  have hn: n in omega by arith(hk)
+  let F := x86r.fill(b, a, n, v)
+  have pw: all z. z in bits(64) ->
+      ite(int_lt(bits_sub(64, z, bits_add(64, a, n)), 8), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, z, bits_add(64, a, n))))), F[z]) =
+      ite(int_lt(bits_sub(64, z, a), int_add(n, 8)), bits_of_int(8, int_div(v, int_pow(256, int_mod(bits_sub(64, z, a), 8)))), b[z]) proof
+    fix z
+    assume hz
+    let t := bits_sub(64, z, a)
+    have to: t in omega by defs(simp())
+    have fz: F[z] = ite(int_lt(t, n), bits_of_int(8, int_div(v, int_pow(256, int_mod(t, 8)))), b[z]) by defs(simp(app_fn_build[v := w. ite(int_lt(bits_sub(64, w, a), n), bits_of_int(8, int_div(v, int_pow(256, int_mod(bits_sub(64, w, a), 8)))), b[w])], hz), x86r.fill)
+    // (the offset from a + n: t - n, or past 8 when t < n -- no wrap)
+    have lo: int_lt(t, n) -> !int_lt(bits_sub(64, z, bits_add(64, a, n)), 8) by defs(arith(hnw, hn, ha, hz), bits_sub, bits_add, pow2)
+    have hi: !int_lt(t, n) -> bits_sub(64, z, bits_add(64, a, n)) = int_sub(t, n) by defs(arith(hn, ha, hz), bits_sub, bits_add, pow2)
+    cases int_lt(t, n)
+    case c1 proof
+      have o := mp(lo, c1)
+      have r1: int_lt(t, int_add(n, 8)) by arith(c1)
+      let X := bits_of_int(8, int_div(v, int_pow(256, int_mod(t, 8))))
+      have l1 := apply(ite_f[a := bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, z, bits_add(64, a, n))))), b := F[z]], o)
+      have l2 := apply(ite_t[a := X, b := b[z]], c1)
+      have l3 := apply(ite_t[a := X, b := b[z]], r1)
+      show := trans(trans(l1, trans(fz, l2)), sym(l3))
+    qed
+    case c1 proof
+      have e := mp(hi, c1)
+      cases int_lt(t, int_add(n, 8))
+      case c2 proof
+        have l2: int_lt(int_sub(t, n), 8) by arith(c1, c2)
+        have m: int_mod(t, 8) = int_sub(t, n) by arith(c1, c2, to, hk)
+        show by simp(e, l2, c2, m)
+      qed
+      case c2 proof
+        have l2: !int_lt(int_sub(t, n), 8) by arith(c1, c2)
+        show by simp(e, l2, c2, fz, c1)
+      qed
+    qed
+  qed
+  have ext := apply(fn_build_ext, pw)
+  show by defs(ext, x86_64_linux.store_le, x86r.fill)
+qed
+
+// after j words (j at least 1), closed: 8 j bytes from rdi filled with
+// rax's word, rdi 8 j up, rcx j down
+def x86r.cl(s, j) := fn_update(fn_update(s, "vm", fn_update(s.vm, "bytes",
+    x86r.fill(s.vm.bytes, s.gpr[7], int_mul(8, j), bits_slice(s.gpr[0], 63, 0)))), "gpr",
+  fn_update(fn_update(s.gpr, 7, bits_add(64, s.gpr[7], int_mul(8, j))), 1, int_sub(s.gpr[1], j)))
+
+// (one word from the state after j: the state after j + 1 -- the records
+// updated in place)
+theorem x86r.rstep_cl: all s j. j in omega -> int_le(1, j) -> int_lt(j, s.gpr[1]) -> s.gpr[1] in bits(64) -> s.gpr[7] in bits(64) ->
+  int_le(int_add(s.gpr[7], int_mul(8, s.gpr[1])), 18446744073709551616) -> x86r.rstep(x86r.cl(s, j)) = x86r.cl(s, int_add(j, 1))
+proof
+  fix s j
+  assume hj h1 hlt hc hd hnw
+  let C := s.gpr[1]
+  let D := s.gpr[7]
+  let W := bits_slice(s.gpr[0], 63, 0)
+  let Bj := x86r.fill(s.vm.bytes, D, int_mul(8, j), W)
+  let Dj := bits_add(64, D, int_mul(8, j))
+  let Gj := fn_update(fn_update(s.gpr, 7, Dj), 1, int_sub(C, j))
+  let VMj := fn_update(s.vm, "bytes", Bj)
+  let Y := x86r.cl(s, j)
+  have ey: Y = fn_update(fn_update(s, "vm", VMj), "gpr", Gj) by defs(refl({Y}), x86r.cl)
+  // (the word: rstep's updates)
+  have u: x86r.rstep(Y) = fn_update(fn_update(fn_update(Y, "vm", fn_update(Y.vm, "bytes", x86_64_linux.store_le(Y.vm.bytes, Y.gpr[7], 8, bits_slice(Y.gpr[0], 63, 0)))), "gpr",
+      fn_update(Y.gpr, 7, bits_add(64, Y.gpr[7], 8))), "gpr", fn_update(fn_update(Y.gpr, 7, bits_add(64, Y.gpr[7], 8)), 1, bits_sub(64, Y.gpr[1], 1))) by defs(simp(), x86r.rstep)
+  have yv: Y.vm = VMj by simp(ey)
+  have yg: Y.gpr = Gj by simp(ey)
+  have y7: Y.gpr[7] = Dj by simp(ey)
+  have y1: Y.gpr[1] = int_sub(C, j) by simp(ey)
+  have y0: Y.gpr[0] = s.gpr[0] by simp(ey)
+  have yb: Y.vm.bytes = Bj by simp(ey)
+  // (the bytes: j + 1 words)
+  have n8: int_le(int_add(int_mul(8, j), 8), 18446744073709551616) by arith(hlt, hnw)
+  have cat := apply(x86r.fill_cat, {s.vm.bytes}, {D}, {j}, {W}, hd, hj, n8)
+  have m8: int_add(int_mul(8, j), 8) = int_mul(8, int_add(j, 1)) by arith()
+  have bn: x86_64_linux.store_le(Bj, Dj, 8, W) = x86r.fill(s.vm.bytes, D, int_mul(8, int_add(j, 1)), W) := rewrite(m8, cat)
+  // (rdi, rcx: d + 8 (j + 1), c - (j + 1))
+  have do: D in omega by simp(hd)
+  have d1 := apply(x86.badd_assoc, {D}, {int_mul(8, j)}, {8}, do, (int_mul(8, j) in omega by arith()), simp())
+  have dn: bits_add(64, Dj, 8) = bits_add(64, D, int_mul(8, int_add(j, 1))) := rewrite(m8, d1)
+  have cl: int_lt(int_sub(C, j), 18446744073709551616) by arith(symex(hc))
+  have c1 := apply(x86.bsub_nowrap, {int_sub(C, j)}, {1}, (int_sub(C, j) in omega by arith(hlt)), simp(), (int_le(1, int_sub(C, j)) by arith(hlt)), cl)
+  have cn: bits_sub(64, int_sub(C, j), 1) = int_sub(C, int_add(j, 1)) := trans(c1, (int_sub(int_sub(C, j), 1) = int_sub(C, int_add(j, 1)) by arith()))
+  // (the records: each field's last update)
+  let VM1 := fn_update(VMj, "bytes", x86_64_linux.store_le(Bj, Dj, 8, W))
+  let G1 := fn_update(Gj, 7, bits_add(64, Dj, 8))
+  let G2 := fn_update(G1, 1, bits_sub(64, int_sub(C, j), 1))
+  have u2: x86r.rstep(Y) = fn_update(fn_update(fn_update(Y, "vm", VM1), "gpr", G1), "gpr", G2) := rewrite(yg, rewrite(yv, rewrite(yb, rewrite(y0, rewrite(y1, rewrite(y7, u))))))
+  have t1 := fn_update_twice[f := fn_update(Y, "vm", VM1), k := "gpr", a := G1, b := G2]
+  have sw := apply(fn_update_swap[f := fn_update(s, "vm", VMj), k := "gpr", a := Gj, j := "vm", b := VM1], simp())
+  have t2 := fn_update_twice[f := s, k := "vm", a := VMj, b := VM1]
+  have t3 := fn_update_twice[f := fn_update(s, "vm", VM1), k := "gpr", a := Gj, b := G2]
+  have e1 := subst({z. fn_update(fn_update(Y, "vm", VM1), "gpr", G2) = fn_update(fn_update(z, "vm", VM1), "gpr", G2)}, ey, refl({fn_update(fn_update(Y, "vm", VM1), "gpr", G2)}))
+  have e2 := rewrite(t2, rewrite(sw, e1))
+  have r1: x86r.rstep(Y) = fn_update(fn_update(s, "vm", VM1), "gpr", G2) := trans(trans(u2, t1), trans(e2, t3))
+  // (memory: the bytes' last store; registers: rdi's, rcx's last)
+  have v1 := fn_update_twice[f := s.vm, k := "bytes", a := Bj, b := x86_64_linux.store_le(Bj, Dj, 8, W)]
+  have g_sw := apply(fn_update_swap[f := fn_update(s.gpr, 7, Dj), k := 1, a := int_sub(C, j), j := 7, b := bits_add(64, Dj, 8)], simp())
+  have g_t1 := fn_update_twice[f := s.gpr, k := 7, a := Dj, b := bits_add(64, Dj, 8)]
+  have g_t2 := fn_update_twice[f := fn_update(s.gpr, 7, bits_add(64, Dj, 8)), k := 1, a := int_sub(C, j), b := bits_sub(64, int_sub(C, j), 1)]
+  have r2 := rewrite(cn, rewrite(dn, rewrite(g_t2, rewrite(g_t1, rewrite(g_sw, rewrite(bn, rewrite(v1, r1)))))))
+  show by defs(r2, x86r.cl)
+qed
+
+// (the first word: the state after 1)
+theorem x86r.rstep_one: all s. int_le(1, s.gpr[1]) -> s.gpr[1] in bits(64) -> s.gpr[7] in bits(64) -> x86r.rstep(s) = x86r.cl(s, 1)
+proof
+  fix s
+  assume h1 hc hd
+  let W := bits_slice(s.gpr[0], 63, 0)
+  have u: x86r.rstep(s) = fn_update(fn_update(fn_update(s, "vm", fn_update(s.vm, "bytes", x86_64_linux.store_le(s.vm.bytes, s.gpr[7], 8, W))), "gpr",
+      fn_update(s.gpr, 7, bits_add(64, s.gpr[7], 8))), "gpr", fn_update(fn_update(s.gpr, 7, bits_add(64, s.gpr[7], 8)), 1, bits_sub(64, s.gpr[1], 1))) by defs(simp(), x86r.rstep)
+  have t := fn_update_twice[f := fn_update(s, "vm", fn_update(s.vm, "bytes", x86_64_linux.store_le(s.vm.bytes, s.gpr[7], 8, W))), k := "gpr",
+    a := fn_update(s.gpr, 7, bits_add(64, s.gpr[7], 8)), b := fn_update(fn_update(s.gpr, 7, bits_add(64, s.gpr[7], 8)), 1, bits_sub(64, s.gpr[1], 1))]
+  have fw := apply(x86r.fill_first, {s.vm.bytes}, {s.gpr[7]}, {W}, hd)
+  have cl: int_lt(s.gpr[1], 18446744073709551616) by symex(hc)
+  have c1 := apply(x86.bsub_nowrap, {s.gpr[1]}, {1}, simp(hc), simp(), h1, cl)
+  have m1: int_mul(8, 1) = 8 by arith()
+  show by defs(simp(trans(u, t), fw, c1, m1), x86r.cl)
+qed
+
+// (the state after j words, j from 1 to c: closed)
+theorem x86r.rst_cl: all s j. j in omega -> int_le(1, j) -> int_le(j, s.gpr[1]) -> s.gpr[1] in bits(64) -> s.gpr[7] in bits(64) ->
+  int_le(int_add(s.gpr[7], int_mul(8, s.gpr[1])), 18446744073709551616) -> x86r.rst(s, j) = x86r.cl(s, j)
+proof
+  fix s j
+  assume hj h1 hjc hc hd hnw
+  let C := s.gpr[1]
+  let Q(i) := int_le(1, i) -> int_le(i, C) -> x86r.rst(s, i) = x86r.cl(s, i)
+  have base: Q(0) proof
+    assume a
+    show by taut((false by arith(a)))
+  qed
+  have step: all i. i in omega -> Q(i) -> Q(int_add(i, 1)) proof
+    fix i
+    assume hi ih a1 a2
+    have rs := apply(x86r.rst_succ, {s}, {i}, hi)
+    cases i = 0
+    case z proof
+      have r0 := x86r.rst_zero[s := s]
+      have o := apply(x86r.rstep_one, {s}, (int_le(1, C) by arith(a2)), hc, hd)
+      have e1: int_add(i, 1) = 1 by arith(z)
+      show := rewrite(sym(e1), trans(rewrite(rewrite(sym(z), r0), rs), o))
+    qed
+    case z proof
+      have p := mp(mp(ih, (int_le(1, i) by arith(z))), (int_le(i, C) by arith(a2)))
+      have o := apply(x86r.rstep_cl, {s}, {i}, hi, (int_le(1, i) by arith(z)), (int_lt(i, C) by arith(a2)), hc, hd, hnw)
+      show := trans(rewrite(p, rs), o)
+    qed
+  qed
+  show := apply(mp(nat_ind[p := i. Q(i)], base, step), hj, h1, hjc)
+qed
+
+// (a byte writable: its page's, whatever the bytes)
+theorem x86r.acc_pages: all vm vm2 a k. vm2.pages = vm.pages -> x86_64_linux.can_access(vm, a, k) -> x86_64_linux.can_access(vm2, a, k)
+proof
+  fix vm vm2 a k
+  assume e h
+  show by defs(rewrite(sym(e), expand(expand(h, x86_64_linux.can_access), x86_64_linux.mapped)), x86_64_linux.can_access, x86_64_linux.mapped)
+qed
+
+// rep stosq's loop from s: its c words, one at a time -- a run, ending
+// after the c words (rcx c, at least 1; rdi d; the 8 c bytes from d
+// writable, no wrap): c words of rax at d, rdi d + 8 c, rcx 0
+theorem x86r.rep_stos_run: all s. s in univ(1) -> !s.flags.df -> s.gpr[1] in bits(64) -> s.gpr[7] in bits(64) -> int_le(1, s.gpr[1]) ->
+  int_le(int_add(s.gpr[7], int_mul(8, s.gpr[1])), 18446744073709551616) -> x86i.acc(s, s.gpr[7], int_mul(8, s.gpr[1]), 1) ->
+  runs(x86_64_linux.rep_stos(8), s, ok(x86r.cl(s, s.gpr[1]), empty))
+proof
+  fix s
+  assume hu hdf hc hd h1 hnw ha
+  let C := s.gpr[1]
+  let D := s.gpr[7]
+  have co: C in omega by simp(hc)
+  have do: D in omega by simp(hd)
+  let P(l) := ex j. j in omega && int_le(j, C) && l = pair(x86r.rst(s, j), empty)
+  let M(l) := fst(l).gpr[1]
+  let G(l, r) := r = exc(pair(fst(l), empty), pair("brk", empty)) && fst(l).gpr[1] = 0
+  have p0: P(pair(s, empty)) by ex_intro({0}, simp(x86r.rst_zero, (int_le(0, C) by arith(co))))
+  have pm: all l. P(l) -> M(l) in omega proof
+    fix l
+    assume hp
+    obtain j, hj hjc hl from hp
+    have f1 .. := apply(x86r.rst_facts, hu, hc, hd, hj, hjc)
+    have cj: int_sub(C, j) in omega by arith(hjc)
+    show by simp(hl, f1, cj)
+  qed
+  have pb: all l. P(l) -> true -> (ex l2. x86r.B(l, ok(l2, empty)) && P(l2) && int_lt(M(l2), M(l))) || (ex r. x86r.B(l, r) && G(l, r) && !is_ok(r) && !(fst(r) = 2)) proof
+    fix l
+    assume hp _
+    obtain j, hj hjc hl from hp
+    let Y := x86r.rst(s, j)
+    have f1 f7 ff fp fu := apply(x86r.rst_facts, hu, hc, hd, hj, hjc)
+    // (words left: the next one)
+    have more: int_lt(j, C) -> ex l2. x86r.B(l, ok(l2, empty)) && P(l2) && int_lt(M(l2), M(l)) proof
+      assume lt
+      have nz: !(Y.gpr[1] = 0) by arith(f1, lt)
+      have ndf: !Y.flags.df by simp(ff, hdf)
+      have ya: x86i.acc(Y, Y.gpr[7], 8, 1) proof
+        fix i
+        assume i1 i2
+        have k8: int_add(int_mul(8, j), i) in omega by arith()
+        have kl: int_lt(int_add(int_mul(8, j), i), int_mul(8, C)) by arith(lt, i2)
+        have ac := apply(ha, k8, kl)
+        have ea := apply(x86.badd_assoc, {D}, {int_mul(8, j)}, {i}, do, (int_mul(8, j) in omega by arith()), i1)
+        have zl: int_lt(int_add(int_mul(8, j), i), 18446744073709551616) by arith(kl, hnw)
+        have il: int_lt(i, 18446744073709551616) by arith(i2)
+        have bi: bits_of_int(64, i) = i by defs(arith(i1, il), bits_of_int, pow2)
+        have bk: bits_of_int(64, int_add(int_mul(8, j), i)) = int_add(int_mul(8, j), i) by defs(arith(k8, zl), bits_of_int, pow2)
+        have ac2: x86_64_linux.can_access(s.vm, bits_add(64, bits_add(64, D, int_mul(8, j)), i), 1) := rewrite(sym(ea), rewrite(bk, ac))
+        have ac3 := apply(x86r.acc_pages, fp, ac2)
+        show := rewrite(sym(f7), rewrite(sym(bi), ac3))
+      qed
+      have bd := apply(x86r.body, fu, nz, ndf, ya)
+      have rs := apply(x86r.rst_succ, {s}, {j}, hj)
+      have j1: int_add(j, 1) in omega by arith()
+      have jl: int_le(int_add(j, 1), C) by arith(lt)
+      have g1 .. := apply(x86r.rst_facts, hu, hc, hd, j1, jl)
+      have p2: P(pair(x86r.rst(s, int_add(j, 1)), empty)) by ex_intro({int_add(j, 1)}, taut(j1, jl, refl({pair(x86r.rst(s, int_add(j, 1)), empty)})))
+      have dm: int_lt(M(pair(x86r.rst(s, int_add(j, 1)), empty)), M(l)) by simp(hl, f1, g1, (int_lt(int_sub(C, int_add(j, 1)), int_sub(C, j)) by arith()))
+      have bl: x86r.B(l, ok(pair(x86r.rst(s, int_add(j, 1)), empty), empty)) := rewrite(sym(rs), rewrite(sym(hl), bd))
+      show by ex_intro({pair(x86r.rst(s, int_add(j, 1)), empty)}, taut(bl, p2, dm))
+    qed
+    // (none left: the loop's end)
+    have done: j = C -> ex r. x86r.B(l, r) && G(l, r) && !is_ok(r) && !(fst(r) = 2) proof
+      assume e
+      have z: Y.gpr[1] = 0 by arith(f1, e)
+      let R := exc(pair(Y, empty), pair("brk", empty))
+      have bl: x86r.B(l, R) by simp(hl, z)
+      have gl: G(l, R) by simp(hl, z)
+      show by ex_intro({R}, taut(bl, gl, ui.exc_nok[a := pair(Y, empty), v := pair("brk", empty)], (!(fst(R) = 2) by simp())))
+    qed
+    have cs: int_lt(j, C) || j = C by arith(hjc)
+    show by taut(cs, more, done)
+  qed
+  have we := apply(while_exists[l0 := pair(s, empty), c := l. true, b := l o. x86r.B(l, o), tr := l. fn_update(empty, "os.events", fst(l).os.events),
+    p := l. P(l), m := l. M(l), g := l r. G(l, r)], p0, pm, pb)
+  obtain r, hw hnd hend from we
+  // (the loop left at its end: after the c words)
+  have ex1: (ex l. P(l) && !true && r = ok(l, empty)) -> false proof
+    assume h
+    obtain l, _ f _ from h
+    show by taut(f)
+  qed
+  have ex2: (ex l. P(l) && true && x86r.B(l, r) && G(l, r) && !is_ok(r)) -> r = exc(pair(x86r.rst(s, C), empty), pair("brk", empty)) proof
+    assume h
+    obtain l, hp _ _ hg _ from h
+    obtain j, hj hjc hl from hp
+    have er z := hg
+    have f1 .. := apply(x86r.rst_facts, hu, hc, hd, hj, hjc)
+    have z2: x86r.rst(s, j).gpr[1] = 0 := simp(rewrite(hl, z))
+    have ej: j = C by arith(hjc, z2, f1)
+    show by simp(er, hl, ej)
+  qed
+  have er := mp(ex2, taut(hend, ex1))
+  have fu := apply(x86r.rst_facts, hu, hc, hd, co, (int_le(C, C) by arith()))
+  have ru: x86r.rst(s, C) in univ(1) by taut(fu)
+  have ec := apply(x86r.rst_cl, {s}, {C}, co, h1, (int_le(C, C) by arith()), hc, hd, hnw)
+  have er2 := rewrite(ec, er)
+  have ru2 := rewrite(ec, ru)
+  have u: pair(s, ok(x86r.cl(s, C), empty)) in univ(1) by eval(hu, ru2)
+  have hw2 := rewrite(er2, hw)
+  show by defs(apply(runs_intro, u, ex_intro({exc(pair(x86r.cl(s, C), empty), pair("brk", empty))}, simp(hw2))), x86_64_linux.rep_stos)
+qed

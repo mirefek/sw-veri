@@ -764,13 +764,19 @@ impl Seq {
         Ok(Seq { hyps, concl: goal.clone(), open })
     }
 
-    /// `⊢ goal`, evaluated to true on concrete data in an evaluation session
-    /// (`Logic::eval_session`: its memos shared with the session's other
-    /// evaluations; no premises).
-    pub fn eval_goal_in(env: &Env, ses: &mut super::simp::EvalSession, goal: &Term) -> KResult<Seq> {
+    /// `Γ ⊢ goal`, evaluated to true on concrete data in an evaluation
+    /// session (`Logic::eval_session`: its memos shared with the session's
+    /// other evaluations), with the session's premises -- `premises`, the
+    /// facts of them (Γ: the used ones').
+    pub fn eval_goal_in(env: &Env, ses: &mut super::simp::EvalSession, premises: &[&Seq], goal: &Term) -> KResult<Seq> {
         env.check_wf(goal, 0)?;
-        ses.truth(goal)?;
-        Ok(Seq { hyps: Vec::new(), concl: goal.clone(), open: Vec::new() })
+        if premises.len() != ses.known.len() || premises.iter().zip(&ses.known).any(|(p, k)| p.concl != *k) {
+            return err("eval: the facts are not the session's premises");
+        }
+        let used = ses.truth(goal)?;
+        let used: Vec<&Seq> = used.iter().map(|&i| premises[i]).collect();
+        let (hyps, open) = Self::gather(&used);
+        Ok(Seq { hyps, concl: goal.clone(), open })
     }
 
     /// `Γ ⊢ all x. x in set <-> x = c1 || .. || x = cn`, the members of
