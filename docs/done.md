@@ -1615,6 +1615,17 @@ For a first reading, docs/overview.md is the better start. The sections:
       the run's continuation; a faulting push is an overflow,
       `pw.push_fault`);
     - the contract's outcomes when the spec ends (`pw.mtv_end`).
+- Main reached (proofs/test/reach.core, `rc.reach`): every run from an
+  unprivileged exec state to main gets there, or the stack overflows (a
+  fault below exec's rsp where the stack could not grow, or a stack fault)
+  -- no other fault, no exit before main, no run that never gets there.
+  - `_start`'s steps as in `pw.top`; from `_start_c`'s entry, the stopped
+    run for any outcome of the run to main (`rc.until_run`, generalizing
+    `ui.until_run`): the stop, the discipline broken, the entry's return,
+    or a step's exception; the startup's contract (`rc.mtv_out`: its spec
+    only overflows or enters main) leaves the stop and a crash.
+  - A diverging run to main is the process's (`rc.until_div`, by
+    `while_mono_out`), which `pw.top_div` rules out.
 - A reached main (proofs/test/witness*.core, `wit.reach`): an unprivileged
   exec state `wit.m0` (argv ["test_malloc"], no environment, uid 1000) of
   the binary, typed, whose run reaches `main`.

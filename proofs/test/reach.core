@@ -1,0 +1,695 @@
+// Every run from exec to main gets there, unless the stack overflows: the
+// claim's run to main from an unprivileged exec state ends at main, or
+// faults where the stack could not grow -- by the startup's contract (its
+// spec: an overflow or main entered), as the whole run's (pw.top).
+
+// a run with body b1 is one with b2 if b2 has b1's continuing iterations
+// and its last outcome r
+theorem while_mono_out(l0, l. c, l o. b1, l o. b2, l. tr, r):
+  (all l l2. b1(l, ok(l2, empty)) -> b2(l, ok(l2, empty))) -> (all l. b1(l, r) -> b2(l, r)) ->
+  while_rel(l0, l. c(l), l o. b1(l, o), l. tr(l), r) -> while_rel(l0, l. c(l), l o. b2(l, o), l. tr(l), r)
+proof
+  assume hb hr hw
+  have fcase: (ex n f. n in omega && is_fun(f) && dom(f) = succ(n) && f[empty] = l0 &&
+      (all i. i in n -> c(f[i]) && b1(f[i], ok(f[succ(i)], empty))) &&
+      ((!c(f[n]) && r = ok(f[n], empty)) || (c(f[n]) && b1(f[n], r) && !is_ok(r)))) ->
+      while_rel(l0, l. c(l), l o. b2(l, o), l. tr(l), r) proof
+    assume h
+    obtain n, h1 from h
+    obtain f, hf from h1
+    have hst: all i. i in n -> c(f[i]) && b1(f[i], ok(f[succ(i)], empty)) by taut(hf)
+    have st: all i. i in n -> c(f[i]) && b2(f[i], ok(f[succ(i)], empty)) proof
+      fix i
+      assume hi
+      have s := apply(hst, hi)
+      have b := mp(all_elim(hb, {f[i]}, {f[succ(i)]}), taut(s))
+      show by taut(s, b)
+    qed
+    have bn := all_elim(hr, {f[n]})
+    have e1: ex n2 g. n2 in omega && is_fun(g) && dom(g) = succ(n2) && g[empty] = l0 &&
+        (all i. i in n2 -> c(g[i]) && b2(g[i], ok(g[succ(i)], empty))) &&
+        ((!c(g[n2]) && r = ok(g[n2], empty)) || (c(g[n2]) && b2(g[n2], r) && !is_ok(r)))
+      by ex_intro({n}, {f}, taut(hf, st, bn))
+    show by defs(taut(e1), while_rel)
+  qed
+  have icase: (ex f. is_fun(f) && dom(f) = omega && f[empty] = l0 &&
+      (all i. i in omega -> c(f[i]) && b1(f[i], ok(f[succ(i)], empty))) &&
+      r = diverge(trace_limit(i. tr(f[i])))) ->
+      while_rel(l0, l. c(l), l o. b2(l, o), l. tr(l), r) proof
+    assume h
+    obtain f, hf from h
+    have hst: all i. i in omega -> c(f[i]) && b1(f[i], ok(f[succ(i)], empty)) by taut(hf)
+    have st: all i. i in omega -> c(f[i]) && b2(f[i], ok(f[succ(i)], empty)) proof
+      fix i
+      assume hi
+      have s := apply(hst, hi)
+      have b := mp(all_elim(hb, {f[i]}, {f[succ(i)]}), taut(s))
+      show by taut(s, b)
+    qed
+    have e1: ex g. is_fun(g) && dom(g) = omega && g[empty] = l0 &&
+        (all i. i in omega -> c(g[i]) && b2(g[i], ok(g[succ(i)], empty))) &&
+        r = diverge(trace_limit(i. tr(g[i])))
+      by ex_intro({f}, taut(hf, st))
+    show by defs(taut(e1), while_rel)
+  qed
+  show by taut(expand(hw, while_rel), fcase, icase)
+qed
+
+// ----------------------------------------------------------------------
+//  The claim's run to t, any outcome
+
+// the claim's run to t from m, its outcome o (its loop's, mapped)
+def rc.UA(t, m, o) := ex r. while_rel(pair(m, empty), l. true, l o2. ui.U(t, l, o2), l. fn_update(empty, "os.events", fst(l).os.events), r) && tr.rmap(r, o)
+
+theorem rc.until_any: all t m o. runs(claim_malloc.run_until(t), m, o) -> rc.UA(t, m, o)
+proof
+  fix t m o
+  assume hr
+  show by defs(symex(expand(hr, claim_malloc.run_until)), rc.UA, tr.rmap)
+qed
+
+// a diverging run to t: the process's run diverging (the same steps, none
+// of them the stop at t)
+theorem rc.until_div: all t m d. rc.UA(t, m, diverge(d)) -> pw.PR(m, diverge(d))
+proof
+  fix t m d
+  assume h
+  obtain r, hw hm from expand(h, rc.UA)
+  have r2 _ := simp(expand(hm, tr.rmap))
+  have hok: all l l2. ui.U(t, l, ok(l2, empty)) -> pw.PSB(l, ok(l2, empty)) proof
+    fix l l2
+    assume hu
+    have nb: !(!!(fst(l).rip = t) && ok(l2, empty) = exc(pair(fst(l), empty), pair("brk", empty))) by simp()
+    show by taut(hu, nb)
+  qed
+  have hr: all l. ui.U(t, l, r) -> pw.PSB(l, r) proof
+    fix l
+    assume hu
+    have nb: !(!!(fst(l).rip = t) && r = exc(pair(fst(l), empty), pair("brk", empty))) proof
+      assume hh
+      have _ e := hh
+      show := simp(rewrite(e, r2))
+    qed
+    show by taut(hu, nb)
+  qed
+  have w := apply(while_mono_out[l0 := pair(m, empty), c := l. true, b1 := l o. ui.U(t, l, o), b2 := l o. pw.PSB(l, o),
+    tr := l. fn_update(empty, "os.events", fst(l).os.events), r := r], hok, hr, hw)
+  show by defs(ex_intro({r}, taut(w, hm)), pw.PR)
+qed
+
+// the run to t's first step (not at t, the outcome not a divergence): its
+// ok outcome a run to t on, its exception the run's
+theorem rc.until_step: all t m o. !(m.rip = t) -> rc.UA(t, m, o) -> !(ex d. o = diverge(d)) ->
+  ex o1. runs(x86_64_linux.step(), m, o1) && (all m1 v. o1 = ok(m1, v) -> rc.UA(t, m1, o)) && (all y e. o1 = exc(y, e) -> o = exc(y, e))
+proof
+  fix t m o
+  assume hnt hu hnd
+  obtain r, hw hm from expand(hu, rc.UA)
+  have nd: !(fst(r) = 2) proof
+    assume h2
+    have od: o = diverge(snd(r)) := simp(rewrite(h2, expand(hm, tr.rmap)))
+    show by taut(hnd, (ex d. o = diverge(d) by ex_intro({snd(r)}, od)))
+  qed
+  let GOAL := ex o1. runs(x86_64_linux.step(), m, o1) && (all m1 v. o1 = ok(m1, v) -> rc.UA(t, m1, o)) && (all y e. o1 = exc(y, e) -> o = exc(y, e))
+  have u := apply(while_unroll, hw)
+  have fp: fst(pair(m, empty)) = m by simp()
+  // (not at t: a pass is a step)
+  have st: all o2. ui.U(t, pair(m, empty), o2) -> pw.PSB(pair(m, empty), o2) proof
+    fix o2
+    assume h
+    have nb: !(!!(fst(pair(m, empty)).rip = t) && o2 = exc(pair(fst(pair(m, empty)), empty), pair("brk", empty))) by simp(hnt)
+    show by taut(h, nb)
+  qed
+  // (the first pass leaving: an exception)
+  have c2: ui.U(t, pair(m, empty), r) -> !is_ok(r) -> GOAL proof
+    assume hb0 nr
+    have hb := apply(st, hb0)
+    obtain o1, hs1 hk from expand(hb, bind_rel)
+    have ok1: all m1 v. o1 = ok(m1, v) -> rc.UA(t, m1, o) proof
+      fix m1 v
+      assume e
+      have k1: (ex s1 v1. o1 = ok(s1, v1) && r = ok(pair(s1, empty), empty)) -> false proof
+        assume h1
+        obtain s1 v1, _ er from h1
+        show by taut(nr, (is_ok(r) by defs(ex_intro({pair(s1, empty)}, {empty}, er), is_ok)))
+      qed
+      have k2: (ex s1 x. o1 = exc(s1, x) && r = exc(pair(s1, empty), pair("raise", x))) -> false proof
+        assume h2
+        obtain s1 x, eo _ from h2
+        show := simp(trans(sym(e), eo))
+      qed
+      have k3: (ex d. o1 = diverge(d) && r = diverge(d)) -> false proof
+        assume h3
+        obtain d, eo _ from h3
+        show := simp(trans(sym(e), eo))
+      qed
+      show by taut(hk, k1, k2, k3)
+    qed
+    have ex1: all y e. o1 = exc(y, e) -> o = exc(y, e) proof
+      fix y e
+      assume eo
+      cases from hk
+      case h1 proof
+        obtain s1 v1, e1 _ from h1
+        show by taut(simp(trans(sym(eo), e1)))
+      qed
+      case h2 proof
+        obtain s1 x, e1 er from h2
+        have ys xe := apply(ui.exc_inj, trans(sym(eo), e1))
+        have oe: o = exc(s1, x) := simp(rewrite(er, expand(hm, tr.rmap)))
+        show := rewrite(sym(ys), rewrite(sym(xe), oe))
+      qed
+      case h3 proof
+        obtain d, e1 _ from h3
+        show by taut(simp(trans(sym(eo), e1)))
+      qed
+    qed
+    show by ex_intro({o1}, taut(rewrite(fp, hs1), ok1, ex1))
+  qed
+  // (a first step going on: the run from its state)
+  have c3: (ex l1. ui.U(t, pair(m, empty), ok(l1, empty)) && (ex r1. while_rel(l1, l. true, l o2. ui.U(t, l, o2), l. fn_update(empty, "os.events", fst(l).os.events), r1) &&
+      fst(r1) = fst(r) && (!(fst(r) = 2) -> r1 = r))) -> GOAL proof
+    assume h
+    obtain l1, hb0 ex1 from h
+    obtain r1, w1 _ e1 from ex1
+    have er: r1 = r := mp(e1, nd)
+    have hb := apply(st, hb0)
+    obtain o1, hs1 hk from expand(hb, bind_rel)
+    cases from hk
+    case h1 proof
+      obtain s1 v1, eo el from h1
+      have l1e _ := apply(ui.ok_inj, el)
+      have okc: all m2 v2. o1 = ok(m2, v2) -> rc.UA(t, m2, o) proof
+        fix m2 v2
+        assume e2
+        have me _ := apply(ui.ok_inj, trans(sym(e2), eo))
+        have w2 := rewrite(l1e, rewrite(er, w1))
+        show by defs(ex_intro({r}, taut(rewrite(sym(me), w2), hm)), rc.UA)
+      qed
+      have exc1: all y e. o1 = exc(y, e) -> o = exc(y, e) proof
+        fix y e
+        assume e2
+        show by taut(simp(trans(sym(e2), eo)))
+      qed
+      show by ex_intro({o1}, taut(rewrite(fp, hs1), okc, exc1))
+    qed
+    case h2 proof
+      obtain s1 x, _ el from h2
+      show by taut(simp(el))
+    qed
+    case h3 proof
+      obtain d, _ el from h3
+      show by taut(simp(el))
+    qed
+  qed
+  show by taut(u, c2, c3)
+qed
+
+// ----------------------------------------------------------------------
+//  The stopped run (the bridge's, from a function's entry s) of a run to t
+
+// the stopped run's outcome o2 for the run to t's o: the stop where o
+// ends at t, the discipline broken, the entry's return, or o's exception
+def rc.Q(s, o, o2) := (ex m. o = ok(m, empty) && o2 = ok(m, exc_val("stop", empty))) || (ex x. o2 = exc(x, exc_val("disc", empty))) ||
+  (ex x. o2 = ok(x, empty) && tr.at_ret(s, x)) || (ex y e. o = exc(y, e) && o2 = exc(y, e))
+
+// (the stopped run from l: one of those)
+def rc.Z(s, t, o, l) := ex r2 o2. while_rel(l, x. true, x y. tr.rbs(s, t, x, y), x. fn_update(empty, "os.events", fst(x).os.events), r2) &&
+  !(fst(r2) = 2) && tr.rmap(r2, o2) && rc.Q(s, o, o2)
+
+theorem rc.z_leave: all s t o l r2 o2. tr.rbs(s, t, l, r2) -> !is_ok(r2) -> !(fst(r2) = 2) -> tr.rmap(r2, o2) -> rc.Q(s, o, o2) -> rc.Z(s, t, o, l)
+proof
+  fix s t o l r2 o2
+  assume hb hn hd hm hq
+  have w := apply(while_leave[c := x. true, b := x y. tr.rbs(s, t, x, y), tr := x. fn_update(empty, "os.events", fst(x).os.events)], simp(), hb, hn)
+  show by defs(ex_intro({r2}, {o2}, taut(w, hd, hm, hq)), rc.Z)
+qed
+
+theorem rc.q_disc: all s o x. rc.Q(s, o, exc(x, exc_val("disc", empty)))
+proof
+  fix s o x
+  have ex: ex y. exc(x, exc_val("disc", empty)) = exc(y, exc_val("disc", empty)) by ex_intro({x}, refl({exc(x, exc_val("disc", empty))}))
+  show by defs(taut(ex), rc.Q)
+qed
+
+// The run to t from m0 (the entry s, its return address not t), not
+// diverging: the stopped run from m0 takes its steps, ending as rc.Q has it
+theorem rc.until_run: all s t m0 o. rc.UA(t, m0, o) -> !(ex d. o = diverge(d)) -> !(t = x86_64_linux.le(s.vm.bytes, s.gpr[4], 8)) ->
+  ex o2. tr.run_s(s, t, m0, o2) && rc.Q(s, o, o2)
+proof
+  fix s t m0 o
+  assume hr hnd hnt
+  obtain r, hw hm from expand(hr, rc.UA)
+  // (the last pass: at t, or a step leaving)
+  have base: all l. ((!true && r = ok(l, empty)) || (true && ui.U(t, l, r) && !is_ok(r))) -> rc.Z(s, t, o, l) proof
+    fix l
+    assume hl
+    have u nr := (ui.U(t, l, r) && !is_ok(r) by taut(hl))
+    // (a step leaving with an exception: the stopped run's, unless it left before)
+    have ca: !(fst(l).rip = t) && bind_rel(x86_64_linux.step, fst(l), x5 x6. r = ok(pair(x5, empty), empty), x5 x6. r = exc(pair(x5, empty), pair("raise", x6)), x5. r = diverge(x5)) ->
+        rc.Z(s, t, o, l) proof
+      assume h
+      have rt bd := h
+      obtain o1, _ oc from expand(bd, bind_rel)
+      have k1: (ex s1 v. o1 = ok(s1, v) && r = ok(pair(s1, empty), empty)) -> false proof
+        assume h1
+        obtain s1 v, _ er from h1
+        show by taut(nr, (is_ok(r) by defs(ex_intro({pair(s1, empty)}, {empty}, er), is_ok)))
+      qed
+      have k3: (ex d. o1 = diverge(d) && r = diverge(d)) -> false proof
+        assume h3
+        obtain d, _ er from h3
+        have od: o = diverge(d) := simp(rewrite(er, expand(hm, tr.rmap)))
+        show by taut(hnd, (ex d2. o = diverge(d2) by ex_intro({d}, od)))
+      qed
+      have k2: (ex s1 x. o1 = exc(s1, x) && r = exc(pair(s1, empty), pair("raise", x))) -> rc.Z(s, t, o, l) proof
+        assume h2
+        obtain s1 x, _ er from h2
+        have oe: o = exc(s1, x) := simp(rewrite(er, expand(hm, tr.rmap)))
+        have cs1: !tr.disc_ok(s, fst(l)) -> rc.Z(s, t, o, l) proof
+          assume hnd2
+          let r2 := exc(l, pair("raise", exc_val("disc", empty)))
+          have b: tr.rbs(s, t, l, r2) by defs(taut(hnd2, refl({r2})), tr.rbs, tr.rbd)
+          have rm: tr.rmap(r2, exc(fst(l), exc_val("disc", empty))) by defs(simp(), tr.rmap)
+          show := apply(rc.z_leave, b, ui.exc_nok[a := l, v := pair("raise", exc_val("disc", empty))], simp(), rm, rc.q_disc[s := s, o := o, x := fst(l)])
+        qed
+        have cs2: tr.disc_ok(s, fst(l)) -> tr.at_ret(s, fst(l)) -> rc.Z(s, t, o, l) proof
+          assume hd hret
+          let r2 := exc(pair(fst(l), empty), pair("brk", empty))
+          have b: tr.rbs(s, t, l, r2) by defs(taut(hret, refl({r2})), tr.rbs, tr.rbd, tr.rb)
+          have rm: tr.rmap(r2, ok(fst(l), empty)) by defs(simp(), tr.rmap)
+          have ex: ex x2. ok(fst(l), empty) = ok(x2, empty) && tr.at_ret(s, x2) by ex_intro({fst(l)}, taut(hret, refl({ok(fst(l), empty)})))
+          have q: rc.Q(s, o, ok(fst(l), empty)) by defs(taut(ex), rc.Q)
+          show := apply(rc.z_leave, b, ui.exc_nok[a := pair(fst(l), empty), v := pair("brk", empty)], simp(), rm, q)
+        qed
+        have cs3: tr.disc_ok(s, fst(l)) -> !tr.at_ret(s, fst(l)) -> rc.Z(s, t, o, l) proof
+          assume hd hnr
+          have b: tr.rbs(s, t, l, r) by defs(taut(rt, hd, hnr, bd), tr.rbs, tr.rbd, tr.rb)
+          have ex: ex y e. o = exc(y, e) && exc(s1, x) = exc(y, e) by ex_intro({s1}, {x}, taut(oe, refl({exc(s1, x)})))
+          have q: rc.Q(s, o, exc(s1, x)) by defs(taut(ex), rc.Q)
+          have rm: tr.rmap(r, exc(s1, x)) := rewrite(oe, hm)
+          have d2: !(fst(r) = 2) by simp(er)
+          show := apply(rc.z_leave, b, nr, d2, rm, q)
+        qed
+        show by taut(cs1, cs2, cs3)
+      qed
+      show by taut(oc, k1, k2, k3)
+    qed
+    // (at t: the stop, or the discipline broken)
+    have cb: !!(fst(l).rip = t) && r = exc(pair(fst(l), empty), pair("brk", empty)) -> rc.Z(s, t, o, l) proof
+      assume h
+      have rt er := h
+      have oe: o = ok(fst(l), empty) := simp(rewrite(er, expand(hm, tr.rmap)))
+      have nret: !tr.at_ret(s, fst(l)) proof
+        assume h2
+        have q _ := h2
+        show by taut(hnt, trans(sym(simp(rt)), q))
+      qed
+      have cs1: int_lt(fst(l).gpr[4], abi.sp(s)) -> rc.Z(s, t, o, l) proof
+        assume hlt
+        let r2 := exc(l, pair("ret", exc_val("stop", empty)))
+        have b: tr.rbs(s, t, l, r2) by defs(taut(simp(rt), nret, hlt, refl({r2})), tr.rbs)
+        have rm: tr.rmap(r2, ok(fst(l), exc_val("stop", empty))) by defs(simp(), tr.rmap)
+        have ex: ex m. o = ok(m, empty) && ok(fst(l), exc_val("stop", empty)) = ok(m, exc_val("stop", empty))
+          by ex_intro({fst(l)}, taut(oe, refl({ok(fst(l), exc_val("stop", empty))})))
+        have q: rc.Q(s, o, ok(fst(l), exc_val("stop", empty))) by defs(taut(ex), rc.Q)
+        show := apply(rc.z_leave, b, ui.exc_nok[a := l, v := pair("ret", exc_val("stop", empty))], simp(), rm, q)
+      qed
+      have cs2: !int_lt(fst(l).gpr[4], abi.sp(s)) -> rc.Z(s, t, o, l) proof
+        assume hge
+        let r2 := exc(l, pair("raise", exc_val("disc", empty)))
+        have b: tr.rbs(s, t, l, r2) by defs(taut(nret, hge, refl({r2})), tr.rbs, tr.rbd)
+        have rm: tr.rmap(r2, exc(fst(l), exc_val("disc", empty))) by defs(simp(), tr.rmap)
+        show := apply(rc.z_leave, b, ui.exc_nok[a := l, v := pair("raise", exc_val("disc", empty))], simp(), rm, rc.q_disc[s := s, o := o, x := fst(l)])
+      qed
+      show by taut(cs1, cs2)
+    qed
+    show by taut(u, ca, cb)
+  qed
+  // (a step: the stopped run takes it too, or leaves there)
+  have stp: all l l1. true -> ui.U(t, l, ok(l1, empty)) -> rc.Z(s, t, o, l1) -> rc.Z(s, t, o, l) proof
+    fix l l1
+    assume _ u z1
+    have nb: !(!!(fst(l).rip = t) && ok(l1, empty) = exc(pair(fst(l), empty), pair("brk", empty))) by simp()
+    have rt bd := (!(fst(l).rip = t) && bind_rel(x86_64_linux.step, fst(l), x5 x6. ok(l1, empty) = ok(pair(x5, empty), empty), x5 x6. ok(l1, empty) = exc(pair(x5, empty), pair("raise", x6)), x5. ok(l1, empty) = diverge(x5)) by taut(u, nb))
+    have cs1: !tr.disc_ok(s, fst(l)) -> rc.Z(s, t, o, l) proof
+      assume hnd2
+      let r2 := exc(l, pair("raise", exc_val("disc", empty)))
+      have b: tr.rbs(s, t, l, r2) by defs(taut(hnd2, refl({r2})), tr.rbs, tr.rbd)
+      have rm: tr.rmap(r2, exc(fst(l), exc_val("disc", empty))) by defs(simp(), tr.rmap)
+      show := apply(rc.z_leave, b, ui.exc_nok[a := l, v := pair("raise", exc_val("disc", empty))], simp(), rm, rc.q_disc[s := s, o := o, x := fst(l)])
+    qed
+    have cs2: tr.disc_ok(s, fst(l)) -> tr.at_ret(s, fst(l)) -> rc.Z(s, t, o, l) proof
+      assume hd hret
+      let r2 := exc(pair(fst(l), empty), pair("brk", empty))
+      have b: tr.rbs(s, t, l, r2) by defs(taut(hret, refl({r2})), tr.rbs, tr.rbd, tr.rb)
+      have rm: tr.rmap(r2, ok(fst(l), empty)) by defs(simp(), tr.rmap)
+      have ex: ex x. ok(fst(l), empty) = ok(x, empty) && tr.at_ret(s, x) by ex_intro({fst(l)}, taut(hret, refl({ok(fst(l), empty)})))
+      have q: rc.Q(s, o, ok(fst(l), empty)) by defs(taut(ex), rc.Q)
+      show := apply(rc.z_leave, b, ui.exc_nok[a := pair(fst(l), empty), v := pair("brk", empty)], simp(), rm, q)
+    qed
+    have cs3: tr.disc_ok(s, fst(l)) -> !tr.at_ret(s, fst(l)) -> rc.Z(s, t, o, l) proof
+      assume hd hnr
+      have b: tr.rbs(s, t, l, ok(l1, empty)) by defs(taut(rt, hd, hnr, bd), tr.rbs, tr.rbd, tr.rb)
+      obtain r1 o1, w1 d1 m1 q1 from expand(z1, rc.Z)
+      have w := apply(while_step[b := x y. tr.rbs(s, t, x, y)], simp(), b, w1, d1)
+      show by defs(ex_intro({r1}, {o1}, taut(w, d1, m1, q1)), rc.Z)
+    qed
+    show by taut(cs1, cs2, cs3)
+  qed
+  have nd: !(fst(r) = 2) proof
+    assume h2
+    have od: o = diverge(snd(r)) := simp(rewrite(h2, expand(hm, tr.rmap)))
+    show by taut(hnd, (ex d. o = diverge(d) by ex_intro({snd(r)}, od)))
+  qed
+  have z0 := apply(while_run_ind[b := l o2. ui.U(t, l, o2)], base, stp, hw, nd)
+  obtain r2 o2, w2 _ m2 q2 from expand(z0, rc.Z)
+  have rs: tr.run_s(s, t, m0, o2) by defs(ex_intro({r2}, taut(w2, m2)), tr.run_s, tr.rws)
+  show by ex_intro({o2}, taut(rs, q2))
+qed
+
+// ----------------------------------------------------------------------
+//  _start_c's contract: the run to main from its entry
+
+// The outcomes matching a spec that only overflows or enters main (its
+// contract's, tr.mtv, for the stopped run's outcome o2 as rc.Q has it for
+// o): o ends at main, or is a crash
+theorem rc.mtv_out: all s V P W o o2. (all x. runs(P, W, x) -> (ex y. x = exc(y, exc_val("stack_overflow", empty))) || (ex y. x = exc(y, exc_val("at_main", empty)))) ->
+  tr.mtv(false, s, V, P, W, o2, true) -> rc.Q(s, o, o2) -> (ex m. o = ok(m, empty)) || tr.crash(s, P, W, o)
+proof
+  fix s V P W o o2
+  assume hP hm hq
+  let OVF := exc_val("stack_overflow", empty)
+  let AM := exc_val("at_main", empty)
+  let ST := exc_val("stop", empty)
+  let GOAL := (ex m. o = ok(m, empty)) || tr.crash(s, P, W, o)
+  // (no undefined behaviour: P raises nothing else)
+  have nub: !tr.ub(s, V, P, W) proof
+    assume hu
+    obtain e x, _ n1 n2 _ hr from expand(hu, tr.ub)
+    have c1: (ex y. exc(x, e) = exc(y, OVF)) -> false proof
+      assume hh
+      obtain y, q from hh
+      have _ q2 := apply(ui.exc_inj, q)
+      show by taut(q2, n1)
+    qed
+    have c2: (ex y. exc(x, e) = exc(y, AM)) -> false proof
+      assume hh
+      obtain y, q from hh
+      have _ q2 := apply(ui.exc_inj, q)
+      show by taut(q2, apply(tr.nstop_main, n2))
+    qed
+    show by taut(apply(hP, hr), c1, c2)
+  qed
+  // (no return: P has no normal outcome)
+  have nret: all m1. !tr.rtv(false, s, V, P, W, m1) proof
+    fix m1
+    assume hr
+    have _ _ ew .. := expand(hr, tr.rtv)
+    obtain w2, hw2 .. from ew
+    have c1: (ex y. ok(w2, pair(m1.gpr[0], m1.gpr[2])) = exc(y, OVF)) -> false proof
+      assume hh
+      obtain y, q from hh
+      show := simp(q)
+    qed
+    have c2: (ex y. ok(w2, pair(m1.gpr[0], m1.gpr[2])) = exc(y, AM)) -> false proof
+      assume hh
+      obtain y, q from hh
+      show := simp(q)
+    qed
+    show by taut(apply(hP, hw2), c1, c2)
+  qed
+  // (no exit: P raises none)
+  have nxo: all x2. !tr.xo(P, W, x2) proof
+    fix x2
+    assume hx
+    obtain m1 st x, _ _ _ hr from expand(hx, tr.xo)
+    have c1: (ex y. exc(x, exc_val("exit", st)) = exc(y, OVF)) -> false proof
+      assume hh
+      obtain y, q from hh
+      have _ q2 := apply(ui.exc_inj, q)
+      have u _ := apply(pair_inj, (pair("exit", st) = pair("stack_overflow", empty) by defs(q2, exc_val)))
+      show by taut(u, (!("exit" = "stack_overflow") by eval()))
+    qed
+    have c2: (ex y. exc(x, exc_val("exit", st)) = exc(y, AM)) -> false proof
+      assume hh
+      obtain y, q from hh
+      have _ q2 := apply(ui.exc_inj, q)
+      have u _ := apply(pair_inj, (pair("exit", st) = pair("at_main", empty) by defs(q2, exc_val)))
+      show by taut(u, (!("exit" = "at_main") by eval()))
+    qed
+    show by taut(apply(hP, hr), c1, c2)
+  qed
+  // (no divergence: P has none)
+  have ndiv: all x2. !tr.div(P, W, x2) proof
+    fix x2
+    assume hd
+    have _ dq := expand(hd, tr.div)
+    obtain t2, hr from dq
+    have c1: (ex y. diverge(t2) = exc(y, OVF)) -> false proof
+      assume hh
+      obtain y, q from hh
+      show := simp(q)
+    qed
+    have c2: (ex y. diverge(t2) = exc(y, AM)) -> false proof
+      assume hh
+      obtain y, q from hh
+      show := simp(q)
+    qed
+    show by taut(apply(hP, hr), c1, c2)
+  qed
+  have mt := expand(hm, tr.mtv)
+  // (the cases of the stopped run)
+  have q1: (ex m. o = ok(m, empty) && o2 = ok(m, ST)) -> GOAL proof
+    assume hh
+    obtain m, e _ from hh
+    show by taut((ex m2. o = ok(m2, empty) by ex_intro({m}, e)))
+  qed
+  have q2: (ex x. o2 = exc(x, exc_val("disc", empty))) -> GOAL proof
+    assume hh
+    obtain x, e from hh
+    have ncr: !tr.crash(s, P, W, o2) proof
+      assume hc
+      obtain m2 a k, oe _ _ _ _ _ from expand(hc, tr.crash)
+      have z1: !(exc(x, exc_val("disc", empty)) = exc(m2, exc_val("segv", pair(a, k)))) proof
+        assume q
+        have _ q3 := apply(ui.exc_inj, q)
+        have u _ := apply(pair_inj, (pair("disc", empty) = pair("segv", pair(a, k)) by defs(q3, exc_val)))
+        show by taut(u, (!("disc" = "segv") by eval()))
+      qed
+      have z2: !(exc(x, exc_val("disc", empty)) = exc(m2, exc_val("stack_fault", empty))) proof
+        assume q
+        have _ q3 := apply(ui.exc_inj, q)
+        have u _ := apply(pair_inj, (pair("disc", empty) = pair("stack_fault", empty) by defs(q3, exc_val)))
+        show by taut(u, (!("disc" = "stack_fault") by eval()))
+      qed
+      show by taut(rewrite(e, oe), z1, z2)
+    qed
+    have nr2: !(ex m1. o2 = ok(m1, empty) && tr.rtv(false, s, V, P, W, m1)) proof
+      assume hh2
+      obtain m1, q _ from hh2
+      show := simp(trans(sym(e), q))
+    qed
+    have nst: !tr.stv(false, P, W, o2) proof
+      assume hh2
+      obtain m3 w v2 mem2, q _ _ _ _ from expand(hh2, tr.stv)
+      show := simp(trans(sym(e), q))
+    qed
+    show by taut(mt, nub, ncr, all_elim(ndiv, {o2}), nr2, nst, all_elim(nxo, {o2}))
+  qed
+  have q3: (ex x. o2 = ok(x, empty) && tr.at_ret(s, x)) -> GOAL proof
+    assume hh
+    obtain x, e _ from hh
+    have ncr: !tr.crash(s, P, W, o2) proof
+      assume hc
+      obtain m2 a k, oe _ _ _ _ _ from expand(hc, tr.crash)
+      have z1: !(ok(x, empty) = exc(m2, exc_val("segv", pair(a, k)))) proof
+        assume q
+        show := simp(q)
+      qed
+      have z2: !(ok(x, empty) = exc(m2, exc_val("stack_fault", empty))) proof
+        assume q
+        show := simp(q)
+      qed
+      show by taut(rewrite(e, oe), z1, z2)
+    qed
+    have nr2: !(ex m1. o2 = ok(m1, empty) && tr.rtv(false, s, V, P, W, m1)) proof
+      assume h2
+      obtain m1, _ hr from h2
+      show by taut(hr, all_elim(nret, {m1}))
+    qed
+    have nst: !tr.stv(false, P, W, o2) proof
+      assume h2
+      obtain m3 w v2 mem2, q _ _ _ _ from expand(h2, tr.stv)
+      have _ q4 := apply(ui.ok_inj, trans(sym(e), q))
+      show by taut(q4, tr.stop_ne)
+    qed
+    show by taut(mt, nub, ncr, all_elim(ndiv, {o2}), nr2, nst, all_elim(nxo, {o2}))
+  qed
+  // (a step's exception: the contract's crash)
+  have q4: (ex y e. o = exc(y, e) && o2 = exc(y, e)) -> GOAL proof
+    assume hh
+    obtain y e, eo e2 from hh
+    have nr2: !(ex m1. o2 = ok(m1, empty) && tr.rtv(false, s, V, P, W, m1)) proof
+      assume h2
+      obtain m1, q _ from h2
+      show := simp(trans(sym(e2), q))
+    qed
+    have nst: !tr.stv(false, P, W, o2) proof
+      assume h2
+      obtain m3 w v2 mem2, q _ _ _ _ from expand(h2, tr.stv)
+      show := simp(trans(sym(e2), q))
+    qed
+    have cr: tr.crash(s, P, W, o2) by taut(mt, nub, all_elim(ndiv, {o2}), nr2, nst, all_elim(nxo, {o2}))
+    have oo: o2 = o := trans(e2, sym(eo))
+    show by taut(rewrite(oo, cr))
+  qed
+  show by taut(expand(hq, rc.Q), q1, q2, q3, q4)
+qed
+
+// _start_c's machine code from its entry s: the claim's run to main (not
+// diverging) ends at main, or crashes as its contract allows
+theorem rc.c_out: all s objs o a. s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(s.vm, 4198400, text.code, empty) -> s.rip = 4198565 ->
+  tr.eok(false, false, s, seq_one(a)) -> a in bits(64) -> objs in set_type(omega) -> tr.objs_ok(s, objs) -> rc.UA(4199122, s, o) -> !(ex d. o = diverge(d)) ->
+  !(4199122 = x86_64_linux.le(s.vm.bytes, s.gpr[4], 8)) -> tr.vw(false, s, objs, ui.wvm(s.vm)) in abi.World -> tr.vw(false, s, objs, ui.wvm(s.vm)) in univ(1) ->
+  ui.c_pre(ui.wvm(s.vm), abi.wob(objs, abi.cball), ui.G, ui.P, a) ->
+  (ex m. o = ok(m, empty)) || tr.crash(s, startup_specs.start_c_spec_fun(ui.G, ui.P)[seq_one(a)], tr.vw(false, s, objs, ui.wvm(s.vm)), o)
+proof
+  fix s objs o a
+  assume hM hU hl hr he ha ho hob hur hnd hnt hw hwu hp
+  let W := tr.vw(false, s, objs, ui.wvm(s.vm))
+  let SP := startup_specs.start_c_spec_fun(ui.G, ui.P)[seq_one(a)]
+  obtain o2, hrun hq from apply(rc.until_run, hur, hnd, hnt)
+  have gk: lk.gok(ui.G) by simp()
+  have pk: lk.pok(ui.P) by simp()
+  have im := expand(mp(all_elim(lk.start_impl, {ui.G}, {ui.P}, {empty}), gk, pk), tr.impl_m)
+  have _ _ _ pv := apply(x86i.parts, hM)
+  have wt _ := apply(ui.wvm_typed, pv, apply(ui.vm_univ, pv))
+  have sl := apply(tr.seq_one_type, ha)
+  have ol: ord_le(seq_len(seq_one(a)), 6) by defs(arith((seq_len(seq_one(a)) = 1 by simp())), ord_le)
+  have ra: seq_one(a) in abi.ARGS by sel(conj(sl, ol))
+  have mt := apply(im, ra, ho, wt, hM, hU, hl, hr, he, hob, ui.wvm_vok[s := s, objs := objs], hrun)
+  have wv: W.vm = ui.wvm(s.vm) by simp()
+  have wo: W.objs = abi.wob(objs, abi.cball) by simp()
+  have hP: all o3. runs(SP, W, o3) -> (ex x. o3 = exc(x, exc_val("stack_overflow", empty))) || (ex x. o3 = exc(x, exc_val("at_main", empty))) proof
+    fix o3
+    assume h2
+    have hp2: ui.c_pre(W.vm, W.objs, ui.G, ui.P, a) := rewrite(sym(wv), rewrite(sym(wo), hp))
+    show := apply(ui.c_only, hw, hwu, ha, hp2, h2)
+  qed
+  show := apply(rc.mtv_out, hP, mt, hq)
+qed
+
+// ----------------------------------------------------------------------
+//  The run to main from exec
+
+// a stack overflow (as the program's claim has it): a fault below exec's
+// rsp where the stack could not grow, or a stack fault
+abbrev rc.OV(m0, m, e) := (ex a c. (a in bits(64) && c in x86_64_linux.SegvCode) && (e = exc_val("segv", pair(a, c)) && abi.overflow_at(m.vm, m.gpr[4], m0.gpr[4], a))) ||
+  e = exc_val("stack_fault", empty)
+
+// Every run from an unprivileged exec state to main gets there, or the
+// stack overflows (no other fault, no exit before main, no run that never
+// gets there)
+theorem rc.reach: all argv envp m0 o. argv in list_type(list_type(bits(8))) -> envp in list_type(list_type(bits(8))) -> m0 in x86_64_linux.Machine ->
+  x86_64_linux.exec_state(musl_malloc.file, argv, envp, m0) -> claim_malloc.unprivileged(m0.os) -> runs(claim_malloc.run_until(musl_malloc.main_at), m0, o) ->
+  (ex m. o = ok(m, empty)) || (ex m e. o = exc(m, e) && rc.OV(m0, m, e))
+proof
+  fix argv envp m0 o
+  assume hav hev hM he hu hr0
+  let GOAL := (ex m. o = ok(m, empty)) || (ex m e. o = exc(m, e) && rc.OV(m0, m, e))
+  have hr := apply(rc.until_any, rewrite((musl_malloc.main_at = 4199122 by defs(eval())), hr0))
+  // (no divergence: the process's run would diverge)
+  have dv: (ex d. o = diverge(d)) -> false proof
+    assume h
+    obtain d, od from h
+    have pd := apply(rc.until_div, rewrite(od, hr))
+    show := apply(pw.top_div, {argv}, {envp}, {m0}, {d}, hav, hev, hM, he, hu, pd)
+  qed
+  have nd: !(ex d. o = diverge(d)) -> GOAL proof
+    assume hnd
+    have mu := apply(ui.m_univ, hM)
+    have tc := apply(ui.text_code, he)
+    have _ _ ex _ _ bpg _ _ hrip hal _ _ hfl _ _ _ := expand(he, x86_64_linux.exec_state)
+    obtain lo top auxv, hlo htop hax hspp _ hbelow _ hl1 hl2 h31 _ hsl hao hsd from ex
+    have s1 s2 .. := expand(hspp, x86_64_linux.stack_pages)
+    have g0 := apply(x86i.rsp_typed, hM)
+    have l32 := apply(ui.lo_img, hbelow)
+    have h16: int_le(16, m0.gpr[4]) by arith(hl1, l32)
+    have hhi: int_lt(m0.gpr[4], 140737488355328) by arith(hl2, s2)
+    have en := apply(ui.le_val[off := 24, n := 8, v := 4198543], unfold(musl_malloc.file), eval(), eval(), eval(), eval(), eval())
+    have rip: m0.rip = 4198543 := trans(hrip, (x86_64_linux.entry_of(musl_malloc.file) = 4198543 by defs(en, x86_64_linux.entry_of)))
+    have ndf: !m0.flags.df by simp(hfl)
+    // (the run to main: a step from each state before it, its exception the run's)
+    have rs: all x. rc.UA(4199122, x, o) -> !(x.rip = 4199122) -> ex o1. runs(x86_64_linux.step(), x, o1) &&
+        (all m1 v. o1 = ok(m1, v) -> rc.UA(4199122, m1, o)) && (all y e. o1 = exc(y, e) -> o = exc(y, e)) proof
+      fix x
+      assume hx hn
+      show := apply(rc.until_step, hn, hx, hnd)
+    qed
+    obtain m4, h4 u4 from apply(ui.start4, {m0}, hM, mu, tc, rip, rs, hr)
+    have sc5 := apply(ui.start_call, {m0}, {m4}, hM, h4, hal, h16, hhi, tc, rs, u4)
+    // (the push faulting: an overflow)
+    have k2: (ex y e. o = exc(y, e) && runs(x86_64_linux.touch_range(bits_sub(64, m4.gpr[4], 8), 8, 1), fn_update(m4, "rip", bits_add(64, m4.rip, bits_of_int(64, 5))),
+        exc(y, e))) -> GOAL proof
+      assume h
+      obtain y e, oe ht from h
+      obtain a c, ha hc hea hov from apply(pw.push_fault, {m0}, {lo}, {top}, {m4}, {y}, {e}, hM, hlo, htop, hspp, hl1, hl2, h16, hal, h4, ht)
+      have xe: rc.OV(m0, y, e) by taut((ex a2 c2. (a2 in bits(64) && c2 in x86_64_linux.SegvCode) && (e = exc_val("segv", pair(a2, c2)) &&
+        abi.overflow_at(y.vm, y.gpr[4], m0.gpr[4], a2)) by ex_intro({a}, {c}, taut(ha, hc, hea, hov))))
+      show by taut((ex m e2. o = exc(m, e2) && rc.OV(m0, m, e2) by ex_intro({y}, {e}, taut(oe, xe))))
+    qed
+    // (_start_c entered: its contract)
+    have k1: (ex s. ui.s5(m0, s) && rc.UA(4199122, s, o)) -> GOAL proof
+      assume h
+      obtain s, h5 hps from h
+      have sM sU srip .. := expand(h5, ui.s5)
+      have hc: ui.ctx(m0, s, lo, top) by defs(taut(hM, hlo, htop, hspp, hl1, hl2, h16, h5), ui.ctx)
+      have na: seq_len(argv) in omega by defs(symex(expand(hav, list_type)), seq_len)
+      have ne: seq_len(envp) in omega by defs(symex(expand(hev, list_type)), seq_len)
+      have el: all i. i in omega -> int_lt(i, seq_len(argv)) -> seq_len(argv[i]) in omega proof
+        fix i
+        assume hi hil
+        have t := apply(at_type, hav, hi, hil)
+        show by defs(symex(expand(t, list_type)), seq_len)
+      qed
+      have a31: int_lt(seq_len(argv), 2147483648) := rewrite((int_pow(2, 31) = 2147483648 by eval()), apply(nat_mem_lt, eval(), expand(h31, ord_lt)))
+      have hx: ui.SX(m0, s, lo, top, argv, envp, auxv) by defs(taut(hc, l32, na, ne, el, hax, hsl, hao, hsd, he, hu, a31), ui.SX)
+      let objs := ui.iobjs(m0.gpr[4], top)
+      have ot: objs in set_type(omega) := ui.iobjs_type[r := m0.gpr[4], top := top]
+      have lo1 := apply(ui.entry_loaded, h5, tc)
+      have eo := apply(ui.entry_eok, hM, hlo, htop, hspp, hl1, hl2, hal, h16, ndf, bpg, h5)
+      have ob := apply(ui.entry_objs, hM, hlo, htop, hspp, hl1, h16, h5)
+      have ra := apply(ui.ret_addr, hM, h5, h16)
+      have nt: !(4199122 = x86_64_linux.le(s.vm.bytes, s.gpr[4], 8)) := rewrite(sym(ra), (!(4199122 = 4198565) by eval()))
+      have _ _ _ sv := apply(x86i.parts, sM)
+      have wt wu := apply(ui.wvm_typed, sv, apply(ui.vm_univ, sv))
+      have Wu := apply(tr.vw_univ[b := false], sU, ot, wt)
+      have Ww := apply(tr.vw_typed, sM, ot, wt, Wu)
+      have cp := apply(ui.cpre, hx)
+      have co := apply(rc.c_out, sM, sU, lo1, srip, eo, g0, ot, ob, hps, hnd, nt, Ww, Wu, cp)
+      // (the entry's sp: exec's rsp)
+      have _ _ _ hs4 .. := expand(h5, ui.s5)
+      have spe: abi.sp(s) = m0.gpr[4] by defs(arith(hs4, g0), bits_add, bits_sub, bits_of_int, pow2)
+      have cr: tr.crash(s, startup_specs.start_c_spec_fun(ui.G, ui.P)[seq_one(m0.gpr[4])], tr.vw(false, s, objs, ui.wvm(s.vm)), o) -> GOAL proof
+        assume hcr
+        obtain m1 a k, oe _ ab _ _ _ from expand(hcr, tr.crash)
+        cases from oe
+        case q proof
+          have e1 hk hov := q
+          have kc: k in x86_64_linux.SegvCode by symex(hk)
+          have xe: rc.OV(m0, m1, exc_val("segv", pair(a, k))) by taut((ex a2 c2. (a2 in bits(64) && c2 in x86_64_linux.SegvCode) &&
+            (exc_val("segv", pair(a, k)) = exc_val("segv", pair(a2, c2)) && abi.overflow_at(m1.vm, m1.gpr[4], m0.gpr[4], a2))
+            by ex_intro({a}, {k}, taut(ab, kc, refl({exc_val("segv", pair(a, k))}), rewrite(spe, hov)))))
+          show by taut((ex m e2. o = exc(m, e2) && rc.OV(m0, m, e2) by ex_intro({m1}, {exc_val("segv", pair(a, k))}, taut(e1, xe))))
+        qed
+        case q proof
+          show by taut((ex m e2. o = exc(m, e2) && rc.OV(m0, m, e2) by ex_intro({m1}, {exc_val("stack_fault", empty)}, taut(q, refl({exc_val("stack_fault", empty)})))))
+        qed
+      qed
+      show by taut(co, cr)
+    qed
+    show by taut(sc5, k1, k2)
+  qed
+  show by taut(nd, dv)
+qed

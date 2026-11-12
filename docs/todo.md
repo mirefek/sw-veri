@@ -247,17 +247,20 @@ The plan, in order (each step measured: speed comes first):
 
 ## 2. Open from the milestone: a reached main
 
-The malloc claim's `Init` is about the runs that reach `main`, and it
-would hold vacuously if none did. proofs/test/witness*.core prove
-`wit.reach`: an unprivileged exec state `wit.m0` of the binary (argv
-["test_malloc"], no environment, uid 1000) whose run reaches `main`
-(1063 steps by evaluation, about 40 s). Open:
-- the final machine's typing (`m in Machine`, which `init_at_main`'s
-  quantifier has): a lemma that `step()` keeps a machine typed, then
-  `run_until` by induction;
-- `wit.reach` as a conjunct of the claims (only by agreement);
-- the run's decoding from the `steps` facts instead of evaluating the
-  decoder at each step (half of the 40 s).
+The malloc claim's `Init` is about the runs that reach `main`.
+`rc.reach` (proofs/test/reach.core) shows every run from an exec state to
+main gets there unless the stack overflows; `wit.reach`
+(proofs/test/witness*.core) exhibits one that does, by evaluation (about
+40 s). Open:
+- totality (every program has an outcome, by the language's design):
+  `rc.reach` with it gives a run to main for every exec state whose stack
+  does not overflow -- proofs/total.core has the loops' (`while_total`);
+  the rest a procedure over the elaborated relations, with the outcomes'
+  typing (each value in the first universe);
+- no overflow with enough stack: contracts with a stack bound (each
+  function's frame and its callees'), a change of the ABI layer;
+- the final machine's typing in `wit.reach` (`m in Machine`);
+- `rc.reach` / `wit.reach` as conjuncts of the claims (only by agreement).
 
 ## 3. Long-term directions
 
