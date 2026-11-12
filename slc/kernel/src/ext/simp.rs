@@ -198,6 +198,7 @@ use crate::env::{Env, SymKind};
 use crate::term::{Node, SymId, Term};
 
 mod eval;
+pub use eval::EvalSession;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Pol {

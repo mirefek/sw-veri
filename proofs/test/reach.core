@@ -693,3 +693,55 @@ proof
   qed
   show by taut(nd, dv)
 qed
+
+// ----------------------------------------------------------------------
+//  A run to t forward: the steps from m to the stop at mf
+
+// the claim's loop from m stopping at mf (its brk at t), mf a value
+def rc.W(t, m, mf) := mf in univ(1) && ex r. while_rel(pair(m, empty), l. true, l o. ui.U(t, l, o), l. fn_update(empty, "os.events", fst(l).os.events), r) &&
+  r = exc(pair(mf, empty), pair("brk", empty))
+
+// at t: the stop
+theorem rc.w_stop: all t m. m in univ(1) -> m.rip = t -> rc.W(t, m, m)
+proof
+  fix t m
+  assume hu h
+  let R := exc(pair(m, empty), pair("brk", empty))
+  have b: ui.U(t, pair(m, empty), R) by simp(h)
+  have w := apply(while_leave[c := l. true, b := l o. ui.U(t, l, o), tr := l. fn_update(empty, "os.events", fst(l).os.events)], simp(), b, ui.exc_nok[a := pair(m, empty), v := pair("brk", empty)])
+  have e: ex r. while_rel(pair(m, empty), l. true, l o. ui.U(t, l, o), l. fn_update(empty, "os.events", fst(l).os.events), r) &&
+    r = exc(pair(m, empty), pair("brk", empty)) by ex_intro({R}, taut(w, refl({R})))
+  show by defs(taut(hu, e), rc.W)
+qed
+
+// before t: a step to m1, then the run from m1
+theorem rc.w_step: all t m m1 v mf. !(m.rip = t) -> runs(x86_64_linux.step(), m, ok(m1, v)) -> rc.W(t, m1, mf) -> rc.W(t, m, mf)
+proof
+  fix t m m1 v mf
+  assume hn hs hw
+  have hf ex := expand(hw, rc.W)
+  obtain r, w1 er from ex
+  have k: ex s1 v1. ok(m1, v) = ok(s1, v1) && ok(pair(m1, empty), empty) = ok(pair(s1, empty), empty) by ex_intro({m1}, {v}, simp())
+  have br: bind_rel(x86_64_linux.step, m, x5 x6. ok(pair(m1, empty), empty) = ok(pair(x5, empty), empty), x5 x6. ok(pair(m1, empty), empty) = exc(pair(x5, empty), pair("raise", x6)),
+      x5. ok(pair(m1, empty), empty) = diverge(x5)) by defs(ex_intro({ok(m1, v)}, taut(hs, k)), bind_rel)
+  have b: ui.U(t, pair(m, empty), ok(pair(m1, empty), empty)) by simp(hn, br)
+  have nd: !(fst(r) = 2) by simp(er)
+  have w := apply(while_step[l0 := pair(m, empty), l1 := pair(m1, empty), c := l. true, b := l o. ui.U(t, l, o), tr := l. fn_update(empty, "os.events", fst(l).os.events), r := r],
+    simp(), b, w1, nd)
+  have e: ex r. while_rel(pair(m, empty), l. true, l o. ui.U(t, l, o), l. fn_update(empty, "os.events", fst(l).os.events), r) &&
+    r = exc(pair(mf, empty), pair("brk", empty)) by ex_intro({r}, taut(w, er))
+  show by defs(taut(hf, e), rc.W)
+qed
+
+// the run to t from m: stopping at mf
+theorem rc.w_runs: all t m mf. m in univ(1) -> rc.W(t, m, mf) -> runs(claim_malloc.run_until(t), m, ok(mf, empty))
+proof
+  fix t m mf
+  assume hm hw
+  have hf ex := expand(hw, rc.W)
+  obtain r, w er from ex
+  have u: pair(m, ok(mf, empty)) in univ(1) by eval(hm, hf)
+  have rm: tr.rmap(r, ok(mf, empty)) by simp(er, tr.rmap)
+  have ua: rc.UA(t, m, ok(mf, empty)) by defs(ex_intro({r}, taut(w, rm)), rc.UA)
+  show by defs(apply(runs_intro[r := s o. rc.UA(t, s, o)], u, ua), claim_malloc.run_until, rc.UA, tr.rmap)
+qed

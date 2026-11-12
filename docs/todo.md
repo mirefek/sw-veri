@@ -250,8 +250,15 @@ The plan, in order (each step measured: speed comes first):
 The malloc claim's `Init` is about the runs that reach `main`.
 `rc.reach` (proofs/test/reach.core) shows every run from an exec state to
 main gets there unless the stack overflows; `wit.reach`
-(proofs/test/witness*.core) exhibits one that does, by evaluation (about
-40 s). Open:
+(proofs/test/witness*.core) exhibits one that does, its 1063 steps each a
+fact (`run_steps` with `rc.w_stop` / `rc.w_step`, about 65 s). Open:
+- memset's `rep stosq` (38 words) by a lemma: the evaluator then runs no
+  loop longer than the spec's fixed ones (an access's 16 bytes, an
+  instruction's 15) -- `LOOP_MAX` 40 until then, 17 after. The lemma's
+  run exists (`while_exists` over the words, `x86i.rep_stosq_out` its
+  outcome); the evaluator would take a loop's outcome from such a lemma
+  given as a premise; its premises on the step's concrete state (the
+  bytes' typing among them) are to be evaluable;
 - totality (every program has an outcome, by the language's design):
   `rc.reach` with it gives a run to main for every exec state whose stack
   does not overflow -- proofs/total.core has the loops' (`while_total`);

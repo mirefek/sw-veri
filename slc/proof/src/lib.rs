@@ -99,6 +99,7 @@ mod bits;
 mod lets;
 mod mem;
 mod rsimp;
+mod run_steps;
 pub mod shadow;
 mod types;
 
@@ -1813,6 +1814,9 @@ impl State {
                 let refs: Vec<&Seq> = ps.iter().collect();
                 Seq::eval_goal(env, lg, &refs, goal)
             }
+            // run_steps(STOP, STEP): `ex x. C(.., m0, x)` by a run's steps
+            // on concrete data, each step its own fact (run_steps.rs)
+            "run_steps" => self.run_steps(env, lg, goal, args),
             // (failing, again with the block's facts `t in omega` / `bits(n)`
             // / `int` for the terms t of the goal and the facts given)
             "arith" => {

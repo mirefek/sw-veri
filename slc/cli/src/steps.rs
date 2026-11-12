@@ -409,9 +409,12 @@ impl Cx {
         // else all 15
         let mut known = None;
         let mut err = String::new();
+        // (the state a member of univ(1): the decoder's run on its bytes is
+        // one -- x86.step_univ below)
+        let hu = self.assume(env, "m in univ(1)")?;
         for n in [enc.len(), window.len()] {
             let hs: Vec<Seq> = (0..n).map(|k| self.term(env, &byte_eq(k, window[k])).and_then(|t| Seq::assume(env, t).map_err(ke))).collect::<R<_>>()?;
-            let refs: Vec<&Seq> = hs.iter().collect();
+            let refs: Vec<&Seq> = hs.iter().chain([&hu]).collect();
             match Seq::members(env, lg, evald, &refs) {
                 Ok(d) => {
                     known = Some((d, hs));
@@ -454,6 +457,13 @@ impl Cx {
         let mut s = one;
         for p in [&h, &d1, &dc, &ty] {
             s = Seq::mp(env, &s, p).map_err(ke)?;
+        }
+        // (m in univ(1) from the step's run)
+        if s.hyps().contains(hu.concl()) {
+            let (mt, ot) = (self.term(env, "m")?, self.term(env, "o")?);
+            let su = self.api.inst(env, self.fact(env, "x86.step_univ")?, &[("m", mt), ("o", ot)]).map_err(ke)?;
+            let su = Seq::mp(env, &su, &h).map_err(ke)?;
+            s = Seq::mp(env, &s.discharge(env, hu.concl()).map_err(ke)?, &su).map_err(ke)?;
         }
         s = s.discharge(env, h.concl()).map_err(ke)?;
         for &(k, _) in bytes.iter().rev() {

@@ -764,6 +764,15 @@ impl Seq {
         Ok(Seq { hyps, concl: goal.clone(), open })
     }
 
+    /// `⊢ goal`, evaluated to true on concrete data in an evaluation session
+    /// (`Logic::eval_session`: its memos shared with the session's other
+    /// evaluations; no premises).
+    pub fn eval_goal_in(env: &Env, ses: &mut super::simp::EvalSession, goal: &Term) -> KResult<Seq> {
+        env.check_wf(goal, 0)?;
+        ses.truth(goal)?;
+        Ok(Seq { hyps: Vec::new(), concl: goal.clone(), open: Vec::new() })
+    }
+
     /// `Γ ⊢ all x. x in set <-> x = c1 || .. || x = cn`, the members of
     /// `set` evaluated on concrete data (`Logic::eval_members`), using the
     /// premises `lhs = value` as known values (Γ: the used premises').

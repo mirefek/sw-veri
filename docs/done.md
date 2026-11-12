@@ -1629,8 +1629,18 @@ For a first reading, docs/overview.md is the better start. The sections:
 - A reached main (proofs/test/witness*.core, `wit.reach`): an unprivileged
   exec state `wit.m0` (argv ["test_malloc"], no environment, uid 1000) of
   the binary, typed, whose run reaches `main`.
-  - The run (`wit.run`): one `eval()` -- 1063 steps decoded and executed on
-    the concrete state, set_tid_address's thread id a picked witness.
+  - The run (`wit.run`): `run_steps(rc.w_stop, rc.w_step)` -- 1063 steps,
+    each decoded and executed on the concrete state and its run a fact
+    (`runs(step, m, ok(m1, v))`, evaluated), joined by the forward lemmas
+    (`rc.W`: the run to t's loop stopping at mf); set_tid_address's thread
+    id a picked witness. The evaluations share a session (the step's
+    outcomes memo, so its check is a lookup; the terms shown in
+    univ(1)): about 65 s, 113 MB.
+  - The evaluator's loops: each loop's own iterations bounded
+    (`LOOP_MAX`), not a budget for the whole evaluation; a run's state
+    and outcome shown in univ(1) by their form (`in_univ1`; a premise
+    `t in univ(1)` for a free t -- the decode facts' `m`, by
+    `x86.step_univ`).
   - `exec_state` (`wit.exec`): the closed parts by evaluation (the ELF
     header, the stack layout, the auxv, its data, the registers); the
     pages, the loads' bytes, the stack's growth room and the image's end

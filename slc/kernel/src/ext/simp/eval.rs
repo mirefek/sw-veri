@@ -14,8 +14,8 @@
 //! its state ends has no infinite run (its runs form a finitely branching
 //! tree without an infinite path). Anything else -- an unknown constrained
 //! only by an atom that is not an equation, `any` over an unbounded or
-//! empty set (undefined behaviour), a loop exceeding the fuel -- makes the
-//! evaluation fail, never return a wrong set.
+//! empty set (undefined behaviour), a loop of more than LOOP_MAX
+//! iterations -- makes the evaluation fail, never return a wrong set.
 
 use super::*;
 use crate::term::VarId;
@@ -24,8 +24,12 @@ use std::collections::HashMap;
 type Assign = Vec<(VarId, Term)>;
 
 const UNSOLVED: &str = "unsolved: ";
-/// iterations of all loops, per evaluation
-const FUEL: usize = 100_000;
+/// the iterations a loop is evaluated for (each loop's own, its exit
+/// included): the spec's fixed-size loops -- an access's bytes (at most 16),
+/// an instruction's (at most 15), an immediate's; a loop as long as its
+/// data (a rep instruction's) is a lemma's (an invariant), not evaluated.
+/// (17 then; 40 until memset's `rep stosq` (38 words) is a lemma's)
+const LOOP_MAX: usize = 40;
 /// the largest numeral whose elements a membership is solved by (a
 /// binary's bytes, each)
 const ENUM_MAX: u64 = 1 << 16;
@@ -33,7 +37,8 @@ const ENUM_MAX: u64 = 1 << 16;
 pub(super) struct Ev<'s, 'a> {
     sp: &'s Simp<'a>,
     fresh: u32,
-    fuel: usize,
+    /// loop iterations evaluated (EVAL_STATS)
+    iters: usize,
     /// outcomes of (program, state), and whether a part of them (a pick)
     memo: HashMap<(Term, Term), (Vec<Term>, bool)>,
     /// normal forms of terms met before
@@ -41,6 +46,10 @@ pub(super) struct Ev<'s, 'a> {
     /// terms with known values (premises `lhs = value`), and which were used
     known: Vec<(Term, Term)>,
     used: std::cell::RefCell<Vec<bool>>,
+    /// terms in univ(1) by a premise `t in univ(1)` (its index)
+    univ_known: Vec<(Term, usize)>,
+    /// shared terms (no bound variables) shown in univ(1) (`in_univ1`)
+    univ_memo: std::cell::RefCell<std::collections::HashSet<Term>>,
     /// counters (printed with EVAL_STATS=1): subst, norm, truth, structural,
     /// outcomes, size of truth's input
     stats: std::cell::RefCell<[u64; 6]>,
@@ -66,6 +75,16 @@ fn err<T>(m: impl Into<String>) -> Result<T, String> {
 
 // (EVAL_DEBUG: unsolved propositions printed in this evaluation)
 thread_local!(static DEBUG_N: std::cell::Cell<u32> = const { std::cell::Cell::new(0) });
+// (EVAL_DEBUG: a term not shown in univ(1))
+thread_local!(static UNIV_WHY: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) });
+
+fn univ_why() -> String {
+    let s = UNIV_WHY.with(|w| w.borrow_mut().take().map(|s| format!(" (not shown: {})", s)).unwrap_or_default());
+    if std::env::var("EVAL_DEBUG").is_ok() {
+        eprintln!("eval: a run not shown in univ(1){}", s);
+    }
+    s
+}
 
 /// The unknown w occurs in t only as `fst(w)` or `snd(w)` (shared subterms
 /// visited once).
@@ -108,7 +127,7 @@ fn split_proj(t: &Term, w: VarId, fst: SymId, snd: SymId, a: &Term, b: &Term) ->
 
 impl<'s, 'a> Ev<'s, 'a> {
     pub(super) fn new(sp: &'s Simp<'a>, fresh: u32) -> Self {
-        Ev { sp, fresh, fuel: FUEL, memo: HashMap::new(), norm_memo: HashMap::new(), known: Vec::new(), used: Default::default(), stats: Default::default(), pick: false, partial: false }
+        Ev { sp, fresh, iters: 0, memo: HashMap::new(), norm_memo: HashMap::new(), known: Vec::new(), used: Default::default(), univ_known: Vec::new(), univ_memo: Default::default(), stats: Default::default(), pick: false, partial: false }
     }
 
     /// Premises `lhs = value` (value closed) to use while evaluating.
@@ -119,6 +138,10 @@ impl<'s, 'a> Ev<'s, 'a> {
                     let (l, v) = (self.sp.term(&ab[0]), self.sp.term(&ab[1]));
                     self.known.push((l, v));
                     continue;
+                }
+                // `t in univ(1)`: t a member (in_univ1), the premise used
+                if Some(*q) == self.sp.s.in_ && self.is_univ1(&ab[1]) {
+                    self.univ_known.push((self.sp.term(&ab[0]), self.known.len()));
                 }
             }
             // not an equation: kept (unused) so that indices match the premises
@@ -536,6 +559,7 @@ impl<'s, 'a> Ev<'s, 'a> {
             // the values of finite data (numerals, strings, pairs, records)
             // are in every universe (closure under pairs and finite sets)
             "univ" if self.finite_data(x) => Some(true),
+            "univ" if matches!(b[0].node(), Node::Nat(n) if n.to_u64() == Some(1)) && self.in_univ1(x, 0, &mut Default::default()) => Some(true),
             "cart" => match x.node() {
                 Node::App(p, xy) if is(*p, self.sp.s.pair) || is(*p, self.sp.s.tag) => {
                     let (a0, a1) = (xy[0].clone(), xy[1].clone());
@@ -593,6 +617,113 @@ impl<'s, 'a> Ev<'s, 'a> {
             }
             _ => false,
         }
+    }
+
+    /// t in univ(1), by its form (a program's states and outcomes: `runs`
+    /// is membership in a `mkprog`, a set_select of univ(1)): each rule the
+    /// universe's closure -- numerals and bytes (nat_univ0, bytes_univ),
+    /// propositions (prop_univ), constructors of members (pair_univ, ..),
+    /// a conditional's branches (ite_in), a member's value at any key
+    /// (app_univ), `fn_build(D, x. v)` with D and v(x) for x in D members
+    /// (univ_image, univ_trans), omega, bits(n), a member's subsets
+    /// (select_univ), a definition's body. `depth`: the bound variables in
+    /// scope, each of a domain that is a member.
+    fn in_univ1(&self, t: &Term, depth: u32, seen: &mut std::collections::HashSet<(usize, u32)>) -> bool {
+        if !seen.insert((t.ptr_id(), depth)) {
+            return true;
+        }
+        // (a premise `t in univ(1)`)
+        if let Some((_, i)) = self.univ_known.iter().find(|(k, _)| k == t) {
+            self.used.borrow_mut()[*i] = true;
+            return true;
+        }
+        // (shown before: a run's next state mostly its predecessor's parts)
+        let memo = t.bvar_bound() == 0 && t.shared();
+        if memo && self.univ_memo.borrow().contains(t) {
+            return true;
+        }
+        let ok = match t.node() {
+            Node::Nat(_) | Node::Bytes(_) => true,
+            Node::BVar(i) => *i < depth,
+            Node::App(f, a) => {
+                let s = &self.sp.s;
+                let n = self.name(*f).to_string();
+                let logical = *f == s.imp || *f == s.eq || is(*f, s.in_) || *f == s.ex || is(*f, s.and) || is(*f, s.or) || is(*f, s.not) || *f == s.all
+                    || *f == s.false_ || Some(*f) == s.true_;
+                let ctor = is(*f, s.pair) || is(*f, s.tag) || is(*f, s.ok) || is(*f, s.exc) || is(*f, s.diverge) || is(*f, s.some) || is(*f, s.none)
+                    || is(*f, s.empty) || is(*f, s.fn_update) || ["insert", "single", "upair", "union2"].contains(&n.as_str());
+                if logical && self.closed(t) {
+                    true
+                } else if ctor {
+                    a.iter().all(|y| self.in_univ1(y, depth, seen))
+                } else if is(*f, s.ite) {
+                    self.in_univ1(&a[1], depth, seen) && self.in_univ1(&a[2], depth, seen)
+                } else if n == "app" {
+                    self.in_univ1(&a[0], depth, seen)
+                } else if is(*f, s.fn_build) {
+                    self.in_univ1(&a[0], depth, seen) && self.in_univ1(&a[1], depth + 1, seen)
+                } else if n == "set_select" {
+                    self.in_univ1(&a[0], depth, seen)
+                } else if is(*f, s.omega) || n == "bits" {
+                    true
+                } else if ["bits_of_int", "bits_add", "bits_sub", "bits_neg"].contains(&n.as_str()) && matches!(a[0].node(), Node::Nat(_)) {
+                    // (an n-bit word, whatever its arguments: each is
+                    // int_mod(z, pow2(n)), bits_of_int(n, z) -- bits_of_int_in)
+                    true
+                } else if n == "bytes_seq" && matches!(a[0].node(), Node::Bytes(_)) {
+                    // (a literal's bytes: finitely many pairs of numerals)
+                    true
+                } else if self.defined(*f) && !self.sp.arith.contains_key(f) {
+                    match self.sp.unfold(*f, a) {
+                        Some(u) => self.in_univ1(&self.sp.term(&u), depth, seen),
+                        None => false,
+                    }
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        };
+        if ok && memo {
+            self.univ_memo.borrow_mut().insert(t.clone());
+        }
+        if !ok {
+            seen.remove(&(t.ptr_id(), depth));
+            // (EVAL_DEBUG: the innermost term not shown a member)
+            if std::env::var("EVAL_DEBUG").is_ok() {
+                UNIV_WHY.with(|w| {
+                    if w.borrow().is_none() {
+                        let s = if self.sp.env.loose_depth_m(t) > 0 {
+                            match t.node() {
+                                Node::App(g, b) => format!(
+                                    "{}({}) under a binder",
+                                    self.name(*g),
+                                    b.iter()
+                                        .map(|y| match y.node() {
+                                            Node::App(h, _) => self.name(*h).to_string(),
+                                            Node::Nat(n) => n.to_string(),
+                                            Node::BVar(i) => format!("#{}", i),
+                                            _ => "?".into(),
+                                        })
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
+                                ),
+                                _ => "a bound variable".to_string(),
+                            }
+                        } else {
+                            self.show(t).chars().take(300).collect()
+                        };
+                        *w.borrow_mut() = Some(s);
+                    }
+                });
+            }
+        }
+        ok
+    }
+
+    /// t is `univ(1)`
+    fn is_univ1(&self, t: &Term) -> bool {
+        matches!(t.node(), Node::App(f, b) if self.name(*f) == "univ" && b.len() == 1 && matches!(b[0].node(), Node::Nat(n) if n.to_u64() == Some(1)))
     }
 
     fn show(&self, t: &Term) -> String {
@@ -800,17 +931,40 @@ impl<'s, 'a> Ev<'s, 'a> {
             // a given outcome: the program's relation at it (not all its
             // outcomes -- an `any` among them may be too many to list);
             // undecided that way, by the outcomes
+            // (runs(p, s, o) is pair(s, o) in mkprog(s o. R), a set_select of
+            // univ(1): R and the pair a member of univ(1))
             if !self.open(&x[2], us, &a) {
+                // (an outcome found before: each one the relation's)
+                let (pn, st, o) = (self.norm(&x[0]), self.norm(&x[1]), self.norm(&self.subst(&x[2], &a)));
+                if self.memo.get(&(pn, st.clone())).is_some_and(|(outs, _)| outs.contains(&o)) {
+                    let pr = Term::app(s.pair.unwrap(), vec![st, o]);
+                    if !self.in_univ1(&pr, 0, &mut Default::default()) {
+                        return err(format!("{}a run's state and outcome in univ(1){}", UNSOLVED, univ_why()));
+                    }
+                    return Ok(vec![a]);
+                }
                 if let Some(rel) = self.prog_rel(&x[0])? {
                     let (st, o) = (self.norm(&x[1]), self.norm(&self.subst(&x[2], &a)));
-                    if let Ok(b) = self.truth(&inst_k(sp.env, &rel, &[st, o])) {
-                        return Ok(if b { vec![a] } else { vec![] });
+                    if let Ok(b) = self.truth(&inst_k(sp.env, &rel, &[st.clone(), o.clone()])) {
+                        if !b {
+                            return Ok(vec![]);
+                        }
+                        let pr = Term::app(s.pair.unwrap(), vec![st, o]);
+                        if !self.in_univ1(&pr, 0, &mut Default::default()) {
+                            return err(format!("{}a run's state and outcome in univ(1){}", UNSOLVED, univ_why()));
+                        }
+                        return Ok(vec![a]);
                     }
                 }
             }
             let outs = self.outcomes(&x[0], &x[1])?;
+            let st = self.norm(&x[1]);
             let mut res = Vec::new();
             for o in outs {
+                let pr = Term::app(s.pair.unwrap(), vec![st.clone(), o.clone()]);
+                if !self.in_univ1(&pr, 0, &mut Default::default()) {
+                    return err(format!("{}a run's state and outcome in univ(1){}", UNSOLVED, univ_why()));
+                }
                 let mut e = a.clone();
                 match self.unify(&x[2], &o, us, &mut e)? {
                     Some(true) => res.push(e),
@@ -990,8 +1144,9 @@ impl<'s, 'a> Ev<'s, 'a> {
             return err(format!("{}a loop from an open state", UNSOLVED));
         }
         let env = self.sp.env;
-        let fuel0 = self.fuel;
-        let r = self.solve_loop1(x, us, a);
+        let mut n = 0;
+        let r = self.solve_loop1(x, us, a, &mut n);
+        let nres = r.as_ref().map(|v| v.len()).unwrap_or(0);
         // (EVAL_LOOPS: each loop's iterations and its body's start)
         if std::env::var("EVAL_LOOPS").is_ok() {
             // (the body's defined names, in order)
@@ -1011,13 +1166,38 @@ impl<'s, 'a> Ev<'s, 'a> {
             }
             let mut ns = Vec::new();
             names(self, &x[2], &mut ns, &mut Default::default());
-            eprintln!("loop {:>6}: {}", fuel0 - self.fuel, ns.join(" "));
+            // (a long loop: its condition at a state ?l)
+            let cond = if n > LOOP_MAX {
+                let (_, lt) = self.var();
+                let (_, ot) = self.var();
+                let body = inst_k(self.sp.env, &x[2], &[lt, ot]);
+                // (a for loop's bound: int_lt(snd(l), N) in its body)
+                fn bound(ev: &Ev, t: &Term, seen: &mut std::collections::HashSet<usize>) -> Option<String> {
+                    if !seen.insert(t.ptr_id()) {
+                        return None;
+                    }
+                    if let Node::App(g, b) = t.node() {
+                        if ev.name(*g) == "int_lt" && b.len() == 2 && matches!(b[0].node(), Node::App(h, _) if ev.name(*h) == "snd") {
+                            return Some(ev.show(&b[1]).chars().take(300).collect());
+                        }
+                        return b.iter().find_map(|y| bound(ev, y, seen));
+                    }
+                    None
+                }
+                let bd = bound(self, &body, &mut Default::default());
+                let shown = if bd.is_none() { self.show(&body).chars().take(600).collect::<String>() } else { String::new() };
+                format!("{} bound {} {}", self.show(&inst_k(self.sp.env, &x[1], &[Term::var(0, vec![])])).chars().take(40).collect::<String>(),
+                    bd.unwrap_or_default(), shown)
+            } else {
+                String::new()
+            };
+            eprintln!("loop {:>6}: {} {} ({} results)", n, ns.join(" "), cond, nres);
         }
         let _ = env;
         r
     }
 
-    fn solve_loop1(&mut self, x: &[Term], us: &[VarId], a: Assign) -> Result<Vec<Assign>, String> {
+    fn solve_loop1(&mut self, x: &[Term], us: &[VarId], a: Assign, n: &mut usize) -> Result<Vec<Assign>, String> {
         let env = self.sp.env;
         let mut finals: Vec<Term> = Vec::new();
         let mut work = vec![self.norm(&x[0])];
@@ -1036,10 +1216,16 @@ impl<'s, 'a> Ev<'s, 'a> {
                 self.partial = true;
                 break;
             }
-            if self.fuel == 0 {
-                return err("a loop did not end within the fuel");
+            // (EVAL_LOOP_MAX: another limit, to find a loop's length)
+            let max = std::env::var("EVAL_LOOP_MAX").ok().and_then(|v| v.parse().ok()).unwrap_or(LOOP_MAX);
+            if *n >= max {
+                if std::env::var("EVAL_DEBUG").is_ok() {
+                    eprintln!("eval: a loop over {} iterations", max);
+                }
+                return err(format!("a loop runs over {} iterations: its run a lemma's (an invariant), not evaluated", max));
             }
-            self.fuel -= 1;
+            *n += 1;
+            self.iters += 1;
             if !self.truth(&inst_k(env, &x[1], &[l.clone()]))? {
                 let empty = Term::app(self.sp.s.empty.unwrap(), vec![]);
                 finals.push(Term::app(self.sp.s.ok.unwrap(), vec![l, empty]));
@@ -1162,7 +1348,7 @@ impl Logic {
         DEBUG_N.with(|n| n.set(0));
         let r = ev.truth(p);
         if std::env::var("EVAL_STATS").is_ok() {
-            eprintln!("eval stats: loop iterations {}", FUEL - ev.fuel);
+            eprintln!("eval stats: loop iterations {}", ev.iters);
         }
         match r {
             Ok(true) => Ok(ev.used.borrow().iter().enumerate().filter(|(_, u)| **u).map(|(i, _)| i).collect()),
@@ -1192,6 +1378,14 @@ impl Logic {
         Ok((Term::app(sp.s.all, vec![body]), used))
     }
 
+    /// An evaluation session: evaluations without premises sharing the
+    /// evaluator's memos (the last computation's outcomes, the terms shown
+    /// in univ(1) -- each a function of its term alone, so valid across
+    /// them), e.g. a run's steps one at a time.
+    pub fn eval_session<'a>(&'a self, env: &'a Env) -> EvalSession<'a> {
+        EvalSession { env, lg: self, fresh: env.var_bound() + 5_000_000, memo: HashMap::new(), univ_memo: Default::default(), iters: 0 }
+    }
+
     /// The outcomes of program `p` run from the concrete state `st`, as
     /// terms (no theorem: a witness to check with `eval_truth`).
     pub fn eval_outcomes(&self, env: &Env, p: &Term, st: &Term) -> crate::env::KResult<Vec<Term>> {
@@ -1200,5 +1394,59 @@ impl Logic {
         let mut ev = Ev::new(&sp, fresh);
         ev.pick = true;
         ev.outcomes(p, st).map_err(|e| crate::env::KernelError(format!("eval: {}", e)))
+    }
+}
+
+/// Evaluations sharing memos (`Logic::eval_session`); no premises.
+pub struct EvalSession<'a> {
+    env: &'a Env,
+    lg: &'a Logic,
+    fresh: u32,
+    memo: HashMap<(Term, Term), (Vec<Term>, bool)>,
+    univ_memo: std::cell::RefCell<std::collections::HashSet<Term>>,
+    /// loop iterations evaluated (EVAL_STATS)
+    pub iters: usize,
+}
+
+impl<'a> EvalSession<'a> {
+    /// f on an evaluator with the session's memos (taken and put back; the
+    /// simplifier's own node memo per evaluation, freed after it)
+    fn with<T>(&mut self, inputs: &[&Term], f: impl FnOnce(&mut Ev) -> T) -> T {
+        let fresh = inputs.iter().map(|t| max_var(t) + 1).fold(self.fresh, u32::max);
+        let sp = Simp::new(self.env, self.lg);
+        let mut ev = Ev::new(&sp, fresh);
+        ev.pick = true;
+        ev.memo = std::mem::take(&mut self.memo);
+        ev.univ_memo = std::mem::take(&mut self.univ_memo);
+        let r = f(&mut ev);
+        self.memo = std::mem::take(&mut ev.memo);
+        self.univ_memo = std::mem::take(&mut ev.univ_memo);
+        self.fresh = ev.fresh;
+        self.iters += ev.iters;
+        r
+    }
+
+    /// `p` evaluated true (as `eval_truth` without premises)
+    pub(crate) fn truth(&mut self, p: &Term) -> crate::env::KResult<()> {
+        DEBUG_N.with(|n| n.set(0));
+        let r = self.with(&[p], |ev| {
+            // (a pick's partial result kept from a `false`: per evaluation)
+            ev.partial = false;
+            ev.truth(p).map(|b| (b, ev.show(p)))
+        });
+        match r {
+            Ok((true, _)) => Ok(()),
+            Ok((false, s)) => Err(crate::env::KernelError(format!("eval: false: {}", s))),
+            Err(e) => Err(crate::env::KernelError(format!("eval: {}", e))),
+        }
+    }
+
+    /// the outcomes of `p` from the concrete state `st` (as
+    /// `eval_outcomes`); the outcomes memo then this computation's (until
+    /// the next: a check of an outcome found by it a lookup, the earlier
+    /// computations' states freed)
+    pub fn outcomes(&mut self, p: &Term, st: &Term) -> crate::env::KResult<Vec<Term>> {
+        self.memo.clear();
+        self.with(&[p, st], |ev| ev.outcomes(p, st)).map_err(|e| crate::env::KernelError(format!("eval: {}", e)))
     }
 }
