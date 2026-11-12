@@ -1,0 +1,149 @@
+// Totality: every program has an outcome (the language has no construct
+// without one, docs/language.md section 6). A loop's by its runs: iterated
+// by a chosen continuation, it either stops (the first state it cannot
+// continue from) or runs forever.
+
+// the loop states continued by chosen `ok` outcomes of the body
+def while_chain(l0, l o. b, i) := nat_rec(l0, k v. choose(l2. b(v, ok(l2, empty))), i)
+
+theorem while_chain_zero(l0, l o. b): while_chain(l0, l o. b(l, o), 0) = l0
+proof
+  show by defs(rec({nat_rec(l0, k v. choose(l2. b(v, ok(l2, empty))), 0)}), while_chain)
+qed
+
+theorem while_chain_succ(l0, l o. b, i): i in omega ->
+  while_chain(l0, l o. b(l, o), succ(i)) = choose(l2. b(while_chain(l0, l o. b(l, o), i), ok(l2, empty)))
+proof
+  assume hi
+  have r := rec({nat_rec(l0, k v. choose(l2. b(v, ok(l2, empty))), int_add(i, 1))}, hi)
+  have e: succ(i) = int_add(i, 1) by arith()
+  show by defs(rewrite(sym(e), r), while_chain)
+qed
+
+// A loop has an outcome: from a state of an invariant p that each
+// continuing iteration keeps, its body with an outcome at each state it
+// runs from, `ok` ones continuing (no value) -- the iterations by the chain
+// either reach a state where the loop stops or its body leaves, or go on
+// forever (a divergence)
+theorem while_total(l0, l. c, l o. b, l. tr, l. p):
+  p(l0) ->
+  (all l. p(l) -> c(l) -> ex o. b(l, o) && (is_ok(o) -> (ex l2. o = ok(l2, empty)))) ->
+  (all l l2. p(l) -> c(l) -> b(l, ok(l2, empty)) -> p(l2)) ->
+  ex r. while_rel(l0, l. c(l), l o. b(l, o), l. tr(l), r)
+proof
+  assume h0 hb hp
+  // (it continues from l: its condition holds, an `ok` outcome exists)
+  have cs: all i. i in omega -> c(while_chain(l0, l o. b(l, o), i)) && (ex l2. b(while_chain(l0, l o. b(l, o), i), ok(l2, empty))) ->
+      c(while_chain(l0, l o. b(l, o), i)) && b(while_chain(l0, l o. b(l, o), i), ok(while_chain(l0, l o. b(l, o), succ(i)), empty)) proof
+    fix i
+    assume hi hc
+    have hc1 hc2 := hc
+    have cc := apply(choose_spec[p := l2. b(while_chain(l0, l o. b(l, o), i), ok(l2, empty))], hc2)
+    show by taut(hc1, rewrite(sym(apply(while_chain_succ[l0 := l0, b := l o. b(l, o)], hi)), cc))
+  qed
+  cases from ((ex n. n in omega && !(c(while_chain(l0, l o. b(l, o), n)) && (ex l2. b(while_chain(l0, l o. b(l, o), n), ok(l2, empty))))) ||
+    !(ex n. n in omega && !(c(while_chain(l0, l o. b(l, o), n)) && (ex l2. b(while_chain(l0, l o. b(l, o), n), ok(l2, empty))))) by taut())
+  case hs proof
+    // (the first state it cannot continue from)
+    obtain n, hn hnc hleast from apply(nat_least[p := x. !(c(while_chain(l0, l o. b(l, o), x)) && (ex l2. b(while_chain(l0, l o. b(l, o), x), ok(l2, empty))))], hs)
+    have before: all i. i in n -> c(while_chain(l0, l o. b(l, o), i)) && b(while_chain(l0, l o. b(l, o), i), ok(while_chain(l0, l o. b(l, o), succ(i)), empty)) proof
+      fix i
+      assume hin
+      have io := apply(nat_elem, hn, hin)
+      have lt := apply(nat_mem_lt, hn, hin)
+      have im := apply(hleast, io)
+      have cont: c(while_chain(l0, l o. b(l, o), i)) && (ex l2. b(while_chain(l0, l o. b(l, o), i), ok(l2, empty))) by taut(im, (!int_le(n, i) by arith(lt)))
+      show := apply(cs, io, cont)
+    qed
+    // (the invariant up to n)
+    have pn: all j. j in omega -> int_le(j, n) -> p(while_chain(l0, l o. b(l, o), j)) proof
+      have base: int_le(0, n) -> p(while_chain(l0, l o. b(l, o), 0)) proof
+        assume _
+        show := rewrite(sym(while_chain_zero[l0 := l0, b := l o. b(l, o)]), h0)
+      qed
+      have step: all j. j in omega -> (int_le(j, n) -> p(while_chain(l0, l o. b(l, o), j))) ->
+          int_le(int_add(j, 1), n) -> p(while_chain(l0, l o. b(l, o), int_add(j, 1))) proof
+        fix j
+        assume hj ih hle
+        have pj := mp(ih, (int_le(j, n) by arith(hle)))
+        have bj := apply(before, apply(nat_lt_mem, hj, hn, (int_lt(j, n) by arith(hle))))
+        have b1 b2 := bj
+        have e: succ(j) = int_add(j, 1) by arith()
+        show := rewrite(e, apply(hp, pj, b1, b2))
+      qed
+      show by induct(base, step)
+    qed
+    let G := while_chain(l0, l o. b(l, o), n)
+    have pg := mp(apply(pn, hn), (int_le(n, n) by arith()))
+    // (at n: the loop stops, or its body leaves)
+    have last: ex r. (!c(G) && r = ok(G, empty)) || (c(G) && b(G, r) && !is_ok(r)) proof
+      cases from (c(G) || !c(G) by taut())
+      case hc proof
+        obtain o, ho hk from apply(hb, pg, hc)
+        have nok: !is_ok(o) proof
+          assume io
+          obtain l2, e from mp(hk, io)
+          have bo := rewrite(e, ho)
+          have ex2: ex l3. b(G, ok(l3, empty)) by ex_intro({l2}, bo)
+          show by taut(hnc, hc, ex2)
+        qed
+        show by ex_intro({o}, taut(hc, ho, nok))
+      qed
+      case hc proof
+        show by ex_intro({ok(G, empty)}, taut(hc, refl({ok(G, empty)})))
+      qed
+    qed
+    obtain r, hr from last
+    // (the run: the chain up to n)
+    let F := fn_build(succ(n), i. while_chain(l0, l o. b(l, o), i))
+    have fa: all i. i in succ(n) -> F[i] = while_chain(l0, l o. b(l, o), i) proof
+      fix i
+      assume hi
+      show := apply(app_fn_build[v := i. while_chain(l0, l o. b(l, o), i)], hi)
+    qed
+    have sn: succ(n) in omega by arith(hn)
+    have z := rewrite(lit_zero, (0 in succ(n) by arith(hn)))
+    have ni: n in succ(n) by arith(hn)
+    have f0: F[empty] = l0 := trans(apply(fa, z), rewrite(lit_zero, while_chain_zero[l0 := l0, b := l o. b(l, o)]))
+    have fn: F[n] = G := apply(fa, ni)
+    have fb: all i. i in n -> c(F[i]) && b(F[i], ok(F[succ(i)], empty)) proof
+      fix i
+      assume hin
+      have io := apply(nat_elem, hn, hin)
+      have i1: i in succ(n) by arith(apply(nat_mem_lt, hn, hin), io, hn)
+      have i2 := apply(nat_lt_mem, (succ(i) in omega by arith(io)), (succ(n) in omega by arith(hn)),
+        (int_lt(succ(i), succ(n)) by arith(apply(nat_mem_lt, hn, hin), io, hn)))
+      show := rewrite(sym(apply(fa, i2)), rewrite(sym(apply(fa, i1)), apply(before, hin)))
+    qed
+    have fin: while_fin_rel(l0, l. c(l), l o. b(l, o), r) by defs(ex_intro({n}, {F}, taut(hn, fn_build_fun[d := succ(n), v := i. while_chain(l0, l o. b(l, o), i)],
+      fn_build_dom[d := succ(n), v := i. while_chain(l0, l o. b(l, o), i)], f0, fb, rewrite(sym(fn), hr))), while_fin_rel)
+    show by ex_intro({r}, apply(while_fin_while[tr := l. tr(l)], fin))
+  qed
+  case hs proof
+    // (it continues from every state: the chain is a run forever)
+    let F := fn_build(omega, i. while_chain(l0, l o. b(l, o), i))
+    have fa: all i. i in omega -> F[i] = while_chain(l0, l o. b(l, o), i) proof
+      fix i
+      assume hi
+      show := apply(app_fn_build[v := i. while_chain(l0, l o. b(l, o), i)], hi)
+    qed
+    have z := rewrite(lit_zero, (0 in omega by arith()))
+    have f0: F[empty] = l0 := trans(apply(fa, z), rewrite(lit_zero, while_chain_zero[l0 := l0, b := l o. b(l, o)]))
+    have fb: all i. i in omega -> c(F[i]) && b(F[i], ok(F[succ(i)], empty)) proof
+      fix i
+      assume hi
+      have im: !(c(while_chain(l0, l o. b(l, o), i)) && (ex l2. b(while_chain(l0, l o. b(l, o), i), ok(l2, empty)))) ->
+          (ex n. n in omega && !(c(while_chain(l0, l o. b(l, o), n)) && (ex l2. b(while_chain(l0, l o. b(l, o), n), ok(l2, empty))))) proof
+        assume nc
+        show by ex_intro({i}, taut(hi, nc))
+      qed
+      have cont: c(while_chain(l0, l o. b(l, o), i)) && (ex l2. b(while_chain(l0, l o. b(l, o), i), ok(l2, empty))) by taut(hs, im)
+      have si: succ(i) in omega by arith(hi)
+      show := rewrite(sym(apply(fa, si)), rewrite(sym(apply(fa, hi)), apply(cs, hi, cont)))
+    qed
+    have inf: ex f. is_fun(f) && dom(f) = omega && f[empty] = l0 && (all i. i in omega -> c(f[i]) && b(f[i], ok(f[succ(i)], empty))) &&
+        diverge(trace_limit(i. tr(F[i]))) = diverge(trace_limit(i. tr(f[i]))) by ex_intro({F}, taut(fn_build_fun[d := omega, v := i. while_chain(l0, l o. b(l, o), i)], fn_build_dom[d := omega, v := i. while_chain(l0, l o. b(l, o), i)],
+        f0, fb, refl({diverge(trace_limit(i. tr(F[i])))})))
+    show by ex_intro({diverge(trace_limit(i. tr(F[i])))}, defs(taut(inf), while_rel))
+  qed
+qed
